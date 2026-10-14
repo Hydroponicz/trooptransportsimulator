@@ -174,10 +174,10 @@ export class AudioEngine {
     this.body.depth.gain.setTargetAtTime(0.9 * slap * att, t, smooth);
     this.whine.osc.frequency.setTargetAtTime(35 + 70 * p.engine, t, 0.3);
     this.whine.gain.gain.setTargetAtTime((0.02 + 0.012 * load) * p.engine * att, t, 0.2);
-    this.whine.rushFilter.frequency.setTargetAtTime(400 + 700 * p.engine, t, 0.3);
-    this.whine.rush.gain.setTargetAtTime(0.035 * p.engine * att, t, 0.2);
-    this.wind.gain.gain.setTargetAtTime(clamp(p.airspeed / 80, 0, 1) ** 2 * (p.inside ? 0.12 : 0.35), t, 0.2);
-    this.wind.filter.frequency.setTargetAtTime(300 + p.airspeed * 25, t, 0.2);
+    this.whine.rushFilter.frequency.setTargetAtTime(250 + 300 * p.engine, t, 0.3);
+    this.whine.rush.gain.setTargetAtTime(0.012 * p.engine * att, t, 0.2);
+    this.wind.gain.gain.setTargetAtTime(clamp(p.airspeed / 80, 0, 1) ** 2 * (p.inside ? 0.05 : 0.13), t, 0.3);
+    this.wind.filter.frequency.setTargetAtTime(200 + p.airspeed * 8, t, 0.3);
     this.hyd.gain.gain.setTargetAtTime(p.rampMoving ? 0.06 : 0, t, 0.1);
     this.tone.frequency.setTargetAtTime(p.inside ? 1400 : 9000, t, 0.1);
     this.warnT += dt;
