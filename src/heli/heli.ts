@@ -163,7 +163,7 @@ export class Heli {
     this.parts.ramp.rotation.x = -1.3 + e * (1.3 + 0.2);
     this.parts.rearOpening.visible = false;
     // Cabin lights: bright with the ramp open, dim night lighting otherwise.
-    this.parts.cabinLight.intensity = 1.5 + e * 9;
+    this.parts.cabinLight.intensity = 5 + e * 7;
 
     // Rotors: CCW forward, CW aft (seen from above), 225 RPM at 100%.
     this.rotorAngle += fm.rpm * 23.6 * dt;
@@ -181,7 +181,6 @@ export class Heli {
     this.strobeT += dt;
     const on = fm.engineSpool > 0.05 && this.strobeT % 1.1 < 0.09;
     this.parts.strobeMat.color.setHex(on ? 0xffffff : 0x551010);
-    this.parts.cockpitInterior.visible = cockpitView;
     this.syncTransform();
   }
 

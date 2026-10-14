@@ -266,6 +266,26 @@ export function gunner(out: Joints, t: number) {
   return out;
 }
 
+/** Seated at the controls: right hand on the cyclic, left on the collective, eyes scanning. */
+export function fly(out: Joints, t: number) {
+  sit(out);
+  out.hip = 0.4;
+  out.thighL = 1.3;
+  out.thighR = 1.3;
+  out.kneeL = 1.0;
+  out.kneeR = 1.0;
+  out.lean = -0.12;
+  out.armR = 0.75;
+  out.armOutR = -0.12;
+  out.elbowR = 0.75;
+  out.armL = 0.35;
+  out.armOutL = 0.22;
+  out.elbowL = 0.55;
+  out.headYaw = Math.sin(t * 0.23) * 0.45 + Math.sin(t * 0.71) * 0.12;
+  out.head = Math.sin(t * 0.17) * 0.08;
+  return out;
+}
+
 // ---------------------------------------------------------------- Rendering
 
 type Part =

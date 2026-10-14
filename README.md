@@ -25,7 +25,8 @@ You need a browser with WebGL. A gamepad is optional.
    Contracts list the cargo, the route, the distance, the time limit, the risk
    and the pay. Harder work unlocks as you rank up.
 2. **Load up.** Land near the green smoke and lower the ramp (`R`). The crew
-   chief waves the load aboard from the ramp. Troops file up the aisle, sit
+   chief waves the load aboard from the ramp, and everyone walks around the
+   aircraft to line up behind it instead of cutting through the fuselage. Troops file up the aisle, sit
    on the red webbing seats and buckle in. Litter teams carry casualties up
    the ramp, lift the litters onto stanchions (two tiers), strap them down
    and sit beside them. Pallet crews push pallets in on a pallet jack, park
@@ -43,6 +44,17 @@ You need a browser with WebGL. A gamepad is optional.
    smooth ride, butter landing, precise set-down, hazard pay) and penalties.
    Spend the money on fuel, repairs, flares and hangar upgrades: engines,
    armor, fuel tanks and countermeasures.
+
+### The aircraft
+
+The cockpit sits on the same deck as the cabin, one step up, with two
+armoured pilot seats, cyclics, collectives and pedals, five multifunction
+displays under a glareshield, a centre pedestal, an overhead console and a
+companionway back to the cabin. From the pilot's seat (cockpit camera) you
+can look back over your shoulder into the cabin. The windshield, chin
+windows, side windows and cabin windows are real glass, so you can see in
+and out. A door gunner sits at the right forward door and a window gunner at
+the left escape window, each on an M240, and the co-pilot flies beside you.
 
 ## The Humvee
 
@@ -222,7 +234,7 @@ src/
   game.ts            game loop, glue between systems, prompts, crash/respawn
   heli/flight.ts     flight model (thrust, drag, control laws, ground contact)
   heli/heli.ts       aircraft entity: damage, ramp, rotors, collisions
-  heli/chinookModel.ts  procedural CH-47 mesh
+  heli/chinookModel.ts  procedural CH-47: lofted hull with see-through glazing, cockpit, cabin, crew stations
   vehicles/humvee.ts drivable Humvee: suspension, tires, drivetrain, model
   vehicles/models.ts AI vehicle models (truck, tanker, HMMWV, MRAP) with animated wheels
   game/traffic.ts    AI supply traffic: routing, steering, following, braking

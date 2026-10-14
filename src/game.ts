@@ -608,7 +608,9 @@ export class Game {
       crew: {
         frame: h.parts.exterior,
         chiefSeat: CABIN.crewChief,
-        gunnerSeat: CABIN.gunner,
+        gunners: CABIN.gunners,
+        pilots: CABIN.pilots,
+        hidePilot: this.mode === 'fly' && this.cam.mode === 'cockpit',
         hinge: CABIN.hinge,
         rampT: h.rampT,
         marshalling: carrier === h && (lc.canLoad || lc.canUnload),

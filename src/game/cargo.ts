@@ -6,6 +6,7 @@ import {
   blendJoints,
   buckle,
   crouch,
+  fly,
   gait,
   gunner,
   litterCarry,
@@ -39,12 +40,24 @@ export interface CabinLayout {
   litters: THREE.Vector3[];
   /** Pallet centres on the floor. */
   pallets: THREE.Vector3[];
+  /** Footprint people walk around on the ground: |x| < halfWidth, front < z < back. */
+  hull: { halfWidth: number; front: number; back: number };
+}
+
+export interface CrewStation {
+  pos: THREE.Vector3;
+  heading: number;
 }
 
 export interface CrewContext {
   frame: THREE.Object3D;
   chiefSeat: THREE.Vector3;
-  gunnerSeat: THREE.Vector3;
+  /** Door and window gunners. */
+  gunners: CrewStation[];
+  /** Pilot (right seat) and co-pilot. */
+  pilots: CrewStation[];
+  /** Hide the pilot when the camera is in his seat. */
+  hidePilot: boolean;
   hinge: THREE.Vector3;
   rampT: number;
   marshalling: boolean;
@@ -283,7 +296,8 @@ export class CargoManager {
   private renderer = new SoldierRenderer(110);
   private taken = new WeakMap<THREE.Object3D, Set<string>>();
   private chief: Person;
-  private gunner: Person;
+  private gunners: Person[] = [];
+  private pilots: Person[] = [];
   private chiefSeated = 1;
   private time = 0;
 
@@ -294,7 +308,10 @@ export class CargoManager {
     this.group.add(this.renderer.group);
     const rnd = () => this.rng.next();
     this.chief = new Person('crew', 'none', rnd);
-    this.gunner = new Person('crew', 'none', rnd);
+    for (let i = 0; i < 2; i++) {
+      this.gunners.push(new Person('crew', 'none', rnd));
+      this.pilots.push(new Person('crew', 'none', rnd));
+    }
   }
 
   private occupancy(frame: THREE.Object3D) {
@@ -418,6 +435,73 @@ export class CargoManager {
     a.jackPos.applyMatrix4(frame.matrixWorld);
     a.jackHeading += yaw;
     a.space = 'world';
+  }
+
+  /**
+   * World-space waypoints from `from` to `to` that walk around the carrier
+   * instead of through it (shortest path via the corners of its footprint).
+   * The returned list ends with `to`.
+   */
+  private around(from: THREE.Vector3, to: THREE.Vector3, frame: THREE.Object3D, L: CabinLayout): THREE.Vector3[] {
+    const h = L.hull;
+    _inv.copy(frame.matrixWorld).invert();
+    const a = from.clone().applyMatrix4(_inv);
+    const b = to.clone().applyMatrix4(_inv);
+    const m = 1.1;
+    const nodes = [a, b];
+    for (const x of [-h.halfWidth - m, h.halfWidth + m]) for (const z of [h.front - m, h.back + m]) nodes.push(new THREE.Vector3(x, 0, z));
+    // Does a segment cut through the footprint (shrunk a touch so edges and corners are walkable)?
+    const blocked = (p: THREE.Vector3, q: THREE.Vector3) => {
+      const x0 = -h.halfWidth + 0.05, x1 = h.halfWidth - 0.05, z0 = h.front + 0.05, z1 = h.back - 0.05;
+      let t0 = 0, t1 = 1;
+      const dx = q.x - p.x, dz = q.z - p.z;
+      for (const [d, lo, hi, o] of [[dx, x0, x1, p.x], [dz, z0, z1, p.z]] as const) {
+        if (Math.abs(d) < 1e-9) {
+          if (o <= lo || o >= hi) return false;
+        } else {
+          let ta = (lo - o) / d, tb = (hi - o) / d;
+          if (ta > tb) [ta, tb] = [tb, ta];
+          t0 = Math.max(t0, ta);
+          t1 = Math.min(t1, tb);
+          if (t0 >= t1) return false;
+        }
+      }
+      return true;
+    };
+    const flat = (p: THREE.Vector3, q: THREE.Vector3) => Math.hypot(p.x - q.x, p.z - q.z);
+    // Dijkstra over six nodes.
+    const dist = nodes.map(() => Infinity);
+    const prev = nodes.map(() => -1);
+    const done = nodes.map(() => false);
+    dist[0] = 0;
+    for (;;) {
+      let u = -1;
+      for (let i = 0; i < nodes.length; i++) if (!done[i] && dist[i] < Infinity && (u < 0 || dist[i] < dist[u])) u = i;
+      if (u < 0 || u === 1) break;
+      done[u] = true;
+      for (let v = 0; v < nodes.length; v++) {
+        if (done[v] || v === u || blocked(nodes[u], nodes[v])) continue;
+        const d = dist[u] + flat(nodes[u], nodes[v]);
+        if (d < dist[v]) (dist[v] = d), (prev[v] = u);
+      }
+    }
+    const out: THREE.Vector3[] = [to.clone()];
+    if (dist[1] === Infinity) return out;
+    for (let i = prev[1]; i > 0; i = prev[i]) out.unshift(nodes[i].clone().applyMatrix4(frame.matrixWorld));
+    return out;
+  }
+
+  /** Walk around the carrier to a point behind the ramp, then up to the ramp end. */
+  private toRampPath(from: THREE.Vector3, ctx: LoadContext): THREE.Vector3[] {
+    const stage = this.stagePoint(ctx, ctx.frame);
+    return [...this.around(from, stage, ctx.frame, ctx.layout), ctx.rampEnd.clone()];
+  }
+
+  /** A point on the ground a little behind the ramp end, lined up with it. */
+  private stagePoint(ctx: LoadContext, frame: THREE.Object3D) {
+    const p = this.rampLocal(ctx, frame);
+    p.z += 1.6;
+    return p.applyMatrix4(frame.matrixWorld);
   }
 
   /** Ramp end in the carrier's frame. */
@@ -559,6 +643,7 @@ export class CargoManager {
       const z = L.litters[spot].z;
       a.seats = [this.freeSeat(frame, L, z, -1), this.freeSeat(frame, L, z, 1)];
       a.state = 'pickup';
+      a.path = [];
       a.timer = 0;
       g.frame = frame;
       g.layout = L;
@@ -572,7 +657,7 @@ export class CargoManager {
     g.frame = frame;
     g.layout = L;
     a.state = 'toRamp';
-    a.path = [ctx.rampEnd.clone()];
+    a.path = this.toRampPath(a.pos, ctx);
     return true;
   }
 
@@ -618,7 +703,7 @@ export class CargoManager {
         if (!ctx.canLoad) {
           this.release(a, frame);
           a.state = 'returning';
-          a.path = [a.home.clone()];
+          a.path = this.around(a.pos, a.home, frame, L);
           break;
         }
         p.phase += dt * 3.6 * 2.6;
@@ -693,7 +778,8 @@ export class CargoManager {
         if (this.follow(a, dt, 2.4)) {
           this.toWorld(a, frame);
           this.offloaded(g, a);
-          a.path = [a.rally.clone()];
+          const stage = this.stagePoint(ctx, frame);
+          a.path = [stage, ...this.around(stage, a.rally, frame, L)];
           a.state = 'toRally';
         }
         break;
@@ -770,13 +856,14 @@ export class CargoManager {
       case 'pickup': {
         a.timer += dt;
         // Turn the litter toward the ramp and lift it.
-        a.heading = turnTo(a.heading, Math.atan2(ctx.rampEnd.x - a.pos.x, ctx.rampEnd.z - a.pos.z) + Math.PI, dt * 2);
+        if (!a.path.length) a.path = this.toRampPath(a.pos, ctx);
+        const aim = a.path[0];
+        a.heading = turnTo(a.heading, Math.atan2(aim.x - a.pos.x, aim.z - a.pos.z) + Math.PI, dt * 2);
         this.litterFormation(a, dt, 0, false);
         a.propPos.y = a.pos.y + 0.2 + Math.min(1, a.timer / 0.9) * 0.6;
         patient.pos.copy(a.propPos);
         if (a.timer > 1.0) {
           a.state = 'toRamp';
-          a.path = [ctx.rampEnd.clone()];
         }
         break;
       }
@@ -925,7 +1012,8 @@ export class CargoManager {
         if (this.follow(a, dt, 1.2)) {
           this.toWorld(a, frame);
           this.offloaded(g, a);
-          a.path = [a.rally.clone()];
+          const stage = this.stagePoint(ctx, frame);
+          a.path = [stage, ...this.around(stage, a.rally, frame, L)];
           a.state = 'toRally';
         }
         break;
@@ -1011,7 +1099,7 @@ export class CargoManager {
         if (!ctx.canLoad) {
           this.release(a, frame);
           a.state = 'returning';
-          a.path = [a.home.clone()];
+          a.path = this.around(a.pos, a.home, frame, L);
           break;
         }
         this.palletFormation(a, dt, 1.4, true, false);
@@ -1207,7 +1295,8 @@ export class CargoManager {
         if (this.follow(a, dt, 1.0)) {
           this.toWorld(a, frame);
           this.offloaded(g, a);
-          a.path = [a.rally.clone()];
+          const stage = this.stagePoint(ctx, frame);
+          a.path = [stage, ...this.around(stage, a.rally, frame, L)];
           a.state = 'toRally';
         }
         break;
@@ -1258,11 +1347,24 @@ export class CargoManager {
       c.phase += dt * 4;
       gait(c.target, c.phase, 1.2);
     }
-    const gnr = this.gunner;
-    gnr.pos.copy(crew.gunnerSeat);
-    gnr.heading = -Math.PI / 2;
-    gunner(gnr.target, this.time);
-    for (const p of [c, gnr]) {
+    const crewList = [c];
+    crew.gunners.forEach((st, i) => {
+      const g = this.gunners[i];
+      if (!g) return;
+      g.pos.copy(st.pos);
+      g.heading = st.heading;
+      gunner(g.target, this.time + i * 3.7);
+      crewList.push(g);
+    });
+    crew.pilots.forEach((st, i) => {
+      const pl = this.pilots[i];
+      if (!pl || (i === 0 && crew.hidePilot)) return;
+      pl.pos.copy(st.pos);
+      pl.heading = st.heading;
+      fly(pl.target, this.time + i * 5.1);
+      crewList.push(pl);
+    });
+    for (const p of crewList) {
       blendJoints(p.joints, p.target, dt);
       rootMatrix(_m, p.pos, p.heading);
       p.inst.matrix.multiplyMatrices(crew.frame.matrixWorld, _m);

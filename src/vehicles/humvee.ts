@@ -45,6 +45,7 @@ export const BED: CabinLayout = (() => {
     seats,
     litters: [new THREE.Vector3(0, F + 0.62, 1.5), new THREE.Vector3(0, F + 1.2, 1.5)],
     pallets: [new THREE.Vector3(0, F, 1.38)],
+    hull: { halfWidth: 1.3, front: -2.7, back: 2.9 },
   };
 })();
 const REST = 0.5;
