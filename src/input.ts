@@ -36,6 +36,7 @@ export class Input {
   private keys = new Set<string>();
   private pressed = new Set<Action>();
   private padPrev: boolean[] = [];
+  private padRest = new Map<string, number[]>();
   collective = 0;
   pitch = 0;
   roll = 0;
@@ -114,19 +115,34 @@ export class Input {
     this.yaw = ramp(this.yaw, ty);
     this.collective = clamp(this.collective + dc * dt, 0, 1);
 
-    // Gamepad overrides when present and touched.
+    // Gamepad: only takes over once the player actually moves it, and
+    // keyboard flight keys always win while held.
+    const kbFlight = tp !== 0 || tr !== 0 || ty !== 0 || dc !== 0;
+    if (kbFlight) this.usingPad = false;
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
     const gp = Array.from(pads).find((p) => p && p.connected);
     if (gp && this.enabled) {
-      const dz = (v: number) => (Math.abs(v) < 0.12 ? 0 : (v - Math.sign(v) * 0.12) / 0.88);
-      const lx = dz(gp.axes[0] ?? 0);
-      const ly = dz(gp.axes[1] ?? 0);
-      const rx = dz(gp.axes[2] ?? 0);
-      const ry = dz(gp.axes[3] ?? 0);
-      const lt = gp.buttons[6]?.value ?? 0;
-      const rt = gp.buttons[7]?.value ?? 0;
-      if (Math.abs(lx) + Math.abs(ly) + Math.abs(rx) + Math.abs(ry) + lt + rt > 0.05) this.usingPad = true;
-      if (this.usingPad) {
+      // Calibrate against the device's resting state: some devices report
+      // triggers or throttles as axes resting at -1, which must not read as input.
+      let base = this.padRest.get(gp.id);
+      if (!base) {
+        base = gp.axes.slice(0, 4);
+        this.padRest.set(gp.id, base);
+      }
+      const axis = (i: number) => {
+        const v = (gp.axes[i] ?? 0) - (base![i] ?? 0);
+        const a = Math.abs(v) < 0.15 ? 0 : (v - Math.sign(v) * 0.15) / 0.85;
+        return clamp(a, -1, 1);
+      };
+      const lx = axis(0);
+      const ly = axis(1);
+      const rx = axis(2);
+      const ry = axis(3);
+      const lt = gp.mapping === 'standard' ? (gp.buttons[6]?.value ?? 0) : 0;
+      const rt = gp.mapping === 'standard' ? (gp.buttons[7]?.value ?? 0) : 0;
+      const moved = Math.max(Math.abs(lx), Math.abs(ly), Math.abs(rx), Math.abs(ry), lt, rt) > 0.25;
+      if (moved && !kbFlight) this.usingPad = true;
+      if (this.usingPad && !kbFlight) {
         this.pitch = -ry * Math.abs(ry) ** 0.4;
         this.roll = rx * Math.abs(rx) ** 0.4;
         this.yaw = lx;
