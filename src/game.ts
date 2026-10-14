@@ -20,6 +20,7 @@ import { clamp, fmtMoney, smoothstep } from './util/math';
 import { SAS_NAMES, type FlightEnv } from './heli/flight';
 import type { Site } from './world/sites';
 import { WATER_LEVEL } from './world/terrain';
+import { toggleFullscreen } from './fullscreen';
 
 const STEP = 1 / 120;
 
@@ -320,6 +321,7 @@ export class Game {
         <div class="actions" style="justify-content:flex-start;flex-wrap:wrap">
           <button class="primary" data-act="resume">Resume</button>
           <button data-act="vol">Volume: ${Math.round(this.audio.volume * 100)}%</button>
+          <button data-act="fs">${document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen (lets Ctrl+W work)'}</button>
           <button data-act="quit">Save &amp; quit to menu</button>
         </div>`,
         {
@@ -332,6 +334,12 @@ export class Game {
             this.audio.setVolume(v);
             this.paused = false;
             this.togglePause();
+          },
+          fs: () => {
+            void toggleFullscreen().then(() => {
+              this.paused = false;
+              this.togglePause();
+            });
           },
           quit: () => {
             this.career.save();

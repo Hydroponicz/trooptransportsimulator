@@ -1,5 +1,6 @@
 import { Game } from './game';
 import { Career } from './game/career';
+import { toggleFullscreen } from './fullscreen';
 
 const menu = document.getElementById('menu')!;
 const buttons = document.getElementById('menu-buttons')!;
@@ -9,6 +10,14 @@ const loadingMsg = document.getElementById('loading-msg')!;
 const app = document.getElementById('app')!;
 
 let game: Game | null = null;
+
+// While flying, an accidental Ctrl+W (descend + pitch) asks before closing the tab.
+window.addEventListener('beforeunload', (e) => {
+  if (!game || !menu.classList.contains('hidden')) return;
+  game.career.save();
+  e.preventDefault();
+  e.returnValue = '';
+});
 
 function webglOk(): boolean {
   try {
@@ -42,6 +51,7 @@ function showMenu() {
   } else {
     mk('Start career', true, () => launch(Career.fresh()));
   }
+  mk(document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen', false, () => void toggleFullscreen().then(showMenu));
   const seedBtn = document.createElement('button');
   seedBtn.textContent = 'Play a specific seed…';
   seedBtn.onclick = () => {

@@ -73,7 +73,7 @@ The flight model is a rigid body simulated at 120 Hz:
 | `W` / `S` | Pitch: nose down (forward) / nose up |
 | `A` / `D` | Roll left / right (arrow keys also work for pitch & roll) |
 | `Q` / `E` | Yaw left / right |
-| `Space` / `Shift` | Collective up / down (climb / descend) |
+| `Space` / `Ctrl` | Collective up / down (climb / descend); `Shift` also descends |
 | `I` | Start / stop engines |
 | `R` | Raise / lower ramp |
 | `H` | Hook / release sling load |
@@ -85,6 +85,10 @@ The flight model is a rigid body simulated at 120 Hz:
 | `Tab` | Base terminal |
 | `M` | Theater map |
 | `Esc` / `P` | Pause |
+
+Ctrl+W normally closes a browser tab. Use **Fullscreen** (title screen or
+pause menu) in Chrome or Edge and the game captures it, so descending while
+pitching forward is safe. Outside fullscreen the browser asks before closing.
 
 Gamepad: the left stick is collective and yaw, the right stick is cyclic, and
 the triggers also move the collective. A = ramp, B = hook, X = engine,

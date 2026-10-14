@@ -52,6 +52,9 @@ export class Input {
   constructor(el: HTMLElement) {
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Tab' || e.code === 'F1' || e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
+      // Ctrl is collective-down, so stop Ctrl+<flight key> browser shortcuts (save, bookmark, select all…).
+      // Ctrl+W can only be captured in fullscreen with keyboard lock; see fullscreen.ts.
+      if (e.ctrlKey && this.enabled && /^(Key[WASDQEHRFTCMIB]|Space)$/.test(e.code)) e.preventDefault();
       if (!e.repeat && KEYMAP[e.code]) this.pressed.add(KEYMAP[e.code]);
       this.keys.add(e.code);
       this.usingPad = false;
@@ -103,7 +106,7 @@ export class Input {
       if (k('KeyQ')) ty -= 1;
       const rate = 0.4;
       if (k('Space') || k('PageUp')) dc += rate;
-      if (k('ShiftLeft') || k('ShiftRight') || k('PageDown')) dc -= rate;
+      if (k('ControlLeft') || k('ControlRight') || k('ShiftLeft') || k('ShiftRight') || k('PageDown')) dc -= rate;
     }
 
     // Keyboard: ramp deflection in/out for smooth control.
