@@ -557,10 +557,10 @@ export class Game {
       else if (l.onGround && this.sling.tension < l.mass * 3) p = 'Load on the ground — press <kbd>H</kbd> to release, or lift';
     }
     if (!p && fm.contacts >= 3 && fm.rpm > 0.97 && fm.input.collective < 0.3 && h.rampT < 0.03 && !m) {
-      p = this.currentSite && this.currentSite.kind !== 'lz' ? `Press <kbd>Tab</kbd> for the ${this.currentSite.name} terminal` : 'Raise collective <kbd>Space</kbd> to lift off';
+      p = this.currentSite && this.currentSite.kind !== 'lz' ? `Press <kbd>Tab</kbd> for the ${this.currentSite.name} terminal` : 'Raise collective <kbd>Shift</kbd> to lift off';
     }
     if (!p && fm.contacts >= 3 && fm.rpm > 0.97 && fm.input.collective < 0.3 && m && m.phase === 'transit') {
-      p = h.rampT > 0.03 ? 'Press <kbd>R</kbd> to raise the ramp' : 'Raise collective <kbd>Space</kbd> to lift off';
+      p = h.rampT > 0.03 ? 'Press <kbd>R</kbd> to raise the ramp' : 'Raise collective <kbd>Shift</kbd> to lift off';
     }
     if (!p && !fm.engineOn && fm.rpm > 0.05 && fm.contacts >= 3 && this.currentSite && this.currentSite.kind !== 'lz')
       p = `Press <kbd>Tab</kbd> for the ${this.currentSite.name} terminal`;

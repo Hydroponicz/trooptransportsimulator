@@ -73,7 +73,7 @@ The flight model is a rigid body simulated at 120 Hz:
 | `W` / `S` | Pitch: nose down (forward) / nose up |
 | `A` / `D` | Roll left / right (arrow keys also work for pitch & roll) |
 | `Q` / `E` | Yaw left / right |
-| `Space` / `Ctrl` | Collective up / down (climb / descend); `Shift` also descends |
+| `Shift` / `Ctrl` | Collective up / down (climb / descend); `Space` also climbs |
 | `I` | Start / stop engines |
 | `R` | Raise / lower ramp |
 | `H` | Hook / release sling load |

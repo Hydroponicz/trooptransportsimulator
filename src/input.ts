@@ -97,7 +97,7 @@ export class Input {
     let ty = 0;
     let dc = 0;
     if (this.enabled) {
-      // W/S pitch, A/D roll (arrows as alternates), Q/E yaw, Space/Shift collective.
+      // W/S pitch, A/D roll (arrows as alternates), Q/E yaw, Shift/Ctrl collective.
       if (k('KeyW') || k('ArrowUp') || k('Numpad8')) tp += 1;
       if (k('KeyS') || k('ArrowDown') || k('Numpad2')) tp -= 1;
       if (k('KeyD') || k('ArrowRight') || k('Numpad6')) tr += 1;
@@ -105,8 +105,8 @@ export class Input {
       if (k('KeyE')) ty += 1;
       if (k('KeyQ')) ty -= 1;
       const rate = 0.4;
-      if (k('Space') || k('PageUp')) dc += rate;
-      if (k('ControlLeft') || k('ControlRight') || k('ShiftLeft') || k('ShiftRight') || k('PageDown')) dc -= rate;
+      if (k('ShiftLeft') || k('ShiftRight') || k('Space') || k('PageUp')) dc += rate;
+      if (k('ControlLeft') || k('ControlRight') || k('PageDown')) dc -= rate;
     }
 
     // Keyboard: ramp deflection in/out for smooth control.
