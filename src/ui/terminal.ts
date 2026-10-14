@@ -159,9 +159,9 @@ export class Terminal {
         <div class="job ${locked ? 'locked' : ''}">
           <div class="ico">${c.type.icon}</div>
           <div>
-            <div class="name">${esc(c.type.name)}${c.type.urgent ? ' <span class="risk r3">URGENT</span>' : ''}</div>
+            <div class="name">${esc(c.type.name)}${c.mode === 'ground' ? ' <span class="road">🚙 ROAD</span>' : ' <span class="air">🚁 AIR</span>'}${c.type.urgent ? ' <span class="risk r3">URGENT</span>' : ''}</div>
             <div class="route">${remote ? `Pickup at <b>${esc(c.from.name)}</b> → ` : ''}${esc(c.to.name)} <span style="color:#8e9a89">(${SITE_KIND_LABEL[c.to.kind]})</span></div>
-            <div class="meta"><span>${fmtDist(c.distance)}</span><span>${what}</span><span>⏱ ${fmtTime(c.timeLimit)}</span>
+            <div class="meta"><span>${c.mode === 'ground' ? `${fmtDist(c.route ?? c.distance)} by road` : fmtDist(c.distance)}</span><span>${what}</span><span>⏱ ${fmtTime(c.timeLimit)}</span>
               <span class="risk ${c.risk >= 3 ? 'r3' : ''}">${'●'.repeat(c.risk)}${'○'.repeat(3 - c.risk)}</span></div>
             <div class="desc">${esc(c.type.desc)}</div>
           </div>

@@ -104,6 +104,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .job .pay { text-align: right; }
 .job .pay b { display: block; font-family: var(--mono); font-size: 18px; color: #f2e9a6; margin-bottom: 6px; }
 .risk { color: var(--warn); letter-spacing: 2px; }
+.job .road, .job .air { font-size: 10px; font-weight: 700; letter-spacing: 1px; padding: 1px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
+.job .road { background: rgba(201, 168, 106, 0.25); color: #e8cf9a; }
+.job .air { background: rgba(120, 170, 255, 0.18); color: #a9c8ff; }
 .risk.r3 { color: var(--bad); }
 .svc { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 12px; border: 1px solid rgba(157,255,157,0.12); border-radius: 8px; margin-bottom: 8px; }
 .svc .t { font-weight: 700; }

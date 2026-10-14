@@ -137,9 +137,18 @@ export class Hud {
       const ct = m.c;
       e['m-title'].textContent = `${ct.type.icon} ${ct.type.name}${ct.type.kind !== 'sling' ? ` ×${ct.count}` : ''} — ${fmtMoney(ct.pay)}`;
       const tgt = m.target;
-      const dist = Math.hypot(tgt.x - fm.pos.x, tgt.z - fm.pos.z);
+      const pp = game.playerPos;
+      const dist = Math.hypot(tgt.x - pp.x, tgt.z - pp.z);
+      const ground = ct.mode === 'ground';
       let obj = '';
-      if (m.phase === 'pickup') {
+      if (ground && game.mode !== 'drive') {
+        obj = `Road job: get in your Humvee [G]${game.humvee.pos.distanceTo(pp) > 140 ? ' (it is parked elsewhere — check the map)' : ''}.`;
+      } else if (ground && m.phase === 'pickup') {
+        const g = m.group;
+        obj = g && g.aboard > 0 ? `Loading at ${ct.from.name}: ${g.aboard}/${g.total} aboard` : `Stop by the passengers at ${ct.from.name} and open the rear doors [R].`;
+      } else if (ground && m.phase === 'transit') {
+        obj = `Drive to ${ct.to.name} (${fmtDist(ct.route ?? dist)} by road). Stop by the yellow smoke, open the rear doors [R].`;
+      } else if (m.phase === 'pickup') {
         if (ct.type.kind === 'sling') obj = `Hook the ${ct.type.name} at ${ct.from.name}. Hover with the hook over it, 2–9 m up, press [H].`;
         else {
           const g = m.group;
@@ -157,16 +166,39 @@ export class Hud {
       e['m-obj'].textContent = obj;
       const tl = m.timeLeft;
       const cond = Math.round(m.condition);
-      const eta = fm.groundSpeed > 5 ? fmtTime(dist / fm.groundSpeed) : '--:--';
+      const spd = game.mode === 'drive' ? game.humvee.groundSpeed : fm.groundSpeed;
+      const eta = spd > 4 ? fmtTime((dist * (game.mode === 'drive' ? 1.3 : 1)) / spd) : '--:--';
       e['m-stats'].innerHTML =
         `<span>DIST ${fmtDist(dist)}</span><span>ETA ${eta}</span>` +
         `<span class="${tl < 0 ? 'bad' : tl < 60 ? 'warn' : ''}">${tl < 0 ? 'LATE ' + fmtTime(-tl) : 'TIME ' + fmtTime(tl)}</span>` +
         `<span class="${cond < 70 ? 'bad' : cond < 95 ? 'warn' : ''}">CARGO ${cond}%</span>`;
     }
 
+    // Driving panel vs flight instruments.
+    const driving = game.mode === 'drive';
+    $('flight-panel').classList.toggle('hidden', driving);
+    $('sys-panel').classList.toggle('hidden', driving);
+    $('drive-panel').classList.toggle('hidden', !driving);
+    if (driving) {
+      const v = game.humvee;
+      $('d-speed').textContent = Math.abs(v.speed * 3.6).toFixed(0);
+      $('d-gear').textContent = v.stalled ? 'STALL' : v.input.handbrake && v.groundSpeed < 0.5 ? 'P' : v.speed < -0.5 ? 'R' : 'D';
+      $('d-doors').textContent = v.doorT > 0.95 ? 'OPEN' : v.doorT < 0.05 ? 'SHUT' : '…';
+      $('d-load').textContent = v.payload > 0 ? `${v.payload.toFixed(0)} kg` : '—';
+      $('d-hull').textContent = v.hp.toFixed(0);
+      $('d-hull').className = v.hp < 40 ? 'bad' : v.hp < 70 ? 'warn' : '';
+    }
+
     // Warnings.
     const w: string[] = [];
     const caution: string[] = [];
+    if (driving) {
+      if (game.threats.missileWarning) w.push('MISSILE');
+      if (game.humvee.flipped) w.push('OVERTURNED');
+      if (game.humvee.waterDepth > 0.5) caution.push('DEEP WATER');
+      const html = w.map((x) => `<div>${x}</div>`).join('') + caution.map((x) => `<div class="caution">${x}</div>`).join('');
+      if (e.warnings.innerHTML !== html) e.warnings.innerHTML = html;
+    } else {
     if (game.threats.missileWarning) w.push('MISSILE');
     if (fm.vrs > 0.4) w.push('VORTEX RING');
     if (fm.engineOn && fm.engineSpool > 0.99 && fm.rpm < 0.93) w.push('LOW ROTOR RPM');
@@ -179,24 +211,25 @@ export class Hud {
     if (Math.abs(fm.pos.x) > 3050 || Math.abs(fm.pos.z) > 3050) caution.push('LEAVING AO');
     const html = w.map((x) => `<div>${x}</div>`).join('') + caution.map((x) => `<div class="caution">${x}</div>`).join('');
     if (e.warnings.innerHTML !== html) e.warnings.innerHTML = html;
+    }
 
     const ramp = game.heli.rampT > 0.97 ? 'DOWN' : game.heli.rampT < 0.03 ? 'UP' : 'MOVING';
     e['status-line'].innerHTML =
-      `SAS <b>${SAS_NAMES[fm.sas]}</b><br>CAM <b>${CAM_LABEL[game.cam.mode]}</b><br>RAMP <b>${ramp}</b> · HOOK <b>${hk ? 'LOADED' : 'EMPTY'}</b>` +
+      (driving ? 'VEHICLE <b>HUMVEE</b><br>CAM' : `SAS <b>${SAS_NAMES[fm.sas]}</b><br>CAM`) + ` <b>${CAM_LABEL[game.cam.mode]}</b><br>RAMP <b>${ramp}</b> · HOOK <b>${hk ? 'LOADED' : 'EMPTY'}</b>` +
       `<br>WIND <b>${String(Math.round(((Math.atan2(-game.wind.x, game.wind.z) * 180) / Math.PI + 360) % 360)).padStart(3, '0')}° ${(game.wind.length() * 1.944).toFixed(0)}kt</b>`;
 
     this.mini.save();
     this.mini.beginPath();
     this.mini.arc(100, 100, 100, 0, Math.PI * 2);
     this.mini.clip();
-    game.map.drawMini(this.mini, 200, fm.pos.x, fm.pos.z, fm.heading, 1500, this.markers(game), game.air.jets.filter((j) => j.mesh.visible).map((j) => ({ x: j.pos.x, z: j.pos.z, heading: Math.atan2(j.dir.x, -j.dir.z), friendly: j.side === 'blue' })));
+    game.map.drawMini(this.mini, 200, game.playerPos.x, game.playerPos.z, game.playerHeading, 1500, this.markers(game), game.air.jets.filter((j) => j.mesh.visible).map((j) => ({ x: j.pos.x, z: j.pos.z, heading: Math.atan2(j.dir.x, -j.dir.z), friendly: j.side === 'blue' })));
     this.mini.restore();
 
     if (game.mapOpen) {
       this.bigT -= 1 / 12;
       if (this.bigT <= 0) {
         this.bigT = 0.25;
-        game.map.drawBig(this.big, 900, fm.pos.x, fm.pos.z, fm.heading, this.markers(game), game.battle.sectorInfo().map((i) => ({ x: i.x, z: i.z, name: i.s.name, control: i.control, active: i.active })));
+        game.map.drawBig(this.big, 900, game.playerPos.x, game.playerPos.z, game.playerHeading, this.markers(game), game.battle.sectorInfo().map((i) => ({ x: i.x, z: i.z, name: i.s.name, control: i.control, active: i.active })));
       }
     }
   }
@@ -225,7 +258,8 @@ export class Hud {
     g.font = '12px ui-monospace, Menlo, monospace';
 
     // Heading tape.
-    const hdg = (fm.heading * 180) / Math.PI;
+    const hdg = (game.playerHeading * 180) / Math.PI;
+    const pp = game.playerPos;
     const tapeW = Math.min(420, W * 0.5);
     const cx = W / 2;
     g.strokeStyle = green;
@@ -255,7 +289,7 @@ export class Hud {
     const m = game.missions.active;
     if (m) {
       const t = m.target;
-      const brg = (Math.atan2(t.x - fm.pos.x, -(t.z - fm.pos.z)) * 180) / Math.PI;
+      const brg = (Math.atan2(t.x - pp.x, -(t.z - pp.z)) * 180) / Math.PI;
       let d = brg - hdg;
       d = ((d + 540) % 360) - 180;
       const x = cx + clamp(d / 40, -1, 1) * (tapeW / 2);
@@ -265,7 +299,7 @@ export class Hud {
 
     // World markers: objective + nearby sites.
     const near = game.world.sites
-      .map((s) => ({ s, d: Math.hypot(s.x - fm.pos.x, s.z - fm.pos.z) }))
+      .map((s) => ({ s, d: Math.hypot(s.x - pp.x, s.z - pp.z) }))
       .filter((o) => o.d < 2200 && o.d > 120 && o.s !== m?.targetSite)
       .sort((a, b) => a.d - b.d)
       .slice(0, 5);
@@ -283,7 +317,7 @@ export class Hud {
     if (m) {
       const t = m.target;
       const p = this.project(this.tmp.set(t.x, t.y + 3, t.z), cam, W, H);
-      const dist = Math.hypot(t.x - fm.pos.x, t.z - fm.pos.z);
+      const dist = Math.hypot(t.x - pp.x, t.z - pp.z);
       const margin = 40;
       const off = p.behind || p.x < margin || p.x > W - margin || p.y < margin || p.y > H - margin;
       g.strokeStyle = '#ff9a2e';
@@ -320,7 +354,7 @@ export class Hud {
     const R = 62;
     const ix = W / 2;
     const iy = H - 140;
-    const show = fm.agl < 80 && fm.groundSpeed < 25;
+    const show = game.mode === 'fly' && fm.agl < 80 && fm.groundSpeed < 25;
     if (show) {
       g.lineWidth = 1.5;
       g.strokeStyle = 'rgba(157,255,157,0.5)';
@@ -376,7 +410,7 @@ export class Hud {
         g.fillText(`LOAD ${st.h.toFixed(1)} m below`, ix, iy - R - 12);
       }
     }
-    this.drawStick(game, ix, iy, R);
+    if (game.mode === 'fly') this.drawStick(game, ix, iy, R);
     g.textAlign = 'start';
   }
 

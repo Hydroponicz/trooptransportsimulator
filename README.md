@@ -1,10 +1,10 @@
 # Troop Transport Simulator
 
-A 3D helicopter logistics game, inspired by Euro Truck Simulator. You fly a
+A 3D military logistics game, inspired by Euro Truck Simulator. You fly a
 CH-47-style tandem-rotor transport, picking up infantry, casualties, pallets
 and sling loads, and delivering them across a procedurally generated warzone,
 from the safe rear bases to outposts on the front line and landing zones
-behind enemy lines.
+behind enemy lines. You can also take a Humvee out on road convoy jobs.
 
 It runs in the browser (Three.js + TypeScript + Vite). No assets: every model,
 texture and sound is generated in code.
@@ -38,6 +38,26 @@ You need a browser with WebGL. A gamepad is optional.
    smooth ride, butter landing, precise set-down, hazard pay) and penalties.
    Spend the money on fuel, repairs, flares and hangar upgrades: engines,
    armor, fuel tanks and countermeasures.
+
+## The Humvee
+
+A Humvee waits at the main base motor pool. Land within 140 m of it and press
+`G` to get out of the helicopter and into the truck; press `G` again, stopped
+within 140 m of the helicopter, to switch back.
+
+Terminals also list **road jobs** (🚙 ROAD; helicopter jobs are tagged
+🚁 AIR). These include fireteam transport, supply runs, casualty evacuation
+and escort runs between sites on the road network. They work like the
+helicopter jobs: drive to the pickup, open the doors (`R`) and wait while
+everyone boards, then drive to the destination and open the doors again to
+unload. The time limit is set from the route length by road at convoy speed,
+not the straight-line distance, so a job that is 3 km by air can be 5 km by
+road with more time to match. Pay scales with road distance and risk.
+
+The truck has 4-wheel drive with independent suspension. Roads are graded
+and grip better than grass, and bridges have guard rails. Deep water stalls
+the engine. If you roll it or get stuck, `T` calls a recovery truck ($400)
+that puts you back on the nearest road.
 
 ## Flight model
 
@@ -86,6 +106,19 @@ The flight model is a rigid body simulated at 120 Hz:
 | `M` | Theater map |
 | `Esc` / `P` | Pause |
 
+**Humvee** (`G` to switch vehicles):
+
+| Key | Action |
+| --- | --- |
+| `W` | Accelerate |
+| `S` | Brake, then reverse when stopped |
+| `A` / `D` | Steer |
+| `Space` | Handbrake (parks the truck when slow) |
+| `R` | Open / close doors (load and unload) |
+| `H` | Horn |
+| `T` | Call recovery ($400) |
+| `C` | Camera: chase / driver's seat |
+
 The game goes fullscreen with keyboard lock when you start or continue a
 career, so in Chrome and Edge Ctrl+W / Ctrl+Q go to the game instead of
 closing the browser. Hold Esc to leave fullscreen; the game pauses and offers
@@ -113,7 +146,10 @@ front so battles happen on sensible terrain. Places include:
     church, and farmland, barns and silos around them.
 
 Roads link everything (with power lines along the main supply routes), and
-supply convoys drive them.
+supply convoys drive them. Roads are graded like real ones: they cut through
+hills and run on embankments. Where they cross a river or a deep valley they
+go onto bridges and viaducts that run from bank to bank, and steep ramps
+climb to hilltop bases.
 
 ### The war
 
@@ -147,6 +183,7 @@ src/
   heli/flight.ts     flight model (thrust, drag, control laws, ground contact)
   heli/heli.ts       aircraft entity: damage, ramp, rotors, collisions
   heli/chinookModel.ts  procedural CH-47 mesh
+  vehicles/humvee.ts drivable Humvee: suspension, tires, drivetrain, model
   game/missions.ts   contracts, pay, mission phases, payouts
   game/cargo.ts      troops / litters / pallets walking on and off the ramp
   game/sling.ts      hook, rope constraint, slung-load physics

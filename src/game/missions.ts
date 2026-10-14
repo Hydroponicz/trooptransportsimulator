@@ -3,12 +3,27 @@ import type { RNG } from '../util/noise';
 import type { Site, SiteKind } from '../world/sites';
 import type { ActorKind, CargoGroup, CargoManager } from './cargo';
 import { SlingLoad, type SlingModel, type SlingSystem } from './sling';
-import type { Heli, LandingRating } from '../heli/heli';
+import type { LandingRating } from '../heli/heli';
+import type { Roads } from '../world/roads';
 import type { Effects, SmokeEmitter } from '../fx/effects';
 import type { Terrain } from '../world/terrain';
 import { clamp } from '../util/math';
 
 export type CargoKind = 'troops' | 'pallets' | 'casualties' | 'sling';
+
+/** Anything that can carry a contract: the helicopter or a ground vehicle. */
+export interface Carrier {
+  readonly kind: 'air' | 'ground';
+  readonly pos: THREE.Vector3;
+  readonly loadable: boolean;
+  readonly rampDown: boolean;
+  readonly onGround: boolean;
+  readonly loadFactor: number;
+  readonly roll: number;
+  readonly pitch: number;
+  rampEndWorld(out: THREE.Vector3): THREE.Vector3;
+  cabinWorld(out: THREE.Vector3): THREE.Vector3;
+}
 
 export interface CargoType {
   id: string;
@@ -31,6 +46,14 @@ export interface CargoType {
   icon: string;
   desc: string;
 }
+
+/** Jobs done by road in the Humvee. */
+export const GROUND_CARGO: CargoType[] = [
+  { id: 'g_fireteam', name: 'Fire Team Transport', kind: 'troops', actor: 'soldier', unitMass: 115, min: 2, max: 4, payMult: 1, fragility: 0.6, minRank: 0, from: ['base', 'fob', 'cop'], to: ['base', 'fob', 'cop'], weight: 4, icon: '🚙', desc: 'Drive a fire team to its new post.' },
+  { id: 'g_supply', name: 'Supply Run', kind: 'pallets', actor: 'pallet', unitMass: 350, min: 1, max: 2, payMult: 1.1, fragility: 0.8, minRank: 0, from: ['base', 'fob'], to: ['fob', 'cop'], weight: 3, icon: '🚙', desc: 'Crates of rations and spares. Stick to the roads, the bumps break things.' },
+  { id: 'g_casevac', name: 'Ground CASEVAC', kind: 'casualties', actor: 'casualty', unitMass: 190, min: 1, max: 2, payMult: 1.5, fragility: 2, minRank: 0, urgent: true, from: ['cop', 'fob'], to: ['base', 'fob'], weight: 2, icon: '🚑', desc: 'Lightly wounded, stable for road transport. Drive smooth.' },
+  { id: 'g_escort', name: 'Officer Transport', kind: 'troops', actor: 'soldier', unitMass: 110, min: 1, max: 2, payMult: 1.35, fragility: 1.3, minRank: 0, from: ['base', 'fob', 'cop'], to: ['base', 'fob', 'cop'], weight: 2, icon: '🎖️', desc: 'Brass on a site visit. A comfortable ride is appreciated.' },
+];
 
 export const CARGO: CargoType[] = [
   { id: 'squad', name: 'Infantry Squad', kind: 'troops', actor: 'soldier', unitMass: 115, min: 6, max: 12, payMult: 1, fragility: 0.6, minRank: 0, from: ['base', 'fob'], to: ['fob', 'cop', 'lz'], side: 'friendly', weight: 5, icon: '🪖', desc: 'Move a rifle squad forward.' },
@@ -63,6 +86,10 @@ export interface Contract {
   timeLimit: number;
   risk: number;
   xp: number;
+  /** Which vehicle does the job. */
+  mode: 'air' | 'ground';
+  /** Road distance for ground jobs. */
+  route?: number;
 }
 
 export type Phase = 'pickup' | 'transit' | 'dropoff' | 'complete' | 'failed';
@@ -100,6 +127,8 @@ export class Mission {
   setDownImpact = 0;
   hits = 0;
   calledPickup = false;
+  /** Smoothed vertical load factor felt by the cargo. */
+  nz = 1;
   calledDrop = false;
   constructor(readonly c: Contract) {}
   get timeLeft() {
@@ -149,6 +178,7 @@ export class MissionSystem {
     private sling: SlingSystem,
     private effects: Effects,
     private terrain: Terrain,
+    private roads: Roads,
     private hooks: MissionHooks,
   ) {
     cargo.onBoard = (g) => {
@@ -228,9 +258,48 @@ export class MissionSystem {
         timeLimit,
         risk,
         xp: Math.round(pay / 45),
+        mode: 'air',
       });
     }
-    out.sort((a, b) => a.type.minRank - b.type.minRank || a.pay - b.pay);
+    // Road jobs from here, if this site is on the road network.
+    if (site.kind !== 'lz') {
+      let made = 0;
+      const pool = GROUND_CARGO.filter((g) => g.from.includes(site.kind)).flatMap((g) => Array(g.weight).fill(g) as CargoType[]);
+      for (let tries = 0; tries < 30 && made < 3 && pool.length; tries++) {
+        const t = rng.pick(pool);
+        const tos = this.sites.filter((s) => s !== site && !s.enemySide && t.to.includes(s.kind));
+        if (!tos.length) continue;
+        const to = rng.pick(tos);
+        if (out.some((c) => c.mode === 'ground' && c.to === to && c.type === t)) continue;
+        const route = this.roads.route(site.x, site.z, to.x, to.z);
+        if (route === null || route < 700 || route > 8000) continue;
+        const count = rng.int(t.min, t.max);
+        const mass = count * t.unitMass;
+        const risk = Math.max(siteRisk(site), siteRisk(to));
+        const pay = Math.round(((1400 + (route / 1000) * 1500) * t.payMult * (1 + 0.4 * risk)) / 50) * 50;
+        // Driving time at a sensible road speed (~38-45 km/h average), plus loading.
+        const timeLimit = Math.round(route / (t.urgent ? 12.5 : 10.5) + (t.urgent ? 120 : 180) + (t.kind === 'pallets' ? count * 20 : 0));
+        out.push({
+          id: nextId++,
+          type: t,
+          count,
+          mass,
+          from: site,
+          to,
+          fromPad: rng.int(0, site.pads.length - 1),
+          toPad: rng.int(0, to.pads.length - 1),
+          distance: Math.hypot(site.x - to.x, site.z - to.z),
+          pay,
+          timeLimit,
+          risk,
+          xp: Math.round(pay / 45),
+          mode: 'ground',
+          route,
+        });
+        made++;
+      }
+    }
+    out.sort((a, b) => (a.mode === b.mode ? 0 : a.mode === 'air' ? -1 : 1) || a.type.minRank - b.type.minRank || a.pay - b.pay);
     void rank;
     return out;
   }
@@ -286,14 +355,14 @@ export class MissionSystem {
   }
 
   /** Per-frame cargo condition: g-forces, bank, etc. */
-  private wear(m: Mission, heli: Heli, dt: number) {
+  private wear(m: Mission, carrier: Carrier, dt: number) {
     const carrying = (m.group && m.group.aboard > 0) || (m.load && this.sling.hooked === m.load);
     if (!carrying) return;
     const f = m.c.type.fragility;
-    const fm = heli.fm;
-    const nz = fm.loadFactor;
+    m.nz += (carrier.loadFactor - m.nz) * Math.min(1, dt * 8);
+    const nz = m.nz;
     const over = Math.max(0, nz - 1.45) + Math.max(0, 0.55 - nz);
-    const bank = Math.max(0, Math.abs(fm.roll) - 0.7) + Math.max(0, Math.abs(fm.pitch) - 0.5);
+    const bank = Math.max(0, Math.abs(carrier.roll) - 0.7) + Math.max(0, Math.abs(carrier.pitch) - 0.5);
     m.condition = clamp(m.condition - (over * 6 + bank * 4) * f * dt, 0, 100);
   }
 
@@ -311,12 +380,12 @@ export class MissionSystem {
     m.landing = r;
   }
 
-  update(dt: number, heli: Heli) {
+  update(dt: number, carrier: Carrier) {
     const m = this.active;
     if (!m) return;
     m.elapsed += dt;
     const c = m.c;
-    const hp = heli.fm.pos;
+    const hp = carrier.pos;
     const dPickup = Math.hypot(hp.x - c.from.pads[c.fromPad].x, hp.z - c.from.pads[c.fromPad].z);
     const dDrop = Math.hypot(hp.x - m.dropPos.x, hp.z - m.dropPos.z);
 
@@ -358,15 +427,16 @@ export class MissionSystem {
       m.dropSmoke = this.effects.addEmitter(this.tmp.copy(m.dropPos).add(new THREE.Vector3(16, 0.3, 4)), hot ? 'red' : 'yellow');
     }
 
-    this.wear(m, heli, dt);
+    this.wear(m, carrier, dt);
+    const rightVehicle = carrier.kind === c.mode;
 
     if (m.phase === 'pickup') {
-      if (m.internal && m.group) {
-        const rampEnd = heli.rampEndWorld(this.tmp);
+      if (m.internal && m.group && rightVehicle) {
+        const rampEnd = carrier.rampEndWorld(this.tmp);
         const close = Math.hypot(rampEnd.x - c.from.waits[c.fromPad].x, rampEnd.z - c.from.waits[c.fromPad].z) < 75;
         if (m.group.allAboard) {
           m.phase = 'transit';
-        } else if (close && heli.loadable && !heli.rampDown && heli.fm.contacts >= 3 && Math.random() < dt * 0.4) {
+        } else if (close && carrier.loadable && !carrier.rampDown && carrier.onGround && Math.random() < dt * 0.4) {
           this.hooks.toast('Lower the ramp [R] to load', 'info');
         }
       } else if (m.load && this.sling.hooked === m.load) {
@@ -375,10 +445,10 @@ export class MissionSystem {
       }
     } else if (m.phase === 'transit') {
       if (m.internal && m.group) {
-        if (heli.loadable && heli.rampDown && dDrop < 70) {
+        if (rightVehicle && carrier.loadable && carrier.rampDown && dDrop < 70) {
           m.phase = 'dropoff';
           const rally = this.tmp2.copy(m.dropPos);
-          const dir = this.tmp.copy(heli.rampEndWorld(this.tmp)).sub(hp).setY(0).normalize();
+          const dir = this.tmp.copy(carrier.rampEndWorld(this.tmp)).sub(hp).setY(0).normalize();
           rally.addScaledVector(dir, 34);
           this.cargo.setRally(m.group, rally);
           this.hooks.toast('Unloading…', 'info');
@@ -400,12 +470,12 @@ export class MissionSystem {
   }
 
   /** Context for the cargo actors each frame. */
-  loadContext(heli: Heli): { canLoad: boolean; canUnload: boolean } {
+  loadContext(carrier: Carrier): { canLoad: boolean; canUnload: boolean } {
     const m = this.active;
-    if (!m || !m.group) return { canLoad: false, canUnload: false };
+    if (!m || !m.group || carrier.kind !== m.c.mode) return { canLoad: false, canUnload: false };
     const c = m.c;
-    const rampEnd = heli.rampEndWorld(this.tmp);
-    const ok = heli.loadable && heli.rampDown;
+    const rampEnd = carrier.rampEndWorld(this.tmp);
+    const ok = carrier.loadable && carrier.rampDown;
     const canLoad = m.phase === 'pickup' && ok && Math.hypot(rampEnd.x - c.from.waits[c.fromPad].x, rampEnd.z - c.from.waits[c.fromPad].z) < 75;
     const canUnload = m.phase === 'dropoff' && ok;
     return { canLoad, canUnload };

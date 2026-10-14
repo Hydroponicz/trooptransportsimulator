@@ -246,8 +246,26 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
     } else {
       from = hubs.reduce((a, b) => (dist(a, t) < dist(b, t) ? a : b));
     }
-    if (from) roads.add(from.x, from.z, t.x, t.z, rng);
+    if (from) {
+      // Stop at the edge of town; the town's own streets take it from there.
+      const d = Math.hypot(from.x - t.x, from.z - t.z) || 1;
+      const ex = t.x + ((from.x - t.x) / d) * t.r * 0.85;
+      const ez = t.z + ((from.z - t.z) / d) * t.r * 0.85;
+      roads.add(from.x, from.z, ex, ez, rng);
+    }
   }
+  roads.grade();
+  // Clear a lane: walls get gates, and anything else sitting on a road is removed.
+  // Large buildings are tested over their whole footprint, not just their center.
+  props.removeAllWhere((x, z, box) => {
+    if (roads.distance(x, z) < 6) return true;
+    if (!box) return false;
+    const x0 = box.minX - 3, x1 = box.maxX + 3, z0 = box.minZ - 3, z1 = box.maxZ + 3;
+    const nx = Math.max(1, Math.ceil((x1 - x0) / 3)), nz = Math.max(1, Math.ceil((z1 - z0) / 3));
+    for (let i = 0; i <= nx; i++)
+      for (let j = 0; j <= nz; j++) if (roads.distance(x0 + ((x1 - x0) * i) / nx, z0 + ((z1 - z0) * j) / nz) < 3.5) return true;
+    return false;
+  }, ['slab']);
   group.add(roads.build(colliders));
 
   // Power lines along the main supply roads.
@@ -264,7 +282,7 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
       const x = a.x - (tz / tl) * 16;
       const z = a.y + (tx / tl) * 16;
       const y = terrain.heightAt(x, z);
-      if (y < 1 || nearSite(x, z, 10)) {
+      if (y < 1 || nearSite(x, z, 10) || roads.distance(x, z) < 10) {
         last = null;
         continue;
       }
@@ -305,7 +323,7 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
       const x = fm.x + Math.cos(a) * r;
       const z = fm.z + Math.sin(a) * r;
       const y = terrain.heightAt(x, z);
-      if (y < 2 || roads.distance(x, z) < 8 || nearSite(x, z, 10)) continue;
+      if (y < 2 || roads.distance(x, z) < 8 || roads.distance(x + 13, z) < 8 || nearSite(x, z, 10)) continue;
       const bales = rng.int(2, 6);
       for (let k = 0; k < bales; k++) props.add('haybale', x + k * 2.2, terrain.heightAt(x + k * 2.2, z), z, rng.range(-0.2, 0.2));
     }

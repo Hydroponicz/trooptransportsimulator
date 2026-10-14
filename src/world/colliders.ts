@@ -7,6 +7,8 @@ export interface AABB {
   maxX: number;
   maxY: number;
   maxZ: number;
+  /** Blocks rotors but not wheels (bridge decks). */
+  soft?: boolean;
 }
 
 const CELL = 64;
@@ -31,11 +33,23 @@ export class ColliderSet {
       }
   }
 
+  remove(b: AABB) {
+    for (const [k, arr] of this.grid) {
+      const i = arr.indexOf(b);
+      if (i >= 0) {
+        arr.splice(i, 1);
+        if (!arr.length) this.grid.delete(k);
+      }
+    }
+    this.count--;
+  }
+
   /** Returns the box containing p (with margin), if any. */
-  hit(p: THREE.Vector3, margin = 0): AABB | null {
+  hit(p: THREE.Vector3, margin = 0, solidOnly = false): AABB | null {
     const arr = this.grid.get(this.key(Math.floor(p.x / CELL), Math.floor(p.z / CELL)));
     if (!arr) return null;
     for (const b of arr) {
+      if (solidOnly && b.soft) continue;
       if (
         p.x > b.minX - margin &&
         p.x < b.maxX + margin &&

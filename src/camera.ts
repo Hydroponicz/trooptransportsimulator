@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Heli } from './heli/heli';
+import type { Humvee } from './vehicles/humvee';
 import { COCKPIT_POS, HOOK_POS } from './heli/chinookModel';
 import { clamp, damp } from './util/math';
 import type { Terrain } from './world/terrain';
@@ -37,6 +38,70 @@ export class CameraRig {
 
   snap() {
     this.initialized = false;
+  }
+
+  /** Driving: chase behind the vehicle, or the driver's seat. */
+  updateGround(dt: number, v: Humvee, terrain: Terrain, mouse: [number, number, number]) {
+    const cam = this.camera;
+    const [mx, my, wheel] = mouse;
+    if (this.mode === 'cockpit') {
+      if (mx || my) {
+        this.lookYaw = clamp(this.lookYaw - mx * 0.004, -2.4, 2.4);
+        this.lookPitch = clamp(this.lookPitch - my * 0.004, -0.9, 0.7);
+      }
+      v.worldPoint(new THREE.Vector3(-0.5, 0.95, -0.25), cam.position);
+      cam.quaternion.copy(v.quat).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(this.lookPitch, this.lookBack ? Math.PI : this.lookYaw, 0, 'YXZ')));
+      cam.near = 0.1;
+      cam.fov = damp(cam.fov, 72, 4, dt);
+      this.initialized = false;
+    } else {
+      if (mx || my) this.idle = 0;
+      else this.idle += dt;
+      this.yawOff -= mx * 0.005;
+      this.pitchOff = clamp(this.pitchOff + my * 0.004, -0.1, 1.2);
+      this.dist = clamp(this.dist * (1 + wheel * 0.1), 7, 60);
+      if (this.idle > 2) {
+        this.yawOff = damp(this.yawOff, 0, 1.5, dt);
+        this.pitchOff = damp(this.pitchOff, 0.22, 1.5, dt);
+      }
+      // Face the way the vehicle is going (also when reversing hard).
+      let dh = v.heading - this.heading;
+      dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+      if (!this.initialized) this.heading = v.heading;
+      this.heading += dh * (1 - Math.exp(-4 * dt));
+      const orbit = this.mode === 'orbit' ? (this.orbitA += dt * 0.15) : 0;
+      const yaw = this.heading + this.yawOff + (this.lookBack ? Math.PI : 0) + orbit;
+      const d = Math.min(this.dist, 26) * (this.mode === 'orbit' ? 1.4 : 0.55);
+      const target = new THREE.Vector3(
+        v.pos.x - Math.sin(yaw) * Math.cos(this.pitchOff) * d,
+        v.pos.y + 1.6 + Math.sin(this.pitchOff) * d,
+        v.pos.z + Math.cos(yaw) * Math.cos(this.pitchOff) * d,
+      );
+      const minY = terrain.surfaceAt(target.x, target.z) + 1.2;
+      if (target.y < minY) target.y = minY;
+      const lookT = v.pos.clone().add(new THREE.Vector3(0, 1.2, 0)).addScaledVector(v.vel, 0.12);
+      if (!this.initialized) {
+        this.pos.copy(target);
+        this.look.copy(lookT);
+        this.initialized = true;
+      }
+      this.pos.x = damp(this.pos.x, target.x, 7, dt);
+      this.pos.y = damp(this.pos.y, target.y, 6, dt);
+      this.pos.z = damp(this.pos.z, target.z, 7, dt);
+      this.look.lerp(lookT, 1 - Math.exp(-12 * dt));
+      cam.position.copy(this.pos);
+      cam.up.set(0, 1, 0);
+      cam.lookAt(this.look);
+      cam.near = 0.3;
+      cam.fov = damp(cam.fov, 62 + clamp(Math.abs(v.speed) / 30, 0, 1) * 10, 2, dt);
+    }
+    if (this.shake > 0.001) {
+      const s = this.shake;
+      cam.rotateX((Math.random() - 0.5) * s * 0.02);
+      cam.rotateZ((Math.random() - 0.5) * s * 0.015);
+      this.shake = Math.max(0, this.shake - dt * 2.5);
+    }
+    cam.updateProjectionMatrix();
   }
 
   update(dt: number, heli: Heli, terrain: Terrain, mouse: [number, number, number]) {

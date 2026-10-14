@@ -253,6 +253,71 @@ export class AudioEngine {
     this.burst({ delay: 0.12, dur: 0.5, gain: 0.05, type: 'bandpass', f0: 1800, q: 2 });
   }
 
+  /** Diesel engine for the Humvee. rpm 0 = off. */
+  vehicle(): { update(rpm: number, load: number, dist: number, inside: boolean): void } | null {
+    const ctx = this.ctx;
+    if (!ctx) return null;
+    const o1 = ctx.createOscillator();
+    o1.type = 'sawtooth';
+    const o2 = ctx.createOscillator();
+    o2.type = 'square';
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.Q.value = 0.7;
+    const g = ctx.createGain();
+    g.gain.value = 0;
+    const o2g = ctx.createGain();
+    o2g.gain.value = 0.25;
+    o1.connect(lp);
+    o2.connect(o2g).connect(lp);
+    const rumble = ctx.createBufferSource();
+    rumble.buffer = this.noiseBuf;
+    rumble.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'lowpass';
+    bp.frequency.value = 160;
+    const rg = ctx.createGain();
+    rg.gain.value = 0.6;
+    rumble.connect(bp).connect(rg).connect(lp);
+    lp.connect(g).connect(this.master);
+    o1.start();
+    o2.start();
+    rumble.start(0, Math.random());
+    return {
+      update: (rpm, load, dist, inside) => {
+        const t = ctx.currentTime;
+        const f = 28 + 62 * rpm;
+        o1.frequency.setTargetAtTime(f, t, 0.08);
+        o2.frequency.setTargetAtTime(f * 0.5, t, 0.08);
+        lp.frequency.setTargetAtTime((inside ? 260 : 380) + 700 * rpm * (0.6 + 0.4 * load), t, 0.08);
+        const att = inside ? 1 : 1 / (1 + dist / 18);
+        g.gain.setTargetAtTime(rpm > 0 ? (0.07 + 0.06 * load) * att : 0, t, 0.15);
+      },
+    };
+  }
+
+  horn() {
+    for (const f of [330, 415]) {
+      const ctx = this.ctx;
+      if (!ctx) return;
+      const o = ctx.createOscillator();
+      o.type = 'square';
+      o.frequency.value = f;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 1200;
+      const g = ctx.createGain();
+      const t0 = ctx.currentTime;
+      g.gain.setValueAtTime(0, t0);
+      g.gain.linearRampToValueAtTime(0.07, t0 + 0.02);
+      g.gain.setValueAtTime(0.07, t0 + 0.45);
+      g.gain.linearRampToValueAtTime(0, t0 + 0.5);
+      o.connect(lp).connect(g).connect(this.master);
+      o.start(t0);
+      o.stop(t0 + 0.55);
+    }
+  }
+
   /** Jet engine loop with distance attenuation and doppler. */
   jet(): { update(dist: number, closing: number): void; stop(): void } | null {
     const ctx = this.ctx;

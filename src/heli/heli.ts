@@ -15,6 +15,7 @@ export interface HeliEvents {
 const _p = new THREE.Vector3();
 
 export class Heli {
+  readonly kind = 'air' as const;
   fm = new FlightModel();
   parts: ChinookParts;
   hp = 100;
@@ -206,6 +207,22 @@ export class Heli {
   /** Heading-only rotation, handy for cameras. */
   yawQuat(out: THREE.Quaternion) {
     return out.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -this.fm.heading);
+  }
+
+  get pos() {
+    return this.fm.pos;
+  }
+  get onGround() {
+    return this.fm.contacts >= 3;
+  }
+  get loadFactor() {
+    return this.fm.loadFactor;
+  }
+  get roll() {
+    return this.fm.roll;
+  }
+  get pitch() {
+    return this.fm.pitch;
   }
 
   get rampDown() {

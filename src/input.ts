@@ -11,7 +11,8 @@ export type Action =
   | 'map'
   | 'pause'
   | 'help'
-  | 'lookBack';
+  | 'lookBack'
+  | 'vehicle';
 
 const KEYMAP: Record<string, Action> = {
   KeyI: 'engine',
@@ -26,6 +27,7 @@ const KEYMAP: Record<string, Action> = {
   Escape: 'pause',
   F1: 'help',
   KeyB: 'lookBack',
+  KeyG: 'vehicle',
 };
 
 // Standard gamepad buttons.

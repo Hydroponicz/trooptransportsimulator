@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { ColliderSet } from './colliders';
+import type { AABB, ColliderSet } from './colliders';
 
 /** Bake a primitive into a non-indexed, vertex-colored geometry part. */
 export function part(
@@ -370,6 +370,7 @@ interface Batch {
   geo: THREE.BufferGeometry;
   mats: THREE.Matrix4[];
   colors: (THREE.Color | null)[];
+  boxes: (AABB | null)[];
 }
 
 /** Collects structure placements and emits one InstancedMesh per prototype. */
@@ -384,7 +385,7 @@ export class Props {
     const sc = typeof scale === 'number' ? [scale, scale, scale] : scale;
     let b = this.batches.get(name);
     if (!b) {
-      b = { geo: buildProto(name), mats: [], colors: [] };
+      b = { geo: buildProto(name), mats: [], colors: [], boxes: [] };
       this.batches.set(name, b);
     }
     const m = new THREE.Matrix4().compose(
@@ -394,11 +395,39 @@ export class Props {
     );
     b.mats.push(m);
     b.colors.push(color !== undefined ? new THREE.Color(color) : null);
+    let box: AABB | null = null;
     if (COLLIDE[name]) {
       this.tmpBox.copy(b.geo.boundingBox!).applyMatrix4(m);
       const bb = this.tmpBox;
-      this.colliders.add({ minX: bb.min.x, minY: bb.min.y, minZ: bb.min.z, maxX: bb.max.x, maxY: bb.max.y, maxZ: bb.max.z });
+      box = { minX: bb.min.x, minY: bb.min.y, minZ: bb.min.z, maxX: bb.max.x, maxY: bb.max.y, maxZ: bb.max.z };
+      this.colliders.add(box);
     }
+    b.boxes.push(box);
+  }
+
+  /** Drop placements of a prototype that match (e.g. wall segments where a road passes). */
+  removeWhere(name: ProtoName, fn: (x: number, z: number, box?: AABB) => boolean): number {
+    const b = this.batches.get(name);
+    if (!b) return 0;
+    let removed = 0;
+    for (let i = b.mats.length - 1; i >= 0; i--) {
+      const e = b.mats[i].elements;
+      const box = b.boxes[i];
+      if (!fn(e[12], e[14], box ?? undefined)) continue;
+      if (box) this.colliders.remove(box);
+      b.mats.splice(i, 1);
+      b.colors.splice(i, 1);
+      b.boxes.splice(i, 1);
+      removed++;
+    }
+    return removed;
+  }
+
+  /** Clear every placed structure matching the predicate (except the listed prototypes). */
+  removeAllWhere(fn: (x: number, z: number, box?: AABB) => boolean, keep: ProtoName[] = []): number {
+    let n = 0;
+    for (const name of this.batches.keys()) if (!keep.includes(name)) n += this.removeWhere(name, fn);
+    return n;
   }
 
   build(): THREE.Group {

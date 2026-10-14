@@ -222,6 +222,16 @@ export class Terrain {
     return this.mesh;
   }
 
+  /** Push edited heights back into the mesh (after road grading, etc). */
+  refreshMesh() {
+    const geo = this.mesh.geometry;
+    const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < this.heights.length; i++) pos.setY(i, this.heights[i]);
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+    geo.computeBoundingSphere();
+  }
+
   /** Height exactly matching the rendered triangle mesh. */
   heightAt(x: number, z: number): number {
     const N = SEGS + 1;
