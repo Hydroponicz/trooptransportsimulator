@@ -116,7 +116,11 @@ export type ProtoName =
   | 'jersey'
   | 'railpost'
   | 'fencepost'
-  | 'signpost';
+  | 'signpost'
+  | 'hospital'
+  | 'medtent'
+  | 'ammo_dump'
+  | 'signboard';
 
 /** Gable roof prism: ridge along Z. */
 function gable(w: number, h: number, d: number): THREE.BufferGeometry {
@@ -404,6 +408,85 @@ export function buildProto(name: ProtoName): THREE.BufferGeometry {
         part(box(0.16, 4.2, 0.16), 0x8d9091, 1.9, 2.1, -0.1),
         part(box(5.3, 1.6, 0.08), 0x6c6e6e, 0, 3.4, -0.06),
       ]);
+    case 'hospital': {
+      // Permanent field hospital: door, canopy and red crosses face +Z.
+      const WALL = 0xd8d2c0;
+      const TRIM = 0x8f8a7c;
+      const RED = 0xb3201c;
+      const WHITE = 0xf0f0ec;
+      const GLASS = 0x2a2e33;
+      const p: THREE.BufferGeometry[] = [
+        part(box(22, 4.4, 12), WALL, 0, 2.2, 0),
+        part(box(22.6, 0.35, 12.6), TRIM, 0, 4.55, 0),
+        part(box(5.5, 0.06, 5.5), WHITE, 0, 4.76, 0),
+        part(box(4.2, 0.08, 1.3), RED, 0, 4.8, 0),
+        part(box(1.3, 0.08, 4.2), RED, 0, 4.8, 0),
+        part(box(2.6, 2.7, 0.1), GLASS, 0, 1.35, 6.03),
+        part(box(6, 0.2, 3.4), TRIM, 0, 3.1, 7.7),
+        part(box(3.4, 0.25, 2.2), 0x9a958a, 0, 0.12, 7.1),
+        part(box(2.2, 2.2, 0.06), WHITE, 5.2, 2.5, 6.04),
+        part(box(1.6, 0.48, 0.08), RED, 5.2, 2.5, 6.08),
+        part(box(0.48, 1.6, 0.08), RED, 5.2, 2.5, 6.08),
+        part(box(1.4, 1.4, 1.0), 0x9a9a92, -7, 5.4, -3),
+        part(box(1.4, 1.4, 1.0), 0x9a9a92, 7, 5.4, -3),
+        part(box(2.4, 1.6, 1.3), 0x5e6342, 12.6, 0.8, -3),
+      ];
+      for (const sx of [-2.8, 2.8]) p.push(part(box(0.18, 3.0, 0.18), 0x6e6a5e, sx, 1.5, 9.25));
+      for (const x of [-9, -6.2, -3.4, 9]) p.push(part(box(1.6, 1.0, 0.08), GLASS, x, 2.6, 6.03));
+      for (const sx of [-11.03, 11.03]) for (const z of [-3.5, 0, 3.5]) p.push(part(box(0.08, 1.0, 1.6), GLASS, sx, 2.6, z));
+      return merge(p);
+    }
+    case 'medtent': {
+      // Large canvas medical tent, door and cross at +Z.
+      const CANVAS = 0xd9d2b8;
+      const RED = 0xb3201c;
+      const WHITE = 0xf2f0ea;
+      const p: THREE.BufferGeometry[] = [
+        part(tentGeo(), CANVAS, 0, 0, 0, 0, 0, 0, 1.4, 1.15, 1.25),
+        part(box(1.8, 2.1, 0.1), 0x2b2a22, 0, 1.05, 5.02),
+        part(box(1.3, 1.3, 0.06), WHITE, 0, 2.75, 5.03),
+        part(box(1.0, 0.32, 0.08), RED, 0, 2.75, 5.07),
+        part(box(0.32, 1.0, 0.08), RED, 0, 2.75, 5.07),
+      ];
+      // Crosses on both roof slopes, visible from the air.
+      for (const sx of [-1, 1]) {
+        p.push(part(box(2.2, 0.05, 2.2), WHITE, sx * 1.75, 2.93, 0, 0, 0, -sx * 0.43));
+        p.push(part(box(1.7, 0.06, 0.5), RED, sx * 1.74, 2.96, 0, 0, 0, -sx * 0.43));
+        p.push(part(box(0.5, 0.06, 1.7), RED, sx * 1.74, 2.96, 0, 0, 0, -sx * 0.43));
+      }
+      return merge(p);
+    }
+    case 'ammo_dump': {
+      // Sandbagged ammunition supply point, open to +Z, with ammo stacks and a warning sign.
+      const BAG = 0x958763;
+      const BAG2 = 0x8a7c5a;
+      const AMMO = 0x4b5034;
+      const BAND = 0xc9a227;
+      const p: THREE.BufferGeometry[] = [
+        part(box(10.6, 0.7, 0.8), BAG, 0, 0.35, -4.2),
+        part(box(10.4, 0.65, 0.75), BAG2, 0, 1.02, -4.2),
+      ];
+      for (const sx of [-1, 1]) {
+        p.push(part(box(0.8, 0.7, 7.4), BAG, sx * 5.1, 0.35, -0.7));
+        p.push(part(box(0.75, 0.65, 7.2), BAG2, sx * 5.1, 1.02, -0.7));
+      }
+      for (const [x, z, h] of [[-3.4, -3.2, 3], [-2.1, -3.2, 2], [2.6, -3.2, 3], [3.9, -3.2, 2], [-3.4, -2.2, 1]] as const)
+        for (let k = 0; k < h; k++) {
+          p.push(part(box(1.2, 0.55, 0.8), AMMO, x, 0.28 + k * 0.56, z));
+          p.push(part(box(1.22, 0.07, 0.82), BAND, x, 0.4 + k * 0.56, z));
+        }
+      p.push(part(box(0.1, 2.2, 0.1), 0x5a4a35, 4.4, 1.1, 3.4));
+      p.push(part(box(1.2, 0.8, 0.05), 0xb3201c, 4.4, 1.9, 3.43));
+      p.push(part(box(0.9, 0.12, 0.06), BAND, 4.4, 1.9, 3.47));
+      return merge(p);
+    }
+    case 'signboard':
+      // Small painted sign on two posts, face +Z (tinted per use).
+      return merge([
+        part(box(0.1, 1.9, 0.1), 0x5a4a35, -0.9, 0.95, 0),
+        part(box(0.1, 1.9, 0.1), 0x5a4a35, 0.9, 0.95, 0),
+        part(box(2.2, 0.9, 0.06), 0xffffff, 0, 1.55, 0.04),
+      ]);
     case 'bridge_pier':
       return merge([part(box(1.6, 1, 6.5), 0x8d8b84, 0, 0.5, 0)]);
     case 'wreck':
@@ -457,6 +540,10 @@ const COLLIDE: Record<ProtoName, boolean> = {
   railpost: false,
   fencepost: false,
   signpost: false,
+  hospital: true,
+  medtent: true,
+  ammo_dump: false,
+  signboard: false,
 };
 
 interface Batch {

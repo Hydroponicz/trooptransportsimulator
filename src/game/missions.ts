@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { RNG } from '../util/noise';
-import type { Site, SiteKind } from '../world/sites';
-import type { ActorKind, CabinLayout, CargoGroup, CargoManager } from './cargo';
+import type { Facility, FacilityKind, Site, SiteKind } from '../world/sites';
+import type { ActorKind, CabinLayout, CargoGroup, CargoManager, Destination, Source } from './cargo';
 import { SlingLoad, type SlingModel, type SlingSystem } from './sling';
 import type { LandingRating } from '../heli/heli';
 import type { Roads } from '../world/roads';
@@ -129,6 +129,8 @@ export class Mission {
   pickupSmoke: SmokeEmitter | null = null;
   dropSmoke: SmokeEmitter | null = null;
   spawned = false;
+  /** The receiving facility has been told (its helpers are on their way). */
+  destSet = false;
   landing: LandingRating | null = null;
   setDownImpact = 0;
   hits = 0;
@@ -339,6 +341,79 @@ export class MissionSystem {
   }
 
   /** A smoke spot 6 m further from the road than a roadside point. */
+  /** The area on a site that a contract's cargo belongs to: hospital, ammo point, supply yard, HQ or barracks. */
+  private facilityFor(site: Site, type: CargoType): Facility | null {
+    const want: FacilityKind =
+      type.kind === 'casualties' ? 'medical' : type.kind === 'pallets' ? (type.id === 'ammo' ? 'ammo' : 'supply') : type.id === 'g_escort' ? 'hq' : 'barracks';
+    return site.facilities.find((f) => f.kind === want) ?? null;
+  }
+
+  /**
+   * Waypoints through the site's nearest gate, outside first, when `p` is
+   * beyond its perimeter wall (roadside drops for road jobs); otherwise none.
+   */
+  private gatePath(site: Site, p: THREE.Vector3): THREE.Vector3[] {
+    const wall = site.kind === 'base' ? 165 : site.kind === 'fob' ? 100 : site.kind === 'cop' ? 56 : 0;
+    if (!wall || Math.hypot(p.x - site.x, p.z - site.z) < wall - 6) return [];
+    let gate: Roads['gates'][number] | null = null;
+    let bd = Infinity;
+    for (const g of this.roads.gates) {
+      if (g.site !== site.name) continue;
+      const d = Math.hypot(g.x - p.x, g.z - p.z);
+      if (d < bd) (bd = d), (gate = g);
+    }
+    if (!gate) return [];
+    // Walk along the road's edge on the side the vehicle stopped.
+    const px = -gate.dz;
+    const pz = gate.dx;
+    const sgn = Math.sign((p.x - gate.x) * px + (p.z - gate.z) * pz) || 1;
+    const at = (along: number) => {
+      const x = gate!.x + gate!.dx * along + px * sgn * 3.2;
+      const z = gate!.z + gate!.dz * along + pz * sgn * 3.2;
+      return new THREE.Vector3(x, this.terrain.heightAt(x, z), z);
+    };
+    return [at(14), at(-16)];
+  }
+
+  /** Where a delivered load goes, and who comes out to help with it. */
+  private destinationFor(c: Contract, dropPos: THREE.Vector3): Destination | null {
+    const f = this.facilityFor(c.to, c.type);
+    if (!f) return null;
+    const crew = f.kind === 'ammo' || f.kind === 'supply' ? c.to.facilities.find((x) => x.kind === 'barracks') ?? f : f;
+    const helpers: Record<FacilityKind, Destination['helpers']> = { medical: 'medic', ammo: 'porter', supply: 'porter', hq: 'orderly', barracks: null };
+    const via = this.gatePath(c.to, dropPos);
+    // Helpers wait at the edge of the landing area (or beside the road), on the facility's side.
+    const toward = via[0] ?? f.approach;
+    const dir = new THREE.Vector3(toward.x - dropPos.x, 0, toward.z - dropPos.z);
+    const span = dir.length();
+    dir.divideScalar(span || 1);
+    const meet = dropPos.clone().addScaledVector(dir, Math.min(span * 0.8, c.mode === 'ground' ? 6 : 19));
+    return {
+      door: f.door,
+      approach: f.approach,
+      area: f.area,
+      yaw: f.yaw,
+      exitDoor: crew.door,
+      exitApproach: crew.approach,
+      helpers: helpers[f.kind],
+      via,
+      key: `${c.to.id}:${f.kind}`,
+      meet,
+      meetDir: dir,
+    };
+  }
+
+  /** Where a pickup musters from, if it can walk out from its facility before the player arrives. */
+  private sourceFor(c: Contract, pickupPos: THREE.Vector3, eta: number): Source | undefined {
+    const f = this.facilityFor(c.from, c.type);
+    if (!f) return undefined;
+    const start = f.area ?? f.door;
+    const speed = c.type.actor === 'soldier' ? 2.6 : 1.6;
+    const reach = Math.min(220, speed * eta * 0.8);
+    if (Math.hypot(start.x - pickupPos.x, start.z - pickupPos.z) > reach) return undefined;
+    return { door: f.door, approach: f.approach, area: f.area, via: this.gatePath(c.from, pickupPos).reverse() };
+  }
+
   private besideRoad(p: THREE.Vector3): THREE.Vector3 {
     const out = this.tmp.copy(p);
     for (let k = 0; k < 8 && this.roads.distance(out.x, out.z) < 17; k++) {
@@ -364,9 +439,9 @@ export class MissionSystem {
   private cleanup(m: Mission) {
     if (m.group) {
       if (m.group.aboard > 0) this.hooks.payloadChanged(-m.group.aboard * m.group.unitMass);
-      // Leave people that already got off walking around for a bit.
-      const g = m.group;
-      setTimeout(() => this.cargo.remove(g), m.phase === 'complete' ? 12000 : 0);
+      // Delivered loads finish walking to their facility before they're cleaned up.
+      if (m.phase === 'complete') this.cargo.retire(m.group);
+      else this.cargo.remove(m.group);
     }
     if (m.load) {
       if (this.sling.hooked === m.load) this.sling.release();
@@ -428,7 +503,15 @@ export class MissionSystem {
       m.spawned = true;
       const pad = c.from.pads[c.fromPad];
       if (m.internal) {
-        m.group = this.cargo.spawnWaiting(c.type.actor!, c.count, c.type.unitMass, m.pickupPos, c.pickupAt ? this.roads.curbside(c.from.x, c.from.z, c.from.radius)?.road ?? pad : pad);
+        m.group = this.cargo.spawnWaiting(
+          c.type.actor!,
+          c.count,
+          c.type.unitMass,
+          m.pickupPos,
+          c.pickupAt ? this.roads.curbside(c.from.x, c.from.z, c.from.radius)?.road ?? pad : pad,
+          // Rough ETA: fast cruise by air, convoy speed by road.
+          this.sourceFor(c, m.pickupPos, dPickup / (c.mode === 'ground' ? 14 : 55)),
+        );
       } else {
         const load = new SlingLoad(c.type.sling!, c.mass);
         load.placeAt(pad, this.terrain, this.rng.range(0, Math.PI * 2));
@@ -480,9 +563,20 @@ export class MissionSystem {
         this.hooks.toast(`Load hooked. Deliver to ${c.to.name} — set it down inside the smoke`, 'good');
       }
     } else if (m.phase === 'transit') {
+      if (m.internal && m.group && !m.destSet && dDrop < (c.mode === 'ground' ? 250 : 800)) {
+        // Inbound: the receiving facility sends its people out to meet the load.
+        m.destSet = true;
+        const dest = this.destinationFor(c, m.dropPos);
+        if (dest) this.cargo.setDestination(m.group, dest);
+      }
       if (m.internal && m.group) {
         if (rightVehicle && carrier.loadable && carrier.rampDown && dDrop < (c.mode === 'ground' ? 30 : 70)) {
           m.phase = 'dropoff';
+          if (!m.destSet) {
+            m.destSet = true;
+            const dest = this.destinationFor(c, m.dropPos);
+            if (dest) this.cargo.setDestination(m.group, dest);
+          }
           const rally = this.tmp2.copy(m.dropPos);
           if (c.mode === 'ground') {
             // Walk off the road into the site.

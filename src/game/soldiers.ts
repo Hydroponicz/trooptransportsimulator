@@ -36,7 +36,8 @@ export interface Joints {
 
 export type RifleCarry = 'sling' | 'hands' | 'back' | 'none';
 
-export type Outfit = 'infantry' | 'crew' | 'patient' | 'medic';
+/** `medstaff` and `staff` are base personnel: hospital staff, porters, orderlies. */
+export type Outfit = 'infantry' | 'crew' | 'patient' | 'medic' | 'medstaff' | 'staff';
 
 export interface SoldierInstance {
   /** World matrix of the soldier's feet/root. Write this each frame. */
@@ -266,6 +267,18 @@ export function gunner(out: Joints, t: number) {
   return out;
 }
 
+/** Standing salute, right hand to the brim of the helmet. */
+export function salute(out: Joints) {
+  Object.assign(out, standJoints());
+  out.armR = 1.25;
+  out.armOutR = 1.05;
+  out.elbowR = 2.25;
+  out.armL = 0.02;
+  out.armOutL = 0.06;
+  out.head = -0.05;
+  return out;
+}
+
 /** Seated at the controls: right hand on the cyclic, left on the collective, eyes scanning. */
 export function fly(out: Joints, t: number) {
   sit(out);
@@ -365,6 +378,10 @@ const OUTFIT: Record<Outfit, Partial<Record<Part, number>>> = {
   // Flight suit and flight helmet.
   crew: { thighL: 0x56603e, thighR: 0x56603e, shinL: 0x56603e, shinR: 0x56603e, pelvis: 0x56603e, torso: 0x5a6442, uArmL: 0x5a6442, uArmR: 0x5a6442, fArmL: 0x5a6442, fArmR: 0x5a6442, vest: 0x4a5236, helmet: 0x7a7d6a },
   patient: { torso: 0x7a7458, vest: 0x77714f, helmet: 0xe8e4dc },
+  // White medical vest with red-cross panels, soft cap.
+  medstaff: { vest: 0xe6e3da, pouches: 0xb3201c, helmet: 0x8a7d5a },
+  // Shirt-sleeve order: no armour, patrol cap.
+  staff: { helmet: 0x5b5f40 },
 };
 
 const _base = new THREE.Matrix4();
@@ -430,8 +447,8 @@ export class SoldierRenderer {
       const set = (p: Part, m: THREE.Matrix4) => this.meshes[p].setMatrixAt(n, m);
       set('pelvis', M.pelvis);
       set('torso', M.chest);
-      set('vest', s.outfit === 'patient' ? ZERO : M.chest);
-      set('pouches', s.outfit === 'patient' || s.outfit === 'crew' ? ZERO : M.chest);
+      set('vest', s.outfit === 'patient' || s.outfit === 'staff' ? ZERO : M.chest);
+      set('pouches', s.outfit === 'patient' || s.outfit === 'crew' || s.outfit === 'staff' ? ZERO : M.chest);
       set('pack', s.outfit === 'infantry' || s.outfit === 'medic' ? M.chest : ZERO);
       set('thighL', M.thighL);
       set('thighR', M.thighR);

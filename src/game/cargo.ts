@@ -17,6 +17,7 @@ import {
   randomSkin,
   rifleArms,
   rootMatrix,
+  salute,
   sit,
   standJoints,
   strap,
@@ -78,6 +79,54 @@ export interface LoadContext {
 }
 
 type Space = 'world' | 'cabin';
+
+/** Where a delivered load goes on the destination site, and who comes out to help. */
+export interface Destination {
+  /** Doorway the load is carried or walked into. */
+  door: THREE.Vector3;
+  approach: THREE.Vector3;
+  /** Pallet storage area (stacked in rows), if any. */
+  area: THREE.Vector3 | null;
+  /** Yaw the area faces (local +Z is (sin, cos)). */
+  yaw: number;
+  /** Where the pallet crew and porters head once the pallet is down. */
+  exitDoor: THREE.Vector3;
+  exitApproach: THREE.Vector3;
+  helpers: 'medic' | 'porter' | 'orderly' | null;
+  /** Waypoints (from the vehicle side) through a gate when unloading outside the wall. */
+  via: THREE.Vector3[];
+  /** Identifies the storage area, so pallets keep stacking up there. */
+  key: string;
+  /** Where the helpers wait for the aircraft or vehicle: the edge of the landing area, toward the facility. */
+  meet: THREE.Vector3;
+  /** Unit direction from the drop point toward the facility. */
+  meetDir: THREE.Vector3;
+}
+
+/** Where a pickup comes from: people walk out of here to the pickup point. */
+export interface Source {
+  door: THREE.Vector3;
+  approach: THREE.Vector3;
+  area: THREE.Vector3 | null;
+  /** Waypoints from the facility side out through a gate. */
+  via: THREE.Vector3[];
+}
+
+/** A member of the destination site's staff helping with one load. */
+class Helper {
+  state: 'out' | 'wait' | 'salute' | 'join' | 'with' | 'leaving' | 'gone' = 'out';
+  path: THREE.Vector3[] = [];
+  timer = 0;
+  constructor(
+    readonly p: Person,
+    readonly role: 'medic' | 'porter' | 'orderly',
+    /** Which side and slot of the load. */
+    readonly slot: number,
+    /** Running index among the group's helpers (spreads their waiting spots). */
+    readonly k: number,
+    public delay: number,
+  ) {}
+}
 
 /** One person: an instance for the renderer plus its own place and pose. */
 class Person {
@@ -215,7 +264,8 @@ function buildJack() {
 type State =
   | 'waiting' | 'pickup' | 'toRamp' | 'returning' | 'inCabin' | 'settle' | 'buckle' | 'seated'
   | 'lift' | 'secure' | 'toSeats' | 'lower' | 'pullOut' | 'stow' | 'strapping'
-  | 'standUp' | 'unstrap' | 'getJack' | 'insert' | 'toLitter' | 'unrack' | 'exitCabin' | 'toRally' | 'arrived';
+  | 'standUp' | 'unstrap' | 'getJack' | 'insert' | 'toLitter' | 'unrack' | 'exitCabin' | 'toRally' | 'arrived'
+  | 'muster' | 'enter' | 'drop' | 'leave' | 'inside';
 
 export class Actor {
   state: State = 'waiting';
@@ -245,6 +295,13 @@ export class Actor {
   strapP = [0, 0, 0, 0];
   stanchions: THREE.Group | null = null;
   palletH = 1;
+  /** Base staff helping with this load at the destination. */
+  helpers: Helper[] = [];
+  /** Heading to hold once in the waiting formation. */
+  waitHeading = 0;
+  /** Reserved storage slot at the destination. */
+  depotKey = '';
+  depotIdx = -1;
   /** Kept for the old API (the group's mesh). */
   mesh = new THREE.Group();
   constructor(readonly kind: ActorKind) {}
@@ -258,6 +315,10 @@ export class CargoGroup {
   unloadedCount = 0;
   frame: THREE.Object3D | null = null;
   layout: CabinLayout | null = null;
+  dest: Destination | null = null;
+  /** Delivered: remove once everyone is indoors (or after a while). */
+  retiring = false;
+  retireT = 0;
   constructor(
     readonly kind: ActorKind,
     readonly total: number,
@@ -300,6 +361,8 @@ export class CargoManager {
   private pilots: Person[] = [];
   private chiefSeated = 1;
   private time = 0;
+  /** Delivered pallets stacked in each storage area (they stay there). */
+  private depots = new Map<string, { items: (THREE.Object3D | null)[]; next: number }>();
 
   constructor(
     private terrain: Terrain,
@@ -321,7 +384,7 @@ export class CargoManager {
   }
 
   /** Create a group waiting in formation at a spot, facing toward `face`. */
-  spawnWaiting(kind: ActorKind, count: number, unitMass: number, at: THREE.Vector3, face: THREE.Vector3): CargoGroup {
+  spawnWaiting(kind: ActorKind, count: number, unitMass: number, at: THREE.Vector3, face: THREE.Vector3, from?: Source): CargoGroup {
     const g = new CargoGroup(kind, count, unitMass);
     const dir = Math.atan2(face.x - at.x, face.z - at.z) + Math.PI;
     const cols = kind === 'soldier' ? 4 : 2;
@@ -356,10 +419,55 @@ export class CargoManager {
         this.group.add(p.group, a.jack);
       }
       for (const pr of [a.prop, a.jack]) if (pr) pr.matrixAutoUpdate = false;
+      a.waitHeading = dir;
+      // Walk out of the facility to the pickup point.
+      if (from) {
+        const start = (kind === 'pallet' && from.area ? from.area : from.door).clone();
+        start.x += this.rng.range(-0.8, 0.8);
+        start.z += this.rng.range(-0.8, 0.8);
+        start.y = this.terrain.heightAt(start.x, start.z);
+        a.pos.copy(start);
+        a.path = [from.approach.clone(), ...from.via.map((v) => v.clone()), a.home.clone()];
+        a.state = 'muster';
+        if (kind === 'pallet') a.heading = Math.atan2(start.x - from.approach.x, start.z - from.approach.z);
+      }
       g.actors.push(a);
     }
     this.groups.push(g);
     return g;
+  }
+
+  /**
+   * Send a delivered group to its facility. Base staff come out to meet each
+   * load: two medics per litter, two porters per pallet, an orderly for officers.
+   */
+  setDestination(g: CargoGroup, d: Destination) {
+    g.dest = d;
+    const rnd = () => this.rng.next();
+    let k = 0;
+    g.actors.forEach((a, i) => {
+      const add = (role: Helper['role'], slot: number) => {
+        const outfit = role === 'medic' ? 'medstaff' : 'staff';
+        const p = new Person(outfit, role === 'orderly' ? 'sling' : 'none', rnd);
+        p.pos.copy(d.door);
+        p.pos.x += this.rng.range(-0.5, 0.5);
+        p.pos.z += this.rng.range(-0.5, 0.5);
+        p.inst.visible = false;
+        const h = new Helper(p, role, slot, k, k * 0.5 + this.rng.range(0, 0.5));
+        h.path = [d.approach.clone(), ...[...d.via].reverse().map((v) => v.clone()), this.meetPoint(d, k)];
+        k++;
+        a.helpers.push(h);
+      };
+      if (d.helpers === 'medic' && a.kind === 'casualty') (add('medic', 0), add('medic', 1));
+      else if (d.helpers === 'porter' && a.kind === 'pallet') (add('porter', 0), add('porter', 1));
+      else if (d.helpers === 'orderly' && a.kind === 'soldier' && i === 0) add('orderly', 0);
+    });
+  }
+
+  /** The mission is over: keep animating until everyone has gone indoors, then clean up. */
+  retire(g: CargoGroup) {
+    g.retiring = true;
+    g.retireT = 0;
   }
 
   /** Create a group already aboard (not used by current missions; kept for the API). */
@@ -491,6 +599,218 @@ export class CargoManager {
     return out;
   }
 
+  /** From the foot of the ramp to the rally point, or to the load's facility. */
+  private exitPath(g: CargoGroup, a: Actor, ctx: LoadContext, frame: THREE.Object3D, L: CabinLayout): THREE.Vector3[] {
+    const stage = this.stagePoint(ctx, frame);
+    const d = g.dest;
+    if (!d) return [stage, ...this.around(stage, a.rally, frame, L)];
+    const goal = a.kind === 'pallet' && d.area ? this.depotSlot(d, a) : d.approach.clone();
+    if (a.kind === 'soldier') {
+      // Don't all converge on one spot.
+      goal.x += this.rng.range(-1.5, 1.5);
+      goal.z += this.rng.range(-1.5, 1.5);
+    }
+    const first = d.via[0] ?? goal;
+    const pts = [stage, ...this.around(stage, first, frame, L)];
+    if (d.via.length) pts.push(...d.via.slice(1).map((v) => v.clone()), goal);
+    return pts;
+  }
+
+  /** Reserve the next storage slot (3 × 2, oldest pallet recycled) and return its position. */
+  private depotSlot(d: Destination, a: Actor): THREE.Vector3 {
+    let dep = this.depots.get(d.key);
+    if (!dep) this.depots.set(d.key, (dep = { items: [], next: 0 }));
+    const i = dep.next++ % 6;
+    const old = dep.items[i];
+    if (old) old.parent?.remove(old);
+    dep.items[i] = null;
+    a.depotKey = d.key;
+    a.depotIdx = i;
+    const col = (i % 3) - 1;
+    const row = Math.floor(i / 3);
+    // Across the front (local X) and back from it (local −Z).
+    const rx = Math.cos(d.yaw);
+    const rz = -Math.sin(d.yaw);
+    const bx = -Math.sin(d.yaw);
+    const bz = -Math.cos(d.yaw);
+    const p = d.area!.clone();
+    p.x += rx * col * 1.9 + bx * (row * 1.9 - 0.9);
+    p.z += rz * col * 1.9 + bz * (row * 1.9 - 0.9);
+    p.y = this.terrain.heightAt(p.x, p.z);
+    return p;
+  }
+
+  /** Leave the pallet in its storage slot for good. */
+  private handToDepot(a: Actor) {
+    const dep = this.depots.get(a.depotKey);
+    if (!dep || !a.prop || a.depotIdx < 0) return;
+    rootMatrix(a.prop.matrix, _v.copy(a.pos), a.heading);
+    dep.items[a.depotIdx] = a.prop;
+    a.prop = null;
+  }
+
+  /** Into the building: everyone in this load disappears inside. */
+  private goInside(a: Actor) {
+    for (const p of a.people) p.inst.visible = false;
+    for (const pr of [a.prop, a.jack]) if (pr) pr.visible = false;
+    for (const h of a.helpers) {
+      h.p.inst.visible = false;
+      h.state = 'gone';
+    }
+    a.state = 'inside';
+  }
+
+  /** What happens on reaching the end of the exit path. */
+  private arrive(g: CargoGroup, a: Actor) {
+    a.timer = 0;
+    const d = g.dest;
+    if (!d) {
+      a.state = 'arrived';
+      return;
+    }
+    if (a.kind === 'pallet' && d.area) {
+      a.state = 'drop';
+      return;
+    }
+    const door = d.door.clone();
+    if (a.kind === 'soldier') {
+      door.x += this.rng.range(-0.4, 0.4);
+      door.z += this.rng.range(-0.4, 0.4);
+    }
+    a.path = [d.approach.clone(), door];
+    a.state = 'enter';
+  }
+
+  /** Mustering out of a facility to the pickup point. */
+  private muster(a: Actor, dt: number) {
+    const speed = a.kind === 'soldier' ? 2.6 : 1.6;
+    if (a.kind === 'soldier') {
+      const p = a.people[0];
+      p.phase += dt * speed * 2.6;
+      gait(p.target, p.phase, speed);
+      p.inst.rifle = 'sling';
+    } else if (a.kind === 'casualty') this.litterFormation(a, dt, speed, true);
+    else this.palletFormation(a, dt, speed, true, true);
+    if (this.follow(a, dt, speed)) {
+      a.state = 'waiting';
+      a.heading = a.waitHeading;
+      a.pos.copy(a.home);
+    }
+  }
+
+  /** Base staff: come out, wait clear of the rotors, join the load and see it inside. */
+  private updateHelpers(g: CargoGroup, a: Actor, dt: number, ctx: LoadContext, out: SoldierInstance[]) {
+    if (!a.helpers.length) return;
+    const frame = this.frameOf(g, ctx);
+    const d = g.dest!;
+    const moving = a.state === 'toRally' || a.state === 'enter' || a.state === 'leave';
+    const lead = a.people[0];
+    for (const h of a.helpers) {
+      const p = h.p;
+      switch (h.state) {
+        case 'out': {
+          h.delay -= dt;
+          if (h.delay > 0) break;
+          p.inst.visible = true;
+          const t = h.path[0];
+          if (!t || this.walkPerson(p, t, dt, 2.6, 'world')) {
+            h.path.shift();
+            if (!h.path.length) h.state = 'wait';
+          }
+          if (h.role !== 'medic') rifleArms(p.target);
+          break;
+        }
+        case 'wait': {
+          p.heading = turnTo(p.heading, Math.atan2(ctx.heliPos.x - p.pos.x, ctx.heliPos.z - p.pos.z) + Math.PI, dt * 3);
+          if (ctx.rotorsTurning && p.pos.distanceTo(ctx.heliPos) < 45) crouch(p.target);
+          else Object.assign(p.target, standJoints());
+          if (a.space === 'world' && (a.state === 'toRally' || a.state === 'enter' || a.state === 'drop')) {
+            if (h.role === 'orderly') {
+              h.state = 'salute';
+              h.timer = 0;
+            } else h.state = 'join';
+          }
+          break;
+        }
+        case 'salute': {
+          // The orderly greets the officers as they come off.
+          h.timer += dt;
+          p.heading = turnTo(p.heading, Math.atan2(a.pos.x - p.pos.x, a.pos.z - p.pos.z) + Math.PI, dt * 5);
+          salute(p.target);
+          if (h.timer > 1.8) h.state = 'join';
+          break;
+        }
+        case 'join': {
+          const s = this.helperSlot(a, h);
+          if (this.walkPerson(p, s, dt, 3.2, 'world') || p.pos.distanceTo(s) < 0.25) h.state = 'with';
+          if (h.role === 'orderly') rifleArms(p.target);
+          break;
+        }
+        case 'with': {
+          p.pos.copy(this.helperSlot(a, h));
+          p.heading = a.heading;
+          const speed = a.kind === 'casualty' ? (a.state === 'enter' ? 1.2 : 1.6) : a.kind === 'pallet' ? 1.6 : 3.4;
+          const ph = lead.phase + (h.slot ? Math.PI : 0) + 0.7;
+          if (h.role === 'medic') litterCarry(p.target, ph, moving ? speed : 0, true);
+          else if (h.role === 'porter') {
+            if (a.state === 'drop') crouch(p.target);
+            else push(p.target, ph, moving ? speed : 0);
+          } else {
+            p.phase += dt * speed * 2.6 * (moving ? 1 : 0);
+            rifleArms(gait(p.target, p.phase, moving ? speed : 0));
+          }
+          if (a.state === 'leave' && h.role === 'porter' && h.path.length === 0) {
+            // Pallet's down: back to the barracks.
+            h.path = [d.exitApproach.clone(), d.exitDoor.clone()];
+            h.state = 'leaving';
+          }
+          break;
+        }
+        case 'leaving': {
+          const t = h.path[0];
+          if (!t || this.walkPerson(p, t, dt, 1.7, 'world')) {
+            h.path.shift();
+            if (!h.path.length) {
+              p.inst.visible = false;
+              h.state = 'gone';
+            }
+          }
+          break;
+        }
+        case 'gone':
+          break;
+      }
+      if (p.inst.visible) {
+        blendJoints(p.joints, p.target, dt);
+        rootMatrix(p.inst.matrix, p.pos, p.heading);
+        out.push(p.inst);
+      }
+    }
+  }
+
+  /** Where a helper waits: a line abreast at the edge of the landing area, facing in. */
+  private meetPoint(d: Destination, k: number) {
+    const across = new THREE.Vector3(-d.meetDir.z, 0, d.meetDir.x);
+    const col = (k % 6) - 2.5;
+    const row = Math.floor(k / 6);
+    const p = d.meet.clone().addScaledVector(across, col * 1.4).addScaledVector(d.meetDir, row * 1.6);
+    p.y = this.terrain.heightAt(p.x, p.z);
+    return p;
+  }
+
+  /** A helper's place beside the load. */
+  private helperSlot(a: Actor, h: Helper) {
+    const f = fwd(a.heading, new THREE.Vector3());
+    const side = new THREE.Vector3(Math.cos(a.heading), 0, -Math.sin(a.heading));
+    const s = h.slot ? 1 : -1;
+    const p = a.pos.clone();
+    if (h.role === 'medic') p.addScaledVector(side, s * 0.62);
+    else if (h.role === 'porter') p.addScaledVector(f, -1.15).addScaledVector(side, s * 0.45);
+    else p.addScaledVector(f, 2.2).addScaledVector(side, 0.9);
+    p.y = this.terrain.heightAt(p.x, p.z);
+    return p;
+  }
+
   /** Walk around the carrier to a point behind the ramp, then up to the ramp end. */
   private toRampPath(from: THREE.Vector3, ctx: LoadContext): THREE.Vector3[] {
     const stage = this.stagePoint(ctx, ctx.frame);
@@ -616,6 +936,13 @@ export class CargoManager {
         else if (a.kind === 'casualty') this.updateLitter(g, a, dt, ctx);
         else this.updatePallet(g, a, dt, ctx);
         this.place(g, a, ctx, dt, instances);
+        if (g.dest) this.updateHelpers(g, a, dt, ctx, instances);
+      }
+      if (g.retiring) {
+        g.retireT += dt;
+        const done = g.actors.every((a) => a.state === 'inside' || (a.state === 'arrived' && a.timer > 12));
+        const helpersDone = g.actors.every((a) => a.helpers.every((h) => h.state === 'gone' || h.state === 'wait'));
+        if ((done && helpersDone) || g.retireT > 300) this.remove(g);
       }
     }
     if (ctx.crew) this.updateCrew(dt, ctx.crew, instances);
@@ -778,8 +1105,7 @@ export class CargoManager {
         if (this.follow(a, dt, 2.4)) {
           this.toWorld(a, frame);
           this.offloaded(g, a);
-          const stage = this.stagePoint(ctx, frame);
-          a.path = [stage, ...this.around(stage, a.rally, frame, L)];
+          a.path = this.exitPath(g, a, ctx, frame, L);
           a.state = 'toRally';
         }
         break;
@@ -787,12 +1113,21 @@ export class CargoManager {
       case 'toRally': {
         p.phase += dt * 3.4 * 2.6;
         rifleArms(gait(p.target, p.phase, 3.4));
-        if (this.follow(a, dt, 3.4)) {
-          a.state = 'arrived';
-          a.timer = 0;
-        }
+        if (this.follow(a, dt, 3.4)) this.arrive(g, a);
         break;
       }
+      case 'enter': {
+        p.phase += dt * 1.6 * 2.6;
+        gait(p.target, p.phase, 1.6);
+        p.inst.rifle = 'sling';
+        if (this.follow(a, dt, 1.6)) this.goInside(a);
+        break;
+      }
+      case 'muster':
+        this.muster(a, dt);
+        break;
+      case 'inside':
+        break;
       case 'arrived': {
         a.timer += dt;
         crouch(p.target);
@@ -1012,20 +1347,26 @@ export class CargoManager {
         if (this.follow(a, dt, 1.2)) {
           this.toWorld(a, frame);
           this.offloaded(g, a);
-          const stage = this.stagePoint(ctx, frame);
-          a.path = [stage, ...this.around(stage, a.rally, frame, L)];
+          a.path = this.exitPath(g, a, ctx, frame, L);
           a.state = 'toRally';
         }
         break;
       }
       case 'toRally': {
         this.litterFormation(a, dt, 1.6, true);
-        if (this.follow(a, dt, 1.6)) {
-          a.state = 'arrived';
-          a.timer = 0;
-        }
+        if (this.follow(a, dt, 1.6)) this.arrive(g, a);
         break;
       }
+      case 'enter': {
+        this.litterFormation(a, dt, 1.2, true);
+        if (this.follow(a, dt, 1.2)) this.goInside(a);
+        break;
+      }
+      case 'muster':
+        this.muster(a, dt);
+        break;
+      case 'inside':
+        break;
       case 'arrived': {
         a.timer += dt;
         this.litterFormation(a, dt, 0, false);
@@ -1295,20 +1636,40 @@ export class CargoManager {
         if (this.follow(a, dt, 1.0)) {
           this.toWorld(a, frame);
           this.offloaded(g, a);
-          const stage = this.stagePoint(ctx, frame);
-          a.path = [stage, ...this.around(stage, a.rally, frame, L)];
+          a.path = this.exitPath(g, a, ctx, frame, L);
           a.state = 'toRally';
         }
         break;
       }
       case 'toRally': {
-        this.palletFormation(a, dt, 1.3, true, true);
-        if (this.follow(a, dt, 1.3)) {
-          a.state = 'arrived';
-          a.timer = 0;
+        this.palletFormation(a, dt, 1.6, true, true);
+        if (this.follow(a, dt, 1.6)) this.arrive(g, a);
+        break;
+      }
+      case 'drop': {
+        // Set it down in its slot, then pull the jack out.
+        a.timer += dt;
+        this.palletFormation(a, dt, 0, false, true);
+        a.propPos.y = a.pos.y + 0.1 * Math.max(0, 1 - a.timer);
+        loader.target.armR = 0.2;
+        if (a.timer > 1.6) {
+          this.handToDepot(a);
+          const d = g.dest!;
+          a.path = [d.exitApproach.clone(), d.exitDoor.clone()];
+          a.state = 'leave';
         }
         break;
       }
+      case 'leave': {
+        this.palletFormation(a, dt, 1.5, true, true);
+        if (this.follow(a, dt, 1.5)) this.goInside(a);
+        break;
+      }
+      case 'muster':
+        this.muster(a, dt);
+        break;
+      case 'inside':
+        break;
       case 'arrived': {
         a.timer += dt;
         this.palletFormation(a, dt, 0, false, true);

@@ -39,7 +39,18 @@ You need a browser with WebGL. A gamepad is optional.
    cargo's condition sets your pay.
 4. **Deliver.** Land by the yellow smoke (red means a hot LZ), lower the ramp
    and let everyone off, or set the sling load down gently inside the smoke
-   and release it.
+   and release it. Every base, FOB and outpost has dedicated areas, and each
+   load goes to its own: casualties to the field hospital (a permanent
+   building at the main base, a medical tent at FOBs, an aid tent at
+   outposts), ammunition to the sandbagged ammo point, other supplies to the
+   supply yard, officers to the HQ and troops to the barracks. As you come
+   in, the receiving area sends people out to wait at the edge of the
+   landing zone: medics join each litter team, porters help push each
+   pallet, and an orderly salutes the officers and leads them in. Pallets
+   are stacked in their storage area and stay there. On road jobs they walk
+   in through the gate. Pickups work the other way round: if there's time
+   before you arrive, troops, litter teams and pallet crews walk out of
+   their facility to the pickup point.
 5. **Get paid.** The payout breaks down bonuses (early delivery, golden hour,
    smooth ride, butter landing, precise set-down, hazard pay) and penalties.
    Spend the money on fuel, repairs, flares and hangar upgrades: engines,

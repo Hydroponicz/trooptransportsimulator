@@ -112,6 +112,7 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
         hangar: kind === 'base',
         flares: kind !== 'lz',
       },
+      facilities: [],
     };
     sites.push(site);
     terrain.flattens.push({ x: site.x, z: site.z, radius, blend: BLEND[kind], height: h });

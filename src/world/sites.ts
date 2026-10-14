@@ -6,6 +6,21 @@ import { padTexture } from '../util/textures';
 
 export type SiteKind = 'base' | 'fob' | 'cop' | 'lz';
 
+export type FacilityKind = 'medical' | 'ammo' | 'supply' | 'hq' | 'barracks';
+
+/** A place on a site where a kind of cargo goes (or comes from). */
+export interface Facility {
+  kind: FacilityKind;
+  /** Doorway people walk into (and come out of). */
+  door: THREE.Vector3;
+  /** A few metres out in front of the door. */
+  approach: THREE.Vector3;
+  /** Where pallets are set down (supply yards and ammo points). */
+  area: THREE.Vector3 | null;
+  /** World yaw the front faces (local +Z direction is (sin, cos)). */
+  yaw: number;
+}
+
 export interface Site {
   id: number;
   name: string;
@@ -23,6 +38,8 @@ export interface Site {
   /** Distance to the front (positive = enemy side). */
   frontDist: number;
   services: { fuel: boolean; repair: boolean; hangar: boolean; flares: boolean };
+  /** Medical, ammo, supply, HQ and barracks areas (none at landing zones). */
+  facilities: Facility[];
 }
 
 export const SITE_KIND_LABEL: Record<SiteKind, string> = {
@@ -72,6 +89,27 @@ class Layout {
   vec(lx: number, lz: number, dy = 0): THREE.Vector3 {
     const [x, z] = this.w(lx, lz);
     return new THREE.Vector3(x, this.terrain.heightAt(x, z) + dy, z);
+  }
+  /**
+   * Register a facility. `door` and `area` are offsets in the facility's own
+   * frame (rotated by `rot`, front = +Z) from its local origin (lx, lz).
+   */
+  facility(kind: FacilityKind, lx: number, lz: number, rot: number, door: [number, number], area?: [number, number], sign?: number) {
+    const off = (dx: number, dz: number): [number, number] => [lx + dx * Math.cos(rot) + dz * Math.sin(rot), lz - dx * Math.sin(rot) + dz * Math.cos(rot)];
+    const d = off(door[0], door[1]);
+    const ap = off(door[0], door[1] + 3.8);
+    const ar = area ? off(area[0], area[1]) : null;
+    this.site.facilities.push({
+      kind,
+      door: this.vec(d[0], d[1]),
+      approach: this.vec(ap[0], ap[1]),
+      area: ar ? this.vec(ar[0], ar[1]) : null,
+      yaw: this.site.rot + rot,
+    });
+    if (sign !== undefined) {
+      const sp = off(door[0] - 2.6, door[1] + 1.2);
+      this.put('signboard', sp[0], sp[1], rot, 1, sign);
+    }
   }
   /** A straight wall of a repeated segment prototype between two local points. */
   wall(name: ProtoName, x0: number, z0: number, x1: number, z1: number, seg: number, gapAt?: number, gap = 0) {
@@ -140,6 +178,9 @@ function flag(at: THREE.Vector3): THREE.Object3D {
   return root;
 }
 
+/** Sign colours for the facility areas. */
+const SIGN = { ammo: 0xc0442c, supply: 0x6e8f45, hq: 0x2f4f8f, barracks: 0x8a7a52 };
+
 export function buildSite(site: Site, props: Props, terrain: Terrain, rng: RNG, decor: SiteDecor) {
   const L = new Layout(site, props, terrain);
   const addPad = (lx: number, lz: number, label: string, waitDir = -1) => {
@@ -172,7 +213,15 @@ export function buildSite(site: Site, props: Props, terrain: Terrain, rng: RNG, 
     for (let i = 0; i < 4; i++) L.put('hmmwv', 80 + i * 4, 118, 0);
     for (let i = 0; i < 10; i++)
       L.put('container', 110 + (i % 2) * 7, -60 + Math.floor(i / 2) * 6, Math.PI / 2, 1, rng.pick(CONTAINER_COLORS));
-    for (let i = 0; i < 6; i++) L.put('crates', -130 + rng.range(-10, 10), -40 + rng.range(-12, 12), rng.range(0, 3));
+    for (let i = 0; i < 3; i++) L.put('crates', -136 + rng.range(-4, 4), -56 + rng.range(-3, 3), rng.range(0, 3));
+    // Dedicated areas for each kind of delivery.
+    L.put('hospital', 55, -100, 0);
+    L.facility('medical', 55, -100, 0, [0, 6.2]);
+    L.put('ammo_dump', -130, -40, Math.PI / 2);
+    L.facility('ammo', -130, -40, Math.PI / 2, [0, 4.6], [0, -0.6], SIGN.ammo);
+    L.facility('supply', 99, -48, -Math.PI / 2, [0, 0], [0, 0], SIGN.supply);
+    L.facility('hq', 40, 74, 0, [-3, 4.6], undefined, SIGN.hq);
+    L.facility('barracks', -33, -78, 0, [0, 4.1], undefined, SIGN.barracks);
     L.ring('hesco', 165, 4.4);
     for (const a of [0.6, 2.4, 3.9, 5.5]) L.put('tower', Math.cos(a) * 157, Math.sin(a) * 157);
     decor.windsocks.push(windsock(L.vec(118, -18)));
@@ -184,6 +233,13 @@ export function buildSite(site: Site, props: Props, terrain: Terrain, rng: RNG, 
     for (let i = 0; i < 3; i++) L.put('tent', -30 + i * 14, -80, 0);
     L.put('building', 50, 60);
     L.put('net', -50, 60);
+    L.put('medtent', -70, 25, Math.PI / 2);
+    L.facility('medical', -70, 25, Math.PI / 2, [0, 5.1]);
+    L.put('ammo_dump', -72, -72, 0);
+    L.facility('ammo', -72, -72, 0, [0, 4.6], [0, -0.6], SIGN.ammo);
+    L.facility('supply', -62, 46, Math.PI / 2, [0, 0], [0, 0], SIGN.supply);
+    L.facility('hq', 50, 60, 0, [-3, 4.6], undefined, SIGN.hq);
+    L.facility('barracks', -26, -64, 0, [0, 4.1], undefined, SIGN.barracks);
     L.put('truck', -32, 62, 0.4);
     L.put('hmmwv', -46, 50, -0.2);
     L.put('bladder', 62, -60, 0.4);
@@ -209,8 +265,14 @@ export function buildSite(site: Site, props: Props, terrain: Terrain, rng: RNG, 
     L.put('tower', -44, -28);
     for (let i = 0; i < 5; i++) L.put('twall', 6 + i * 1.5, 46, 0);
     for (let i = 0; i < 4; i++) L.put('sandbag', 34 + i * 2, -34, 0.6);
-    L.put('crates', -30, 30, 0.3);
     L.put('antenna', 0, 48);
+    L.put('medtent', -28, 12, Math.PI / 2, 0.8);
+    L.facility('medical', -28, 12, Math.PI / 2, [0, 4.1]);
+    L.put('ammo_dump', -30, 30, Math.PI / 2, 0.7);
+    L.facility('ammo', -30, 30, Math.PI / 2, [0, 3.3], [0, -0.4], SIGN.ammo);
+    L.facility('supply', -15, 36, Math.PI, [0, 0], [0, 0], SIGN.supply);
+    L.facility('hq', 22, 40, Math.PI, [0, 5], undefined, SIGN.hq);
+    L.facility('barracks', 9, 46, Math.PI, [0, 4], undefined, SIGN.barracks);
     decor.windsocks.push(windsock(L.vec(28, 10)));
   } else {
     // Landing zone: an empty field. Just a couple of markers.
