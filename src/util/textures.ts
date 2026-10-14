@@ -139,3 +139,171 @@ export function smokeSpriteTexture(): THREE.Texture {
   g.putImageData(img, 0, 0);
   return new THREE.CanvasTexture(c);
 }
+
+/**
+ * Road surface, u across the carriageway (0..1), v along it (one tile = 12 m).
+ * main: dark asphalt with edge lines and a dashed centre line.
+ * secondary: worn, patched asphalt with a faded centre line.
+ * track: compacted gravel with wheel ruts.
+ */
+export function roadTexture(kind: 'main' | 'secondary' | 'track'): THREE.Texture {
+  const W = 256;
+  const H = 512;
+  const [c, g] = canvas(W, H);
+  const base = kind === 'main' ? [64, 66, 68] : kind === 'secondary' ? [92, 90, 85] : [139, 123, 94];
+  const img = g.createImageData(W, H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      const grain = (Math.random() - 0.5) * (kind === 'track' ? 34 : 18);
+      img.data[i] = base[0] + grain;
+      img.data[i + 1] = base[1] + grain;
+      img.data[i + 2] = base[2] + grain * 0.9;
+      img.data[i + 3] = 255;
+    }
+  g.putImageData(img, 0, 0);
+  // Draw a shape twice, wrapped vertically, so the texture tiles along the road.
+  const wrap = (fn: (dy: number) => void) => {
+    fn(0);
+    fn(-H);
+    fn(H);
+  };
+  const blotch = (n: number, color: string, w0: number, w1: number, h0: number, h1: number) => {
+    for (let k = 0; k < n; k++) {
+      const x = Math.random() * W;
+      const y = Math.random() * H;
+      const w = w0 + Math.random() * (w1 - w0);
+      const h = h0 + Math.random() * (h1 - h0);
+      g.fillStyle = color;
+      wrap((dy) => {
+        g.beginPath();
+        g.ellipse(x, y + dy, w / 2, h / 2, 0, 0, Math.PI * 2);
+        g.fill();
+      });
+    }
+  };
+  // Wheel tracks: darker, polished bands in each lane.
+  const band = (u: number, w: number, color: string) => {
+    g.fillStyle = color;
+    g.fillRect(u * W - (w * W) / 2, 0, w * W, H);
+  };
+  if (kind === 'track') {
+    blotch(60, 'rgba(110,96,70,0.35)', 10, 40, 20, 90);
+    blotch(40, 'rgba(170,155,120,0.25)', 8, 30, 20, 60);
+    for (const u of [0.22, 0.38, 0.62, 0.78]) band(u, 0.07, 'rgba(92,78,55,0.45)');
+    band(0.5, 0.08, 'rgba(96,110,60,0.18)');
+    // Pebbles.
+    for (let k = 0; k < 900; k++) {
+      const v = 120 + Math.random() * 90;
+      g.fillStyle = `rgba(${v},${v * 0.95},${v * 0.85},0.8)`;
+      const x = Math.random() * W;
+      const y = Math.random() * H;
+      g.fillRect(x, y, 1 + Math.random() * 2, 1 + Math.random() * 2);
+    }
+  } else {
+    const worn = kind === 'secondary';
+    blotch(worn ? 50 : 25, 'rgba(40,40,40,0.18)', 10, 50, 20, 120);
+    blotch(worn ? 30 : 12, 'rgba(150,150,145,0.12)', 10, 40, 20, 90);
+    for (const u of [0.15, 0.35, 0.65, 0.85]) band(u, 0.08, 'rgba(30,30,32,0.18)');
+    if (worn) {
+      // Patch repairs.
+      for (let k = 0; k < 3; k++) {
+        g.fillStyle = `rgba(${70 + Math.random() * 10},${70 + Math.random() * 10},70,0.55)`;
+        const x = Math.random() * W * 0.8;
+        const y = Math.random() * H;
+        const w = 20 + Math.random() * 40;
+        const h = 30 + Math.random() * 60;
+        wrap((dy) => g.fillRect(x, y + dy, w, h));
+      }
+      // Crumbling edges.
+      for (let k = 0; k < 500; k++) {
+        const side = Math.random() < 0.5;
+        const x = side ? Math.random() * 10 : W - Math.random() * 10;
+        g.fillStyle = 'rgba(138,129,114,0.9)';
+        g.fillRect(x, Math.random() * H, 2 + Math.random() * 3, 2 + Math.random() * 4);
+      }
+    }
+    // Cracks.
+    g.strokeStyle = 'rgba(25,25,25,0.55)';
+    g.lineWidth = 1;
+    for (let k = 0; k < (worn ? 22 : 8); k++) {
+      let x = Math.random() * W;
+      let y = Math.random() * H;
+      g.beginPath();
+      g.moveTo(x, y);
+      for (let s = 0; s < 8; s++) {
+        x += (Math.random() - 0.5) * 18;
+        y += (Math.random() - 0.3) * 14;
+        g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+    // Markings.
+    const paint = (u: number, w: number, color: string, from: number, to: number, alpha: number) => {
+      for (let y = Math.floor(from * H); y < to * H; y++) {
+        if (Math.random() > alpha) continue;
+        g.fillStyle = color;
+        g.fillRect(u * W - (w * W) / 2, y, w * W, 1);
+      }
+    };
+    if (!worn) {
+      paint(0.03, 0.016, 'rgba(235,235,225,0.95)', 0, 1, 0.93);
+      paint(0.97, 0.016, 'rgba(235,235,225,0.95)', 0, 1, 0.93);
+      paint(0.5, 0.016, 'rgba(240,240,232,0.95)', 0, 0.3, 0.95);
+    } else {
+      paint(0.5, 0.016, 'rgba(225,215,170,0.6)', 0, 0.25, 0.6);
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = THREE.ClampToEdgeWrapping;
+  t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 8;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** Light gravel speckle, multiplied over shoulder vertex colors. */
+export function gravelTexture(): THREE.Texture {
+  const S = 128;
+  const [c, g] = canvas(S, S);
+  const img = g.createImageData(S, S);
+  for (let i = 0; i < S * S; i++) {
+    const v = 200 + Math.random() * 55 - (Math.random() < 0.08 ? 70 : 0);
+    img.data[i * 4] = v;
+    img.data[i * 4 + 1] = v;
+    img.data[i * 4 + 2] = v * 0.96;
+    img.data[i * 4 + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 8;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** Chain-link mesh with a transparent background (tile = 1 m × 1 m). */
+export function chainlinkTexture(): THREE.Texture {
+  const S = 64;
+  const [c, g] = canvas(S, S);
+  g.clearRect(0, 0, S, S);
+  g.strokeStyle = 'rgba(150,152,148,1)';
+  g.lineWidth = 1.6;
+  const n = 8;
+  for (let k = -n; k <= 2 * n; k++) {
+    const o = (k * S) / n;
+    g.beginPath();
+    g.moveTo(o, 0);
+    g.lineTo(o + S, S);
+    g.stroke();
+    g.beginPath();
+    g.moveTo(o + S, 0);
+    g.lineTo(o, S);
+    g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 8;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}

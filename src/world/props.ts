@@ -108,7 +108,15 @@ export type ProtoName =
   | 'pylon'
   | 'rock'
   | 'haybale'
-  | 'bridge_pier';
+  | 'bridge_pier'
+  | 'lattice'
+  | 'woodpole'
+  | 'streetlight'
+  | 'delineator'
+  | 'jersey'
+  | 'railpost'
+  | 'fencepost'
+  | 'signpost';
 
 /** Gable roof prism: ridge along Z. */
 function gable(w: number, h: number, d: number): THREE.BufferGeometry {
@@ -319,6 +327,83 @@ export function buildProto(name: ProtoName): THREE.BufferGeometry {
       return merge([part(new THREE.DodecahedronGeometry(1, 0), 0x8a8478, 0, 0.3, 0, 0, 0, 0, 1.3, 0.8, 1)]);
     case 'haybale':
       return merge([part(cyl(0.75, 0.75, 1.3, 12), 0xc9b265, 0, 0.75, 0, 0, 0, Math.PI / 2)]);
+    case 'lattice': {
+      // Steel lattice transmission tower, crossarms along local X.
+      const st = 0x7c7f80;
+      const p: THREE.BufferGeometry[] = [];
+      const H = 23.5;
+      for (const sx of [-1, 1])
+        for (const sz of [-1, 1]) {
+          // Legs taper from 2.4 m apart at the base to 0.7 m at the top.
+          const lean = Math.atan2(0.85, H);
+          p.push(part(box(0.22, H + 0.3, 0.22), st, sx * 0.78, H / 2, sz * 0.78, -sz * lean, 0, sx * lean));
+        }
+      // Cross bracing on each face.
+      for (let y = 1.5; y < 21; y += 3.2) {
+        const w = 2.4 - (y / H) * 1.7;
+        for (const [fx, fz, ry] of [[0, 1, 0], [0, -1, 0], [1, 0, Math.PI / 2], [-1, 0, Math.PI / 2]] as const) {
+          const d = (w / 2) * 1.0;
+          p.push(part(box(w * 1.35, 0.1, 0.1), st, fx * d, y + 1.3, fz * d, 0, ry, 0.95));
+          p.push(part(box(w * 1.35, 0.1, 0.1), st, fx * d, y + 1.3, fz * d, 0, ry, -0.95));
+          p.push(part(box(w, 0.12, 0.12), st, fx * d, y, fz * d, 0, ry, 0));
+        }
+      }
+      // Crossarms (upper wider), each a pair of beams tapering to the tip.
+      for (const [y, span] of [[19, 4.8], [15, 3.8]] as const) {
+        p.push(part(box(span * 2, 0.25, 0.25), st, 0, y, 0.35), part(box(span * 2, 0.25, 0.25), st, 0, y, -0.35));
+        for (const sx of [-1, 1]) {
+          p.push(part(box(span, 0.12, 0.12), st, (sx * span) / 2, y - 0.9, 0, 0, 0, sx * 0.35));
+          // Insulator string.
+          for (let k = 0; k < 5; k++) p.push(part(cyl(0.16, 0.16, 0.12, 8), 0x3a3c3e, sx * (span - 0.4), y - 0.3 - k * 0.22, 0));
+        }
+      }
+      // Earth-wire peak.
+      p.push(part(box(0.18, 2.4, 0.18), st, 0, H + 0.8, 0));
+      return merge(p);
+    }
+    case 'woodpole': {
+      const p: THREE.BufferGeometry[] = [part(cyl(0.13, 0.17, 10.5, 8), 0x5b4632, 0, 5.25, 0)];
+      p.push(part(box(2.6, 0.14, 0.14), 0x4e3c2a, 0, 9.3, 0));
+      for (const x of [-1.1, 1.1]) p.push(part(cyl(0.07, 0.09, 0.32, 6), 0xd8d2c0, x, 9.55, 0));
+      p.push(part(cyl(0.07, 0.09, 0.32, 6), 0xd8d2c0, 0, 10.65, 0));
+      // Braces.
+      for (const sx of [-1, 1]) p.push(part(box(0.06, 1.0, 0.06), 0x3f3122, sx * 0.4, 8.95, 0, 0, 0, sx * 0.7));
+      return merge(p);
+    }
+    case 'streetlight': {
+      // Pole at the origin, arm reaching along +X over the road.
+      const g = 0x9a9d9e;
+      return merge([
+        part(box(0.5, 0.4, 0.5), 0x8a877f, 0, 0.2, 0),
+        part(cyl(0.08, 0.12, 8, 8), g, 0, 4.2, 0),
+        part(box(2.6, 0.1, 0.1), g, 1.25, 8.1, 0, 0, 0, 0.08),
+        part(box(0.9, 0.18, 0.4), 0x55585a, 2.6, 8.05, 0),
+        part(box(0.7, 0.04, 0.3), 0xfff2c4, 2.6, 7.95, 0),
+      ]);
+    }
+    case 'delineator':
+      return merge([
+        part(box(0.12, 1.1, 0.12), 0xe4e2da, 0, 0.55, 0),
+        part(box(0.13, 0.18, 0.13), 0x1d1d1d, 0, 0.85, 0),
+        part(box(0.06, 0.12, 0.135), 0xff8a1c, 0, 0.98, 0),
+      ]);
+    case 'jersey': {
+      // Concrete barrier, long axis X.
+      const c = 0xb3afa4;
+      return merge([part(box(3, 0.25, 0.8), c, 0, 0.125, 0), part(box(3, 0.35, 0.5), c, 0, 0.42, 0), part(box(3, 0.25, 0.25), c, 0, 0.72, 0)]);
+    }
+    case 'railpost':
+      return merge([part(box(0.12, 0.9, 0.18), 0x8d9091, 0, 0.45, 0)]);
+    case 'fencepost':
+      // Galvanised post with the barbed-wire outrigger leaning out along −Z.
+      return merge([part(cyl(0.04, 0.04, 2.3, 6), 0x9fa3a3, 0, 1.15, 0), part(box(0.04, 0.5, 0.04), 0x9fa3a3, 0, 2.45, -0.15, -0.6, 0, 0)]);
+    case 'signpost':
+      // Two posts and a grey backing board along local X (sign face is +Z).
+      return merge([
+        part(box(0.16, 4.2, 0.16), 0x8d9091, -1.9, 2.1, -0.1),
+        part(box(0.16, 4.2, 0.16), 0x8d9091, 1.9, 2.1, -0.1),
+        part(box(5.3, 1.6, 0.08), 0x6c6e6e, 0, 3.4, -0.06),
+      ]);
     case 'bridge_pier':
       return merge([part(box(1.6, 1, 6.5), 0x8d8b84, 0, 0.5, 0)]);
     case 'wreck':
@@ -364,6 +449,14 @@ const COLLIDE: Record<ProtoName, boolean> = {
   rock: false,
   haybale: false,
   bridge_pier: true,
+  lattice: true,
+  woodpole: true,
+  streetlight: false,
+  delineator: false,
+  jersey: true,
+  railpost: false,
+  fencepost: false,
+  signpost: false,
 };
 
 interface Batch {

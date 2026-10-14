@@ -76,9 +76,10 @@ export class MapRenderer {
     }
     g.putImageData(data, 0, 0);
     // Roads.
-    g.strokeStyle = 'rgba(200, 175, 120, 0.7)';
-    g.lineWidth = 1.2;
-    for (const p of world.roads.paths) {
+    world.roads.paths.forEach((p, pi) => {
+      const cls = world.roads.classes[pi];
+      g.strokeStyle = cls === 'main' ? 'rgba(235, 225, 200, 0.9)' : cls === 'secondary' ? 'rgba(215, 195, 150, 0.8)' : 'rgba(190, 160, 110, 0.65)';
+      g.lineWidth = cls === 'main' ? 2.2 : cls === 'secondary' ? 1.6 : 1.1;
       g.beginPath();
       p.forEach((v, k) => {
         const a = (v.x + HALF) / px;
@@ -87,7 +88,7 @@ export class MapRenderer {
         else g.moveTo(a, c);
       });
       g.stroke();
-    }
+    });
     // Front line.
     g.strokeStyle = 'rgba(255, 70, 50, 0.95)';
     g.lineWidth = 2;

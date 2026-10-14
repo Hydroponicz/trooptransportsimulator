@@ -60,8 +60,11 @@ export class Traffic {
       const f = v.s - i;
       const a = v.path[i];
       const b = v.path[Math.min(i + 1, v.path.length - 1)];
-      const x = a.x + (b.x - a.x) * f;
-      const z = a.y + (b.y - a.y) * f;
+      // Keep to the right-hand lane for the direction of travel.
+      const sl = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const lane = this.world.roads.hw(v.pathIndex) * 0.5 * -v.dir;
+      const x = a.x + (b.x - a.x) * f - ((b.y - a.y) / sl) * lane;
+      const z = a.y + (b.y - a.y) * f + ((b.x - a.x) / sl) * lane;
       const y = this.world.roads.heightOn(v.pathIndex, v.s) + 0.15;
       void t;
       v.mesh.position.set(x, y, z);

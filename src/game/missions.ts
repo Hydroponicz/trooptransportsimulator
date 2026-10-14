@@ -338,7 +338,7 @@ export class MissionSystem {
   /** A smoke spot 6 m further from the road than a roadside point. */
   private besideRoad(p: THREE.Vector3): THREE.Vector3 {
     const out = this.tmp.copy(p);
-    for (let k = 0; k < 6 && this.roads.distance(out.x, out.z) < 13; k++) {
+    for (let k = 0; k < 8 && this.roads.distance(out.x, out.z) < 17; k++) {
       const e = 0.5;
       const gx = this.roads.distance(out.x + e, out.z) - this.roads.distance(out.x - e, out.z);
       const gz = this.roads.distance(out.x, out.z + e) - this.roads.distance(out.x, out.z - e);

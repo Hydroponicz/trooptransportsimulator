@@ -145,11 +145,27 @@ front so battles happen on sensible terrain. Places include:
   - Intact villages sit behind each line, with streets, apartment blocks, a
     church, and farmland, barns and silos around them.
 
-Roads link everything (with power lines along the main supply routes), and
-supply convoys drive them. Roads are graded like real ones: they cut through
-hills and run on embankments. Where they cross a river or a deep valley they
-go onto bridges and viaducts that run from bank to bank, and steep ramps
-climb to hilltop bases.
+Roads link everything, and supply convoys drive them in their own lanes.
+There are three kinds:
+
+- **Main supply routes** (MSRs) run from the main base to each FOB. They are
+  two-lane asphalt with lane markings, steel lattice power lines, and
+  streetlights near the bases.
+- **Alternate supply routes** run from FOBs to outposts. They are worn,
+  patched asphalt with wooden power poles.
+- **Gravel tracks** lead to the towns.
+
+All roads have gravel shoulders and reflector posts. Chain-link fences with
+barbed wire line the approaches to bases, and green route signs give the
+destination and distance as you leave each site. Guard rails, which are
+solid to vehicles, run along embankments and the outside of sharp curves.
+Near the front there are checkpoints of jersey barriers and HESCO walls,
+with burned-out vehicles pushed off the road.
+
+Roads are graded like real ones: they cut through hills and run on
+embankments. Where they cross a river or a deep valley they go onto bridges
+and viaducts that run from bank to bank, and steep ramps climb to hilltop
+bases.
 
 ### The war
 
@@ -190,7 +206,7 @@ src/
   game/threats.ts    enemy fire, missiles, flares, mortars, ambient battle
   battle/            campaign sectors, materialized battles, trenches, AI aircraft
   game/career.ts     ranks, upgrades, save data
-  world/             terrain, front line, sites, towns, props, roads/bridges, forests, sky
+  world/             terrain, front line, sites, towns, props, roads/bridges, roadside, forests, sky
   fx/                particles (dust, smoke, fire), tracers, explosions
   audio.ts           synthesized rotor, turbine, wind and effects audio
   ui/                HUD, minimap and theater map, terminal and dialogs

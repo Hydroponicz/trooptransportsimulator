@@ -3,8 +3,26 @@ import type { RNG } from '../util/noise';
 import { CELL, HALF, SEGS, WATER_LEVEL, type Terrain } from './terrain';
 import type { ColliderSet } from './colliders';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { gravelTexture, roadTexture } from '../util/textures';
 
 const GRID = 50;
+
+/** Main supply routes are paved two-lane roads, the rest narrower and rougher. */
+export type RoadClass = 'main' | 'secondary' | 'track';
+export const ROAD_SPEC: Record<RoadClass, { hw: number; shoulder: number }> = {
+  main: { hw: 5, shoulder: 1.6 },
+  secondary: { hw: 4.2, shoulder: 1.2 },
+  track: { hw: 3.6, shoulder: 0.9 },
+};
+
+export interface RailSeg {
+  x0: number;
+  z0: number;
+  x1: number;
+  z1: number;
+  y0: number;
+  y1: number;
+}
 const _near = new Map<number, { d: number; y: number }>();
 
 interface Seg {
@@ -19,12 +37,24 @@ interface Seg {
 /** Dirt roads connecting sites. Also answers "how far is this point from a road". */
 export class Roads {
   readonly paths: THREE.Vector2[][] = [];
+  readonly classes: RoadClass[] = [];
   private grid = new Map<number, Seg[]>();
   group = new THREE.Group();
 
   constructor(private terrain: Terrain) {}
 
-  add(ax: number, az: number, bx: number, bz: number, rng: RNG) {
+  /** Half-width of the carriageway of a road. */
+  hw(path: number): number {
+    return ROAD_SPEC[this.classes[path]].hw;
+  }
+  /** Half-width including the gravel shoulders (what wheels can drive on). */
+  outer(path: number): number {
+    const sp = ROAD_SPEC[this.classes[path]];
+    return sp.hw + sp.shoulder;
+  }
+
+  add(ax: number, az: number, bx: number, bz: number, rng: RNG, cls: RoadClass = 'secondary') {
+    this.classes.push(cls);
     let pts = [new THREE.Vector2(ax, az), new THREE.Vector2(bx, bz)];
     for (let depth = 0; depth < 5; depth++) {
       const next: THREE.Vector2[] = [pts[0]];
@@ -72,6 +102,22 @@ export class Roads {
     return best;
   }
 
+  /** Distance to the nearest road other than `skip` (for gaps at junctions). */
+  distanceExcept(x: number, z: number, skip: number): number {
+    const arr = this.grid.get(Math.floor(x / GRID) + 1000 + (Math.floor(z / GRID) + 1000) * 3000);
+    if (!arr) return Infinity;
+    let best = Infinity;
+    for (const s of arr) {
+      if (s.path === skip) continue;
+      const dx = s.bx - s.ax;
+      const dz = s.bz - s.az;
+      const l2 = dx * dx + dz * dz || 1;
+      const t = Math.max(0, Math.min(1, ((x - s.ax) * dx + (z - s.az) * dz) / l2));
+      best = Math.min(best, Math.hypot(x - (s.ax + dx * t), z - (s.az + dz * t)) - this.outer(s.path));
+    }
+    return best;
+  }
+
   /** Road surface height per path sample (bridge decks over water). */
   readonly heights: number[][] = [];
 
@@ -86,7 +132,20 @@ export class Roads {
   /** Sample ranges [a, b] of each path that are carried by a bridge. */
   private spans: { a: number; b: number }[][] = [];
   /** Bridge deck segments for vehicles to drive on. */
-  readonly decks: { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number }[] = [];
+  readonly decks: { x0: number; z0: number; x1: number; z1: number; y0: number; y1: number; w: number }[] = [];
+  /** Roadside guard rails (solid to vehicles), bucketed by grid cell. */
+  private railGrid = new Map<number, RailSeg[]>();
+
+  addRail(r: RailSeg) {
+    const m = 1;
+    for (let cx = Math.floor((Math.min(r.x0, r.x1) - m) / GRID); cx <= Math.floor((Math.max(r.x0, r.x1) + m) / GRID); cx++)
+      for (let cz = Math.floor((Math.min(r.z0, r.z1) - m) / GRID); cz <= Math.floor((Math.max(r.z0, r.z1) + m) / GRID); cz++) {
+        const k = cx + 1000 + (cz + 1000) * 3000;
+        let arr = this.railGrid.get(k);
+        if (!arr) this.railGrid.set(k, (arr = []));
+        arr.push(r);
+      }
+  }
 
   /**
    * Engineer the roads: a smooth, grade-limited profile per road (bridges
@@ -297,7 +356,7 @@ export class Roads {
       const l2 = dx * dx + dz * dz || 1;
       const t = Math.max(0, Math.min(1, ((x - s.ax) * dx + (z - s.az) * dz) / l2));
       const d = Math.hypot(x - (s.ax + dx * t), z - (s.az + dz * t));
-      if (d > 3.6) continue;
+      if (d > this.outer(s.path)) continue;
       const cur = near.get(s.path);
       if (cur && cur.d <= d) continue;
       const h = this.heights[s.path];
@@ -310,7 +369,7 @@ export class Roads {
 
   /** Is p against a bridge guard rail (just off the deck edge, at deck height)? */
   bridgeRail(p: THREE.Vector3): boolean {
-    // Where another road joins the bridge, its lane is open.
+    // Where another road joins, its lane is open.
     if (this.surfaceAt(p.x, p.z, p.y + 1.6) > p.y - 2.2) return false;
     for (const d of this.decks) {
       const dx = d.x1 - d.x0;
@@ -320,10 +379,23 @@ export class Roads {
       if (u < 0 || u > 1) continue;
       const off = Math.hypot(p.x - (d.x0 + dx * u), p.z - (d.z0 + dz * u));
       const y = d.y0 + (d.y1 - d.y0) * u;
-      if (off > 3.7 && off < 5 && p.y > y - 0.6 && p.y < y + 1.6) return true;
+      if (off > d.w + 0.1 && off < d.w + 1.4 && p.y > y - 0.6 && p.y < y + 1.6) return true;
     }
+    // Guard rails along embankments and curves.
+    const arr = this.railGrid.get(Math.floor(p.x / GRID) + 1000 + (Math.floor(p.z / GRID) + 1000) * 3000);
+    if (arr)
+      for (const r of arr) {
+        const dx = r.x1 - r.x0;
+        const dz = r.z1 - r.z0;
+        const l2 = dx * dx + dz * dz || 1;
+        const u = Math.max(0, Math.min(1, ((p.x - r.x0) * dx + (p.z - r.z0) * dz) / l2));
+        if (Math.hypot(p.x - (r.x0 + dx * u), p.z - (r.z0 + dz * u)) > 0.4) continue;
+        const y = r.y0 + (r.y1 - r.y0) * u;
+        if (p.y > y - 0.4 && p.y < y + 1.1) return true;
+      }
     return false;
   }
+
 
   /** Deck height if (x, z) is on a bridge, else −Infinity. */
   bridgeHeightAt(x: number, z: number): number {
@@ -335,7 +407,7 @@ export class Roads {
       const u = ((x - d.x0) * dx + (z - d.z0) * dz) / l2;
       if (u < -0.05 || u > 1.05) continue;
       const uc = Math.max(0, Math.min(1, u));
-      if (Math.hypot(x - (d.x0 + dx * uc), z - (d.z0 + dz * uc)) > 4.1) continue;
+      if (Math.hypot(x - (d.x0 + dx * uc), z - (d.z0 + dz * uc)) > d.w + 0.5) continue;
       best = Math.max(best, d.y0 + (d.y1 - d.y0) * uc);
     }
     return best;
@@ -419,10 +491,12 @@ export class Roads {
     const road = new THREE.Vector3(q.x, roadY, q.y);
     // Wait beside the road on whichever side is clear, a little toward the site.
     let wait: THREE.Vector3 | null = null;
-    for (const off of [7, -7, 10, -10, 13, -13]) {
+    const ob = this.outer(pi);
+    for (const base of [ob + 2.5, -(ob + 2.5), ob + 5.5, -(ob + 5.5), ob + 8.5, -(ob + 8.5)]) {
+      const off = base;
       const w = new THREE.Vector3(q.x - tz * off - tx * 3, 0, q.y + tx * off - tz * 3);
       w.y = this.terrain.heightAt(w.x, w.z);
-      let clear = this.distance(w.x, w.z) > 4.5;
+      let clear = this.distanceExcept(w.x, w.z, pi) > 1.5 && this.distance(w.x, w.z) > ob + 1.5;
       for (const [dx, dz] of [[0, 0], [3, 0], [-3, 0], [0, 3], [0, -3]])
         if (clear && this.colliders?.hit(new THREE.Vector3(w.x + dx, w.y + 1, w.z + dz), 1)) clear = false;
       if (clear) {
@@ -430,7 +504,7 @@ export class Roads {
         break;
       }
     }
-    if (!wait) wait = new THREE.Vector3(q.x - tz * 7, this.terrain.heightAt(q.x - tz * 7, q.y + tx * 7), q.y + tx * 7);
+    if (!wait) wait = new THREE.Vector3(q.x - tz * (ob + 2.5), this.terrain.heightAt(q.x - tz * (ob + 2.5), q.y + tx * (ob + 2.5)), q.y + tx * (ob + 2.5));
     const stop = { road, wait, heading: Math.atan2(tx, -tz) };
     this.stops.set(key, stop);
     return stop;
@@ -438,29 +512,38 @@ export class Roads {
 
   build(colliders?: ColliderSet): THREE.Group {
     this.colliders = colliders;
-    const mat = new THREE.MeshLambertMaterial({
-      vertexColors: true,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
-    });
     const concrete = new THREE.MeshLambertMaterial({ color: 0x8f8d86 });
-    const base = new THREE.Color(0x8c7854);
-    const asphalt = new THREE.Color(0x55534e);
+    const textures: Record<RoadClass, THREE.Texture> = { main: roadTexture('main'), secondary: roadTexture('secondary'), track: roadTexture('track') };
+    const rank: Record<RoadClass, number> = { main: 2, secondary: 1, track: 0 };
+    // Shoulders draw under every carriageway, so junctions stay clean.
+    const shoulderMat = new THREE.MeshLambertMaterial({ vertexColors: true, map: gravelTexture(), polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
+    const gravel = new THREE.Color(0x8a8172);
+    const verge = new THREE.Color(0x6f6650);
     this.paths.forEach((path, pi) => {
+      const cls = this.classes[pi];
+      const { hw, shoulder: sh } = ROAD_SPEC[cls];
       const n = path.length;
       const ground = path.map((p) => this.terrain.heightAt(p.x, p.y));
       const road = this.heights[pi];
       const onBridge = new Array<boolean>(n).fill(false);
       for (const sp of this.spans[pi]) {
         for (let k = sp.a; k <= sp.b; k++) onBridge[k] = true;
-        this.buildBridge(path, road, ground, sp.a, sp.b, concrete, colliders);
+        this.buildBridge(path, road, ground, sp.a, sp.b, hw + sh, concrete, colliders);
       }
+      const dist = [0];
+      for (let i = 1; i < n; i++) dist.push(dist[i - 1] + path[i].distanceTo(path[i - 1]));
 
-      const W = 6;
-      const pos = new Float32Array(n * 2 * 3);
-      const col = new Float32Array(n * 2 * 3);
+      // Carriageway: three columns across (left edge, centre, right edge).
+      const cols = [-hw, 0, hw];
+      const pos = new Float32Array(n * 3 * 3);
+      const uv = new Float32Array(n * 3 * 2);
       const idx: number[] = [];
+      // Shoulders: per side, columns at the carriageway edge, shoulder edge and verge.
+      const scol = [hw - 0.05, hw + sh, hw + sh + 1.6];
+      const spos = new Float32Array(n * 6 * 3);
+      const scl = new Float32Array(n * 6 * 3);
+      const suv = new Float32Array(n * 6 * 2);
+      const sidx: number[] = [];
       for (let i = 0; i < n; i++) {
         const p = path[i];
         const pa = path[Math.max(0, i - 1)];
@@ -470,49 +553,91 @@ export class Roads {
         const tl = Math.hypot(tx, tz) || 1;
         const nx = -tz / tl;
         const nz = tx / tl;
-        for (let s2 = 0; s2 < 2; s2++) {
-          const side = s2 === 0 ? 1 : -1;
-          const x = p.x + nx * side * W * 0.5;
-          const z = p.y + nz * side * W * 0.5;
-          const j = (i * 2 + s2) * 3;
-          pos[j] = x;
-          pos[j + 1] = onBridge[i] ? road[i] + 0.14 : Math.max(road[i], this.terrain.heightAt(x, z)) + 0.1;
-          pos[j + 2] = z;
-          const v = 0.9 + Math.random() * 0.15;
-          const c = onBridge[i] ? asphalt : base;
-          col[j] = c.r * v;
-          col[j + 1] = c.g * v;
-          col[j + 2] = c.b * v;
-        }
+        const yAt = (x: number, z: number) => (onBridge[i] ? road[i] + 0.14 : Math.max(road[i], this.terrain.heightAt(x, z)) + 0.08);
+        cols.forEach((o, c) => {
+          const x = p.x + nx * o;
+          const z = p.y + nz * o;
+          const j = i * 3 + c;
+          pos[j * 3] = x;
+          pos[j * 3 + 1] = yAt(x, z);
+          pos[j * 3 + 2] = z;
+          uv[j * 2] = c / 2;
+          uv[j * 2 + 1] = dist[i] / 12;
+        });
         if (i > 0) {
-          const a0 = (i - 1) * 2;
-          const b0 = i * 2;
-          idx.push(a0, b0, a0 + 1, a0 + 1, b0, b0 + 1);
+          for (let c = 0; c < 2; c++) {
+            const a0 = (i - 1) * 3 + c;
+            const b0 = i * 3 + c;
+            idx.push(a0, a0 + 1, b0, a0 + 1, b0 + 1, b0);
+          }
+        }
+        for (let sd = 0; sd < 2; sd++) {
+          const side = sd === 0 ? 1 : -1;
+          scol.forEach((o, c) => {
+            const x = p.x + nx * o * side;
+            const z = p.y + nz * o * side;
+            const j = i * 6 + sd * 3 + c;
+            const t = this.terrain.heightAt(x, z);
+            spos[j * 3] = x;
+            spos[j * 3 + 1] = c === 2 ? t + 0.04 : c === 0 ? yAt(x, z) - 0.01 : Math.max(road[i] - 0.06, t) + 0.07;
+            spos[j * 3 + 2] = z;
+            const col = c === 2 ? verge : gravel;
+            const v = 0.92 + Math.random() * 0.12;
+            scl[j * 3] = col.r * v;
+            scl[j * 3 + 1] = col.g * v;
+            scl[j * 3 + 2] = col.b * v;
+            suv[j * 2] = (o * side) / 4;
+            suv[j * 2 + 1] = dist[i] / 4;
+          });
+          if (i > 0 && !(onBridge[i] && onBridge[i - 1])) {
+            for (let c = 0; c < 2; c++) {
+              const a0 = (i - 1) * 6 + sd * 3 + c;
+              const b0 = i * 6 + sd * 3 + c;
+              if (side > 0) sidx.push(a0, a0 + 1, b0, a0 + 1, b0 + 1, b0);
+              else sidx.push(a0, b0, a0 + 1, a0 + 1, b0, b0 + 1);
+            }
+          }
         }
       }
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-      geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-      geo.setIndex(idx);
-      geo.computeVertexNormals();
-      // Make sure the strip faces up regardless of winding.
-      const nr = geo.getAttribute('normal');
-      if (nr.count && nr.getY(0) < 0) {
-        geo.setIndex(idx.map((_, k) => idx[k - (k % 3) + (2 - (k % 3))]));
-        geo.computeVertexNormals();
-      }
-      const mesh = new THREE.Mesh(geo, mat);
+      const mk = (P: Float32Array, U: Float32Array, I: number[], C?: Float32Array) => {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+        g.setAttribute('uv', new THREE.BufferAttribute(U, 2));
+        if (C) g.setAttribute('color', new THREE.BufferAttribute(C, 3));
+        g.setIndex(I);
+        g.computeVertexNormals();
+        // Make sure the strip faces up regardless of winding.
+        const nr = g.getAttribute('normal');
+        let up = 0;
+        for (let k = 0; k < nr.count; k += 7) up += nr.getY(k);
+        if (up < 0) {
+          g.setIndex(I.map((_, k) => I[k - (k % 3) + (2 - (k % 3))]));
+          g.computeVertexNormals();
+        }
+        return g;
+      };
+      const mat = new THREE.MeshLambertMaterial({
+        map: textures[cls],
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -(4 + rank[cls] * 40 + pi),
+      });
+      const mesh = new THREE.Mesh(mk(pos, uv, idx), mat);
       mesh.receiveShadow = true;
       this.group.add(mesh);
+      const smesh = new THREE.Mesh(mk(spos, suv, sidx, scl), shoulderMat);
+      smesh.receiveShadow = true;
+      this.group.add(smesh);
     });
     return this.group;
   }
 
-  /** Concrete deck, railings and piers between samples a..b. */
-  private buildBridge(path: THREE.Vector2[], road: number[], ground: number[], a: number, b: number, mat: THREE.Material, colliders?: ColliderSet) {
+  /** Concrete deck, parapets and piers between samples a..b. */
+  private buildBridge(path: THREE.Vector2[], road: number[], ground: number[], a: number, b: number, half: number, mat: THREE.Material, colliders?: ColliderSet) {
     const parts: THREE.BufferGeometry[] = [];
     const q = new THREE.Quaternion();
     const up = new THREE.Vector3(0, 1, 0);
+    const deckW = half * 2 + 0.8;
     for (let i = a; i < b; i++) {
       const p0 = path[i];
       const p1 = path[i + 1];
@@ -528,16 +653,24 @@ export class Roads {
         g.translate(cx + off.x, y + off.y, cz + off.z);
         parts.push(g);
       };
-      place(new THREE.BoxGeometry(len, 0.8, 8), 0, -0.35, 0);
-      place(new THREE.BoxGeometry(len, 0.9, 0.25), 0, 0.5, 3.9);
-      place(new THREE.BoxGeometry(len, 0.9, 0.25), 0, 0.5, -3.9);
+      place(new THREE.BoxGeometry(len, 0.8, deckW), 0, -0.35, 0);
+      // Parapets with a kerb inside them.
+      for (const sd of [1, -1]) {
+        place(new THREE.BoxGeometry(len, 0.95, 0.3), 0, 0.5, sd * (half + 0.25));
+        place(new THREE.BoxGeometry(len, 0.18, 0.6), 0, 0.12, sd * (half - 0.15));
+      }
+      // Girder under the deck edges.
+      for (const sd of [1, -1]) place(new THREE.BoxGeometry(len, 1.2, 0.5), 0, -1.3, sd * (half - 1.2));
       if ((i - a) % 3 === 1) {
         const bottom = Math.min(ground[i], 0) - 3;
         const h = y - 0.7 - bottom;
-        if (h > 0.5) place(new THREE.BoxGeometry(1.6, h, 6.5), 0, -0.7 - h / 2, 0);
+        if (h > 0.5) {
+          place(new THREE.BoxGeometry(1.8, h, half * 2 - 1.5), 0, -0.7 - h / 2, 0);
+          place(new THREE.BoxGeometry(2.4, 0.8, half * 2 + 0.2), 0, -1.3, 0);
+        }
       }
-      this.decks.push({ x0: p0.x, z0: p0.y, x1: p1.x, z1: p1.y, y0: road[i] + 0.05, y1: road[i + 1] + 0.05 });
-      colliders?.add({ soft: true, minX: cx - len / 2 - 4, maxX: cx + len / 2 + 4, minY: y - 1, maxY: y + 1, minZ: cz - len / 2 - 4, maxZ: cz + len / 2 + 4 });
+      this.decks.push({ x0: p0.x, z0: p0.y, x1: p1.x, z1: p1.y, y0: road[i] + 0.05, y1: road[i + 1] + 0.05, w: half });
+      colliders?.add({ soft: true, minX: cx - len / 2 - half, maxX: cx + len / 2 + half, minY: y - 1, maxY: y + 1, minZ: cz - len / 2 - half, maxZ: cz + len / 2 + half });
     }
     if (!parts.length) return;
     const g = mergeGeometries(parts.map((x) => x.toNonIndexed()), false)!;

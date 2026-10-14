@@ -4,6 +4,7 @@ import { ColliderSet } from './colliders';
 import { Frontline } from './frontline';
 import { Props } from './props';
 import { Roads } from './roads';
+import { buildRoadside } from './roadside';
 import { buildSite, type Site, type SiteKind, type SiteDecor } from './sites';
 import { PLAY_HALF, Terrain } from './terrain';
 import { Vegetation } from './vegetation';
@@ -229,10 +230,10 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
   const roads = new Roads(terrain);
   const fobs = sites.filter((s) => s.kind === 'fob');
   const cops = sites.filter((s) => s.kind === 'cop');
-  for (const f of fobs) roads.add(base.x, base.z, f.x, f.z, rng);
+  for (const f of fobs) roads.add(base.x, base.z, f.x, f.z, rng, 'main');
   for (const c of cops) {
     const f = fobs.reduce((a, b) => (Math.hypot(a.x - c.x, a.z - c.z) < Math.hypot(b.x - c.x, b.z - c.z) ? a : b));
-    roads.add(f.x, f.z, c.x, c.z, rng);
+    roads.add(f.x, f.z, c.x, c.z, rng, 'secondary');
   }
   // Every town gets a road: rear villages to the nearest friendly hub, contested
   // towns to the nearest outpost, enemy villages to the nearest enemy-side town.
@@ -251,65 +252,32 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
       const d = Math.hypot(from.x - t.x, from.z - t.z) || 1;
       const ex = t.x + ((from.x - t.x) / d) * t.r * 0.85;
       const ez = t.z + ((from.z - t.z) / d) * t.r * 0.85;
-      roads.add(from.x, from.z, ex, ez, rng);
+      roads.add(from.x, from.z, ex, ez, rng, 'track');
     }
   }
   roads.grade();
   // Clear a lane: walls get gates, and anything else sitting on a road is removed.
   // Large buildings are tested over their whole footprint, not just their center.
   props.removeAllWhere((x, z, box) => {
-    if (roads.distance(x, z) < 6) return true;
+    if (roads.distance(x, z) < 9) return true;
     if (!box) return false;
     const x0 = box.minX - 3, x1 = box.maxX + 3, z0 = box.minZ - 3, z1 = box.maxZ + 3;
     const nx = Math.max(1, Math.ceil((x1 - x0) / 3)), nz = Math.max(1, Math.ceil((z1 - z0) / 3));
     for (let i = 0; i <= nx; i++)
-      for (let j = 0; j <= nz; j++) if (roads.distance(x0 + ((x1 - x0) * i) / nx, z0 + ((z1 - z0) * j) / nz) < 3.5) return true;
+      for (let j = 0; j <= nz; j++) if (roads.distance(x0 + ((x1 - x0) * i) / nx, z0 + ((z1 - z0) * j) / nz) < 7.5) return true;
     return false;
   }, ['slab']);
   group.add(roads.build(colliders));
 
-  // Power lines along the main supply roads.
-  const wire: number[] = [];
-  for (let pi = 0; pi < Math.min(3, roads.paths.length); pi++) {
-    const path = roads.paths[pi];
-    let last: THREE.Vector3 | null = null;
-    for (let i = 4; i < path.length - 4; i += 10) {
-      const a = path[i];
-      const b = path[i + 1];
-      const tx = b.x - a.x;
-      const tz = b.y - a.y;
-      const tl = Math.hypot(tx, tz) || 1;
-      const x = a.x - (tz / tl) * 16;
-      const z = a.y + (tx / tl) * 16;
-      const y = terrain.heightAt(x, z);
-      if (y < 1 || nearSite(x, z, 10) || roads.distance(x, z) < 10) {
-        last = null;
-        continue;
-      }
-      props.add('pylon', x, y, z, Math.atan2(-tz, tx));
-      const top = new THREE.Vector3(x, y + 19, z);
-      if (last) for (const off of [-3.6, 0, 3.6]) {
-        const dir = new THREE.Vector3(-tz / tl, 0, tx / tl).multiplyScalar(off);
-        // Sagging wire in three segments.
-        const p0 = last.clone().add(dir);
-        const p3 = top.clone().add(dir);
-        const mid1 = p0.clone().lerp(p3, 0.33).add(new THREE.Vector3(0, -2.2, 0));
-        const mid2 = p0.clone().lerp(p3, 0.66).add(new THREE.Vector3(0, -2.2, 0));
-        wire.push(...p0.toArray(), ...mid1.toArray(), ...mid1.toArray(), ...mid2.toArray(), ...mid2.toArray(), ...p3.toArray());
-      }
-      last = top;
-    }
-  }
-  const wg = new THREE.BufferGeometry();
-  wg.setAttribute('position', new THREE.Float32BufferAttribute(wire, 3));
-  decor.group.add(new THREE.LineSegments(wg, new THREE.LineBasicMaterial({ color: 0x2a2a28 })));
+  // Power lines, guard rails, fences, lights, signs and checkpoints.
+  group.add(buildRoadside(roads, terrain, sites, towns, front, props, rng.fork()));
 
   // Rock outcrops and hay bales.
   for (let i = 0; i < 900; i++) {
     const x = rng.range(-PLAY_HALF, PLAY_HALF);
     const z = rng.range(-PLAY_HALF, PLAY_HALF);
     const y = terrain.heightAt(x, z);
-    if (y < 2 || nearSite(x, z, 20) || roads.distance(x, z) < 8) continue;
+    if (y < 2 || nearSite(x, z, 20) || roads.distance(x, z) < 13) continue;
     const slope = terrain.baseSlope(x, z);
     if (slope > 0.18 || rng.chance(0.15)) {
       const n = rng.int(1, 4);
@@ -323,7 +291,7 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
       const x = fm.x + Math.cos(a) * r;
       const z = fm.z + Math.sin(a) * r;
       const y = terrain.heightAt(x, z);
-      if (y < 2 || roads.distance(x, z) < 8 || roads.distance(x + 13, z) < 8 || nearSite(x, z, 10)) continue;
+      if (y < 2 || roads.distance(x, z) < 13 || roads.distance(x + 13, z) < 13 || nearSite(x, z, 10)) continue;
       const bales = rng.int(2, 6);
       for (let k = 0; k < bales; k++) props.add('haybale', x + k * 2.2, terrain.heightAt(x + k * 2.2, z), z, rng.range(-0.2, 0.2));
     }
@@ -333,7 +301,7 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
     terrain.farms.some((f) => Math.hypot(f.x - x, f.z - z) < f.r + 600) && n3.noise(x * 0.02, z * 0.02) > -0.55;
   const blocked = (x: number, z: number) =>
     nearSite(x, z, 28) ||
-    roads.distance(x, z) < 9 ||
+    roads.distance(x, z) < 14 ||
     inFarmland(x, z) ||
     enemies.some((e) => Math.abs(e.pos.x - x) < 14 && Math.abs(e.pos.z - z) < 14);
   const vegetation = new Vegetation(terrain, n3, rng.fork(), blocked);

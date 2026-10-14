@@ -356,6 +356,7 @@ export class Game {
     if (!modal) this.simulate(dt);
     const mouse = this.input.consumeMouse();
     this.cam.lookBack = this.input.key('KeyB');
+    this.humvee.setInteriorView(this.mode === 'drive' && this.cam.mode === 'cockpit');
     if (this.mode === 'drive') this.cam.updateGround(modal ? 0 : dt, this.humvee, this.world.terrain, mouse);
     else this.cam.update(modal ? 0 : dt, this.heli, this.world.terrain, mouse);
     this.env.follow(this.playerPos, this.cam.camera.position);

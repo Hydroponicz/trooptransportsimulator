@@ -49,7 +49,7 @@ export class CameraRig {
         this.lookYaw = clamp(this.lookYaw - mx * 0.004, -2.4, 2.4);
         this.lookPitch = clamp(this.lookPitch - my * 0.004, -0.9, 0.7);
       }
-      v.worldPoint(new THREE.Vector3(-0.5, 0.95, -0.25), cam.position);
+      v.worldPoint(new THREE.Vector3(-0.5, 0.97, 0.0), cam.position);
       cam.quaternion.copy(v.quat).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(this.lookPitch, this.lookBack ? Math.PI : this.lookYaw, 0, 'YXZ')));
       cam.near = 0.1;
       cam.fov = damp(cam.fov, 72, 4, dt);

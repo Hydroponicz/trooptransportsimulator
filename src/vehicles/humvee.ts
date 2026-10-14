@@ -52,11 +52,13 @@ function buildModel() {
   const olive = new THREE.MeshStandardMaterial({ color: 0x5f6343, roughness: 0.85 });
   const canvas = new THREE.MeshStandardMaterial({ color: 0x8a7d5a, roughness: 0.95 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x22241f, roughness: 0.8 });
-  const glass = new THREE.MeshStandardMaterial({ color: 0x1d2a33, roughness: 0.15, metalness: 0.4 });
+  const glass = new THREE.MeshStandardMaterial({ color: 0x2a3a44, roughness: 0.1, metalness: 0.4, transparent: true, opacity: 0.45, depthWrite: false });
   const tire = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.95 });
   const group = new THREE.Group();
   const body = new THREE.Group();
   group.add(body);
+  // Parts that would block the view from the driver's seat.
+  const exterior: THREE.Mesh[] = [];
   const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, parent: THREE.Object3D = body) => {
     const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z);
@@ -67,22 +69,46 @@ function buildModel() {
   };
   add(new THREE.BoxGeometry(2.25, 0.8, 4.7), olive, 0, 0, 0);
   add(new THREE.BoxGeometry(2.1, 0.3, 1.6), olive, 0, 0.5, -1.45);
-  add(new THREE.BoxGeometry(2.05, 0.85, 2.2), olive, 0, 0.82, 0.1);
-  add(new THREE.BoxGeometry(1.85, 0.5, 0.06), glass, 0, 0.9, -1.02);
+  exterior.push(add(new THREE.BoxGeometry(2.05, 0.85, 2.2), olive, 0, 0.82, 0.1));
+  exterior.push(add(new THREE.BoxGeometry(1.85, 0.5, 0.06), glass, 0, 0.9, -1.02));
   for (const sx of [-1, 1]) {
-    add(new THREE.BoxGeometry(0.06, 0.45, 0.8), glass, sx * 1.03, 0.92, -0.45);
-    add(new THREE.BoxGeometry(0.06, 0.45, 0.8), glass, sx * 1.03, 0.92, 0.55);
+    exterior.push(add(new THREE.BoxGeometry(0.06, 0.45, 0.8), glass, sx * 1.03, 0.92, -0.45));
+    exterior.push(add(new THREE.BoxGeometry(0.06, 0.45, 0.8), glass, sx * 1.03, 0.92, 0.55));
     // Wheel arches / fenders.
     add(new THREE.BoxGeometry(0.4, 0.2, 1.2), olive, sx * 1.1, 0.25, -1.62);
     add(new THREE.BoxGeometry(0.4, 0.2, 1.2), olive, sx * 1.1, 0.25, 1.55);
   }
   add(new THREE.BoxGeometry(2.05, 0.6, 1.25), canvas, 0, 0.72, 1.75);
-  add(new THREE.CylinderGeometry(0.55, 0.6, 0.28, 12), dark, 0, 1.38, 0.15);
-  add(new THREE.BoxGeometry(0.9, 0.5, 0.06), dark, 0, 1.6, -0.25);
-  add(new THREE.CylinderGeometry(0.05, 0.05, 1.1, 5).rotateX(Math.PI / 2), dark, 0, 1.6, -0.75);
+  exterior.push(add(new THREE.CylinderGeometry(0.55, 0.6, 0.28, 12), dark, 0, 1.38, 0.15));
+  exterior.push(add(new THREE.BoxGeometry(0.9, 0.5, 0.06), dark, 0, 1.6, -0.25));
+  exterior.push(add(new THREE.CylinderGeometry(0.05, 0.05, 1.1, 5).rotateX(Math.PI / 2), dark, 0, 1.6, -0.75));
   add(new THREE.CylinderGeometry(0.02, 0.03, 2.4, 4), dark, 0.9, 1.9, 1.9);
   add(new THREE.BoxGeometry(1.9, 0.35, 0.15), dark, 0, -0.05, -2.4);
   for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.25, 0.15, 0.05), new THREE.MeshBasicMaterial({ color: 0xfff6d0 }), sx * 0.75, 0.3, -2.38);
+  // Interior, shown from the driver's seat.
+  const interior = new THREE.Group();
+  interior.visible = false;
+  body.add(interior);
+  const trim = new THREE.MeshStandardMaterial({ color: 0x3b3d34, roughness: 0.9 });
+  const panel = new THREE.MeshStandardMaterial({ color: 0x2a2b27, roughness: 0.85 });
+  const inside = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y, z);
+    interior.add(m);
+    return m;
+  };
+  inside(new THREE.BoxGeometry(1.95, 0.24, 0.4), panel, 0, 0.6, -0.82); // dashboard
+  inside(new THREE.BoxGeometry(0.32, 0.07, 0.03), new THREE.MeshBasicMaterial({ color: 0x1e2419 }), -0.5, 0.69, -0.62); // gauges
+  inside(new THREE.TorusGeometry(0.18, 0.022, 6, 20), panel, -0.5, 0.62, -0.56).rotation.x = -0.9; // steering wheel
+  inside(new THREE.CylinderGeometry(0.03, 0.03, 0.3, 6).rotateX(Math.PI / 2 - 0.9), panel, -0.5, 0.56, -0.66);
+  for (const sx of [-1, 1]) {
+    inside(new THREE.BoxGeometry(0.08, 0.7, 0.08), trim, sx * 0.97, 0.98, -1.0).rotation.x = -0.12; // A-pillars
+    inside(new THREE.BoxGeometry(0.1, 0.7, 0.12), trim, sx * 0.97, 0.98, 0.12); // B-pillars
+    inside(new THREE.BoxGeometry(0.06, 0.4, 2.1), trim, sx * 1.0, 0.48, 0.1); // door panels
+  }
+  inside(new THREE.BoxGeometry(2.0, 0.06, 0.12), trim, 0, 1.33, -1.0); // windscreen header
+  inside(new THREE.BoxGeometry(2.0, 0.04, 2.2), trim, 0, 1.37, 0.1); // roof lining
+  inside(new THREE.BoxGeometry(0.25, 0.3, 1.2), panel, 0, 0.55, -0.1); // centre console
   // Rear door, hinged at the bottom.
   const door = new THREE.Group();
   door.position.set(0, -0.05, 2.36);
@@ -102,7 +128,7 @@ function buildModel() {
     add(hubGeo, olive, 0, 0, 0, spin);
     wheels.push({ pivot, spin });
   }
-  return { group, door, wheels };
+  return { group, door, wheels, exterior, interior };
 }
 
 /** A drivable HMMWV with raycast-style suspension and a simple tire model. */
@@ -149,6 +175,17 @@ export class Humvee {
     this.group = m.group;
     this.door = m.door;
     this.wheelMeshes = m.wheels;
+    this.exterior = m.exterior;
+    this.interior = m.interior;
+  }
+
+  private exterior: THREE.Mesh[];
+  private interior: THREE.Group;
+  /** Driver's-seat view: hide the cab shell, show the dashboard and frame. */
+  setInteriorView(on: boolean) {
+    if (this.interior.visible === on) return;
+    this.interior.visible = on;
+    for (const m of this.exterior) m.visible = !on;
   }
 
   get mass() {
