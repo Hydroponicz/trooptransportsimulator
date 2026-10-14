@@ -19,7 +19,7 @@ export class AudioEngine {
   private noiseBuf!: AudioBuffer;
   private rotors: { amp: GainNode; lfo: OscillatorNode; depth: GainNode; filter: BiquadFilterNode }[] = [];
   private body!: { amp: GainNode; lfo: OscillatorNode; depth: GainNode };
-  private whine!: { osc: OscillatorNode; osc2: OscillatorNode; gain: GainNode };
+  private whine!: { osc: OscillatorNode; rush: GainNode; rushFilter: BiquadFilterNode; gain: GainNode };
   private wind!: { gain: GainNode; filter: BiquadFilterNode };
   private hyd!: { gain: GainNode };
   private missileWarn: { osc: OscillatorNode; gain: GainNode } | null = null;
@@ -99,23 +99,28 @@ export class AudioEngine {
       src.connect(f).connect(amp).connect(this.tone);
       this.body = { amp, lfo, depth };
     }
-    // Turbine whine.
+    // Turbines: a low, filtered rumble plus a soft band of air rush.
+    // (No pure high tones — a steady sine up in the kHz range is fatiguing.)
     {
       const osc = ctx.createOscillator();
       osc.type = 'sawtooth';
-      const osc2 = ctx.createOscillator();
-      osc2.type = 'sine';
-      const f = ctx.createBiquadFilter();
-      f.type = 'lowpass';
-      f.frequency.value = 2200;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 500;
+      lp.Q.value = 0.3;
+      const rush = noise();
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 900;
+      bp.Q.value = 0.4;
+      const rushGain = ctx.createGain();
+      rushGain.gain.value = 0;
       const gain = ctx.createGain();
       gain.gain.value = 0;
-      osc.connect(f);
-      osc2.connect(f);
-      f.connect(gain).connect(this.tone);
+      osc.connect(lp).connect(gain).connect(this.tone);
+      rush.connect(bp).connect(rushGain).connect(this.tone);
       osc.start();
-      osc2.start();
-      this.whine = { osc, osc2, gain };
+      this.whine = { osc, rush: rushGain, rushFilter: bp, gain };
     }
     // Wind.
     {
@@ -167,9 +172,10 @@ export class AudioEngine {
     this.body.lfo.frequency.setTargetAtTime(Math.max(0.01, bladeHz), t, smooth);
     this.body.amp.gain.setTargetAtTime(0.25 * p.rpm * att, t, smooth);
     this.body.depth.gain.setTargetAtTime(0.9 * slap * att, t, smooth);
-    this.whine.osc.frequency.setTargetAtTime(40 + 110 * p.engine, t, 0.3);
-    this.whine.osc2.frequency.setTargetAtTime(600 + 2600 * p.engine, t, 0.3);
-    this.whine.gain.gain.setTargetAtTime((0.035 + 0.02 * load) * p.engine * att, t, 0.2);
+    this.whine.osc.frequency.setTargetAtTime(35 + 70 * p.engine, t, 0.3);
+    this.whine.gain.gain.setTargetAtTime((0.02 + 0.012 * load) * p.engine * att, t, 0.2);
+    this.whine.rushFilter.frequency.setTargetAtTime(400 + 700 * p.engine, t, 0.3);
+    this.whine.rush.gain.setTargetAtTime(0.035 * p.engine * att, t, 0.2);
     this.wind.gain.gain.setTargetAtTime(clamp(p.airspeed / 80, 0, 1) ** 2 * (p.inside ? 0.12 : 0.35), t, 0.2);
     this.wind.filter.frequency.setTargetAtTime(300 + p.airspeed * 25, t, 0.2);
     this.hyd.gain.gain.setTargetAtTime(p.rampMoving ? 0.06 : 0, t, 0.1);
@@ -227,8 +233,8 @@ export class AudioEngine {
   }
 
   hit() {
-    this.beep(1700 + Math.random() * 600, 0.12, 0.2, 'triangle');
-    this.burst({ dur: 0.1, gain: 0.35, type: 'highpass', f0: 2500 });
+    this.beep(900 + Math.random() * 300, 0.1, 0.1, 'triangle');
+    this.burst({ dur: 0.1, gain: 0.25, type: 'bandpass', f0: 1500, q: 0.7 });
   }
 
   clunk() {
@@ -243,12 +249,12 @@ export class AudioEngine {
   /** Squelch break + crackle when a radio call comes in. */
   radio() {
     this.burst({ dur: 0.12, gain: 0.18, type: 'bandpass', f0: 2200, q: 1.5 });
-    this.beep(1450, 0.06, 0.06, 'square', 0.02);
+    this.beep(1000, 0.06, 0.04, 'sine', 0.02);
     this.burst({ delay: 0.12, dur: 0.5, gain: 0.05, type: 'bandpass', f0: 1800, q: 2 });
   }
 
   click() {
-    this.beep(1200, 0.04, 0.12, 'square');
+    this.beep(700, 0.04, 0.06, 'sine');
   }
 
   beepOk() {
@@ -259,14 +265,14 @@ export class AudioEngine {
   cash() {
     this.beep(1318, 0.12, 0.2, 'triangle');
     this.beep(1760, 0.35, 0.22, 'triangle', 0.09);
-    this.burst({ delay: 0.02, dur: 0.15, gain: 0.25, type: 'highpass', f0: 4000 });
+    this.burst({ delay: 0.02, dur: 0.12, gain: 0.12, type: 'bandpass', f0: 2500, q: 0.7 });
   }
 
   warning() {
     if (this.warnT < 0.6) return;
     this.warnT = 0;
-    this.beep(620, 0.18, 0.12, 'square');
-    this.beep(480, 0.18, 0.12, 'square', 0.22);
+    this.beep(620, 0.18, 0.08, 'triangle');
+    this.beep(480, 0.18, 0.08, 'triangle', 0.22);
   }
 
   flare() {
@@ -278,15 +284,15 @@ export class AudioEngine {
     if (!ctx) return;
     if (on && !this.missileWarn) {
       const osc = ctx.createOscillator();
-      osc.type = 'square';
-      osc.frequency.value = 1050;
+      osc.type = 'triangle';
+      osc.frequency.value = 820;
       const gain = ctx.createGain();
       gain.gain.value = 0;
       const lfo = ctx.createOscillator();
       lfo.type = 'square';
       lfo.frequency.value = 7;
       const lg = ctx.createGain();
-      lg.gain.value = 0.06;
+      lg.gain.value = 0.035;
       lfo.connect(lg).connect(gain.gain);
       osc.connect(gain).connect(this.master);
       osc.start();
