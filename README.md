@@ -70,10 +70,11 @@ The flight model is a rigid body simulated at 120 Hz:
 
 | Key | Action |
 | --- | --- |
-| `W` / `S` | Collective up / down (hold `Shift` for fine control) |
-| Arrow keys (or `I J K L`) | Cyclic: pitch & roll |
-| `A` / `D` | Pedals: yaw |
-| `E` | Start / stop engines |
+| `W` / `S` | Pitch: nose down (forward) / nose up |
+| `A` / `D` | Roll left / right (arrow keys also work for pitch & roll) |
+| `Q` / `E` | Yaw left / right |
+| `Space` / `Shift` | Collective up / down (climb / descend) |
+| `I` | Start / stop engines |
 | `R` | Raise / lower ramp |
 | `H` | Hook / release sling load |
 | `F` | Flares |

@@ -14,7 +14,7 @@ export type Action =
   | 'lookBack';
 
 const KEYMAP: Record<string, Action> = {
-  KeyE: 'engine',
+  KeyI: 'engine',
   KeyR: 'ramp',
   KeyH: 'hook',
   KeyF: 'flares',
@@ -94,16 +94,16 @@ export class Input {
     let ty = 0;
     let dc = 0;
     if (this.enabled) {
-      if (k('ArrowUp') || k('Numpad8') || k('KeyI')) tp += 1;
-      if (k('ArrowDown') || k('Numpad2') || k('KeyK')) tp -= 1;
-      if (k('ArrowRight') || k('Numpad6') || k('KeyL')) tr += 1;
-      if (k('ArrowLeft') || k('Numpad4') || k('KeyJ')) tr -= 1;
-      if (k('KeyD')) ty += 1;
-      if (k('KeyA')) ty -= 1;
-      const fine = k('ShiftLeft') || k('ShiftRight');
-      const rate = fine ? 0.12 : 0.45;
-      if (k('KeyW') || k('PageUp')) dc += rate;
-      if (k('KeyS') || k('PageDown')) dc -= rate;
+      // W/S pitch, A/D roll (arrows as alternates), Q/E yaw, Space/Shift collective.
+      if (k('KeyW') || k('ArrowUp') || k('Numpad8')) tp += 1;
+      if (k('KeyS') || k('ArrowDown') || k('Numpad2')) tp -= 1;
+      if (k('KeyD') || k('ArrowRight') || k('Numpad6')) tr += 1;
+      if (k('KeyA') || k('ArrowLeft') || k('Numpad4')) tr -= 1;
+      if (k('KeyE')) ty += 1;
+      if (k('KeyQ')) ty -= 1;
+      const rate = 0.4;
+      if (k('Space') || k('PageUp')) dc += rate;
+      if (k('ShiftLeft') || k('ShiftRight') || k('PageDown')) dc -= rate;
     }
 
     // Keyboard: ramp deflection in/out for smooth control.

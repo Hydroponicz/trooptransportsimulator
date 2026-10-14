@@ -196,7 +196,7 @@ export class Game {
     this.hud.show(true);
     this.audio.init();
     this.last = performance.now();
-    this.toast(`Welcome to ${this.world.base.name}. Press [E] to start the engines.`, 'good');
+    this.toast(`Welcome to ${this.world.base.name}. Press [I] to start the engines.`, 'good');
     this.toast('Open the base terminal with [Tab] to pick up a contract.');
     const loop = () => {
       if (!this.running) return;
@@ -525,7 +525,7 @@ export class Game {
     const m = this.missions.active;
     let p = '';
     if (h.crashed) p = '';
-    else if (!fm.engineOn && fm.rpm < 0.05) p = 'Press <kbd>E</kbd> to start engines';
+    else if (!fm.engineOn && fm.rpm < 0.05) p = 'Press <kbd>I</kbd> to start engines';
     else if (fm.engineOn && fm.engineSpool < 0.99) p = `Engines spooling… NR ${(fm.rpm * 100).toFixed(0)}%`;
     else if (m && m.phase === 'pickup' && m.internal && m.group) {
       const near = Math.hypot(fm.pos.x - m.c.from.pads[m.c.fromPad].x, fm.pos.z - m.c.from.pads[m.c.fromPad].z) < 90;
@@ -549,10 +549,10 @@ export class Game {
       else if (l.onGround && this.sling.tension < l.mass * 3) p = 'Load on the ground — press <kbd>H</kbd> to release, or lift';
     }
     if (!p && fm.contacts >= 3 && fm.rpm > 0.97 && fm.input.collective < 0.3 && h.rampT < 0.03 && !m) {
-      p = this.currentSite && this.currentSite.kind !== 'lz' ? `Press <kbd>Tab</kbd> for the ${this.currentSite.name} terminal` : 'Raise collective <kbd>W</kbd> to lift off';
+      p = this.currentSite && this.currentSite.kind !== 'lz' ? `Press <kbd>Tab</kbd> for the ${this.currentSite.name} terminal` : 'Raise collective <kbd>Space</kbd> to lift off';
     }
     if (!p && fm.contacts >= 3 && fm.rpm > 0.97 && fm.input.collective < 0.3 && m && m.phase === 'transit') {
-      p = h.rampT > 0.03 ? 'Press <kbd>R</kbd> to raise the ramp' : 'Raise collective <kbd>W</kbd> to lift off';
+      p = h.rampT > 0.03 ? 'Press <kbd>R</kbd> to raise the ramp' : 'Raise collective <kbd>Space</kbd> to lift off';
     }
     if (!p && !fm.engineOn && fm.rpm > 0.05 && fm.contacts >= 3 && this.currentSite && this.currentSite.kind !== 'lz')
       p = `Press <kbd>Tab</kbd> for the ${this.currentSite.name} terminal`;
