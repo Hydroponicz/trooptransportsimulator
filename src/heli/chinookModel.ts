@@ -85,16 +85,16 @@ function shapedBox(w: number, h: number, d: number, fn: (v: THREE.Vector3) => vo
 }
 
 export function buildChinook(): ChinookParts {
-  const olive = new THREE.MeshStandardMaterial({ color: 0x626b45, roughness: 0.75, metalness: 0.12 });
-  const oliveDark = new THREE.MeshStandardMaterial({ color: 0x4a5032, roughness: 0.8, metalness: 0.12 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x24261f, roughness: 0.7, metalness: 0.3 });
+  const olive = new THREE.MeshStandardMaterial({ color: 0x666f47, roughness: 0.72, metalness: 0.02 });
+  const oliveDark = new THREE.MeshStandardMaterial({ color: 0x4d5434, roughness: 0.78, metalness: 0.02 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x2c2e26, roughness: 0.7, metalness: 0.1 });
   const rubber = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.95 });
   const glass = new THREE.MeshStandardMaterial({
     color: 0x223038,
     roughness: 0.08,
     metalness: 0.6,
     transparent: true,
-    opacity: 0.42,
+    opacity: 0.3,
     side: THREE.DoubleSide,
     depthWrite: false,
   });
@@ -153,10 +153,11 @@ export function buildChinook(): ChinookParts {
   // Window frames.
   // Window frames, laid along the slanted windshield.
   const frameMat = new THREE.MeshStandardMaterial({ color: 0x3a3d33, roughness: 0.8 });
-  const frameGeo = new THREE.BoxGeometry(0.045, 2.15, 0.045);
+  const frameGeo = new THREE.BoxGeometry(0.035, 2.15, 0.035);
   for (const x of [-1.5, 0, 1.5]) {
-    const f = add(frameGeo, frameMat, x * 0.9, 1.0, -8.12);
-    f.rotation.x = -0.5;
+    // The windshield leans back toward the crew: bottom at z≈-8.7, top at z≈-7.6.
+    const f = add(frameGeo, frameMat, x * 0.9, 1.0, -8.17);
+    f.rotation.x = 0.52;
   }
   add(new THREE.BoxGeometry(3.4, 0.12, 1.5), olive, 0, 1.98, -6.85);
 

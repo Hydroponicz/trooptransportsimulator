@@ -52,6 +52,19 @@ export class Hud {
     setTimeout(() => el.remove(), 5000);
   }
 
+  radio(from: string, msg: string) {
+    const box = document.getElementById('radio')!;
+    const el = document.createElement('div');
+    el.className = 'radio-msg';
+    el.innerHTML = `<b></b><span></span>`;
+    el.querySelector('b')!.textContent = from;
+    el.querySelector('span')!.textContent = msg;
+    box.append(el);
+    while (box.children.length > 3) box.firstChild!.remove();
+    setTimeout(() => el.classList.add('old'), 12000);
+    setTimeout(() => el.remove(), 16000);
+  }
+
   bigText(main: string, sub = '', secs = 2.2) {
     this.els.bigtext.innerHTML = `${main}${sub ? `<small>${sub}</small>` : ''}`;
     this.els.bigtext.classList.add('show');
@@ -104,7 +117,7 @@ export class Hud {
     e['h-hull'].className = game.heli.hp < 30 ? 'bad' : game.heli.hp < 60 ? 'warn' : '';
     e['h-flr'].textContent = String(game.heli.flares);
     const hk = game.sling.hooked;
-    e['h-load'].textContent = hk ? `${(game.sling.tension / 9.81 / 1000).toFixed(1)}t` : fm.payload > 0 ? `${(fm.payload / 1000).toFixed(1)}t in` : '—';
+    e['h-load'].textContent = hk ? `↓${(game.sling.tension / 9.81 / 1000).toFixed(1)}t` : fm.payload > 0 ? `${(fm.payload / 1000).toFixed(1)}t` : '—';
 
     // Mission panel.
     const m = game.missions.active;

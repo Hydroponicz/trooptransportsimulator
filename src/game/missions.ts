@@ -99,6 +99,8 @@ export class Mission {
   landing: LandingRating | null = null;
   setDownImpact = 0;
   hits = 0;
+  calledPickup = false;
+  calledDrop = false;
   constructor(readonly c: Contract) {}
   get timeLeft() {
     return this.c.timeLimit - this.elapsed;
@@ -121,8 +123,11 @@ export class Mission {
   }
 }
 
+export const CALLSIGN = 'Big Windy 2-1';
+
 export interface MissionHooks {
   toast(msg: string, kind?: 'info' | 'good' | 'bad'): void;
+  radio(from: string, msg: string): void;
   complete(p: Payout): void;
   failed(reason: string, m: Mission): void;
   payloadChanged(kg: number): void;
@@ -238,6 +243,11 @@ export class MissionSystem {
     if (siteRisk(c.from) >= 2) this.hooks.hotZone(c.from, true);
     if (siteRisk(c.to) >= 2) this.hooks.hotZone(c.to, true);
     this.hooks.toast(`Contract accepted: ${c.type.name} → ${c.to.name}`, 'good');
+    const what = c.type.kind === 'sling' ? `one ${c.type.name.toLowerCase()}, ${(c.mass / 1000).toFixed(1)} tonnes external` : `${c.count} ${noun(c.type, c.count)}, ${(c.mass / 1000).toFixed(1)} tonnes`;
+    this.hooks.radio(
+      `${c.from.name} Ops`,
+      `${CALLSIGN}, tasking: ${what} at ${c.from.name}${c.from.pads.length > 1 ? ` pad ${c.fromPad + 1}` : ''}, for ${c.to.name}.${c.type.urgent ? ' Priority urgent.' : ''}${siteRisk(c.to) >= 2 ? ' Be advised, destination is hot.' : ''}`,
+    );
   }
 
   abandon(silent = false) {
@@ -323,6 +333,20 @@ export class MissionSystem {
         m.load = load;
       }
     }
+    if (m.phase === 'pickup' && !m.calledPickup && dPickup < 1500 && dPickup > 150) {
+      m.calledPickup = true;
+      this.hooks.radio(`${c.from.name} Ground`, `${CALLSIGN}, we have you in sight. ${m.internal ? 'Passengers are staged' : 'Load is rigged'}, popping green smoke.`);
+    }
+    if (m.phase === 'transit' && !m.calledDrop && dDrop < 1500) {
+      m.calledDrop = true;
+      const hot = siteRisk(c.to) >= 2;
+      this.hooks.radio(
+        c.to.name,
+        hot
+          ? `${CALLSIGN}, LZ is HOT, taking fire from the east! Red smoke is out. Make it quick.`
+          : `${CALLSIGN}, ${c.to.name}. LZ is cold, yellow smoke is out. Cleared to land.`,
+      );
+    }
     if (m.phase === 'pickup' && !m.pickupSmoke && dPickup < 1800) {
       const sp = m.internal ? c.from.waits[c.fromPad] : c.from.pads[c.fromPad];
       m.pickupSmoke = this.effects.addEmitter(this.tmp.copy(sp).add(new THREE.Vector3(m.internal ? 6 : 14, 0.3, 0)), 'green');
@@ -403,6 +427,14 @@ export class MissionSystem {
     } else if (m.setDownImpact < 1.2) lines.push({ label: 'Precise set-down', amount: 300 });
     if (m.hits > 0) lines.push({ label: `Hazard pay (${m.hits} hits taken)`, amount: Math.min(2000, m.hits * 60) });
     const total = Math.max(0, lines.reduce((s, l) => s + l.amount, 0));
+    this.hooks.radio(
+      c.to.name,
+      cond >= 95
+        ? `Good drop, ${CALLSIGN}. Smooth ride — thanks for the lift.`
+        : cond >= 70
+          ? `${CALLSIGN}, delivery received. Bit rough on the way in.`
+          : `${CALLSIGN}, we got it… what's left of it. Doc wants a word about your flying.`,
+    );
     const xp = Math.round(c.xp * (0.5 + 0.5 * (cond / 100)) + (m.landing === 'BUTTER' ? 25 : 0));
     this.cleanup(m);
     this.active = null;

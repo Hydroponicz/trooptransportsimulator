@@ -10,6 +10,7 @@ import { CargoManager } from './game/cargo';
 import { SlingSystem } from './game/sling';
 import { MissionSystem, siteRisk, type Payout } from './game/missions';
 import { Threats } from './game/threats';
+import { Traffic } from './game/traffic';
 import { Career, RANKS } from './game/career';
 import { Hud } from './ui/hud';
 import { MapRenderer } from './ui/map';
@@ -36,6 +37,7 @@ export class Game {
   sling: SlingSystem;
   missions: MissionSystem;
   threats: Threats;
+  traffic: Traffic;
   hud: Hud;
   map: MapRenderer;
   terminal: Terminal;
@@ -111,6 +113,10 @@ export class Game {
 
     this.missions = new MissionSystem(this.world.sites, this.rng.fork(), this.cargo, this.sling, this.effects, this.world.terrain, {
       toast: (m, k) => this.toast(m, k),
+      radio: (from, msg) => {
+        this.hud.radio(from, msg);
+        this.audio.radio();
+      },
       complete: (p) => this.onComplete(p),
       failed: (reason) => {
         this.hud.bigText('CONTRACT FAILED', reason, 3.5);
@@ -123,6 +129,8 @@ export class Game {
     });
 
     for (const s of this.world.smokeSpots) this.effects.addEmitter(s, 'burning', 3);
+    this.traffic = new Traffic(this.world, this.rng.fork(), this.effects);
+    this.scene.add(this.traffic.group);
 
     const wa = this.rng.range(0, Math.PI * 2);
     const ws = this.rng.range(2, 6);
@@ -383,6 +391,7 @@ export class Game {
       rotorsTurning: fm.rpm > 0.3,
     });
     this.threats.update(dt, h, this.cam.camera.position);
+    this.traffic.update(dt, this.cam.camera.position);
     this.updateEffects(dt);
     this.effects.update(dt, this.cam.camera.position);
     this.updateDecor(dt);

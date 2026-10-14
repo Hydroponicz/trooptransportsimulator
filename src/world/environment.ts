@@ -32,6 +32,10 @@ export class Environment {
     this.sun.shadow.normalBias = 0.6;
     scene.add(this.sun);
     scene.add(this.sun.target);
+    // Soft bounce light from the opposite side so shadowed faces keep their shape.
+    const fill = new THREE.DirectionalLight(0xc8d4e0, 0.55);
+    fill.position.set(-SUN_DIR.x, 0.4, -SUN_DIR.z);
+    scene.add(fill);
 
     const skyMat = new THREE.ShaderMaterial({
       side: THREE.BackSide,

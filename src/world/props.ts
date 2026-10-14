@@ -95,7 +95,7 @@ export type ProtoName =
   | 'barrel'
   | 'wreck';
 
-function buildProto(name: ProtoName): THREE.BufferGeometry {
+export function buildProto(name: ProtoName): THREE.BufferGeometry {
   switch (name) {
     case 'hesco':
       return merge([part(box(4.4, 1.4, 1.1), 0xb09d74, 0, 0.7, 0), part(box(4.3, 0.06, 1.0), 0x8c7c58, 0, 1.42, 0)]);

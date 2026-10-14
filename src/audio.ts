@@ -240,6 +240,13 @@ export class AudioEngine {
     this.burst({ dur: 0.35, gain: clamp(strength, 0.1, 1.2), type: 'lowpass', f0: 300, f1: 50 });
   }
 
+  /** Squelch break + crackle when a radio call comes in. */
+  radio() {
+    this.burst({ dur: 0.12, gain: 0.18, type: 'bandpass', f0: 2200, q: 1.5 });
+    this.beep(1450, 0.06, 0.06, 'square', 0.02);
+    this.burst({ delay: 0.12, dur: 0.5, gain: 0.05, type: 'bandpass', f0: 1800, q: 2 });
+  }
+
   click() {
     this.beep(1200, 0.04, 0.12, 'square');
   }
