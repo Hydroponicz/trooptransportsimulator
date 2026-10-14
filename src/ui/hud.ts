@@ -43,7 +43,13 @@ export class Hud {
     this.canvas.classList.toggle('hidden', !on);
   }
 
+  private recentToasts = new Map<string, number>();
+
   toast(msg: string, kind: 'info' | 'good' | 'bad' = 'info') {
+    // Don't stack identical messages.
+    const now = performance.now();
+    if (now - (this.recentToasts.get(msg) ?? -1e9) < 4000) return;
+    this.recentToasts.set(msg, now);
     const el = document.createElement('div');
     el.className = `toast ${kind}`;
     el.textContent = msg;
@@ -190,7 +196,7 @@ export class Hud {
       this.bigT -= 1 / 12;
       if (this.bigT <= 0) {
         this.bigT = 0.25;
-        game.map.drawBig(this.big, 900, fm.pos.x, fm.pos.z, fm.heading, this.markers(game));
+        game.map.drawBig(this.big, 900, fm.pos.x, fm.pos.z, fm.heading, this.markers(game), game.battle.sectorInfo().map((i) => ({ x: i.x, z: i.z, name: i.s.name, control: i.control, active: i.active })));
       }
     }
   }

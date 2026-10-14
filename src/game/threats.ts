@@ -284,6 +284,13 @@ export class Threats {
     this.updateAmbient(dt, camPos);
   }
 
+  /** Fire one round at the helicopter from an arbitrary position (battlefield units). */
+  shootAt(from: THREE.Vector3, heli: Heli, kind: 'mg' | 'aa') {
+    if (heli.crashed) return;
+    const s = { pos: from, kind } as Shooter;
+    this.fire(s, heli, from.distanceTo(heli.fm.pos));
+  }
+
   private fire(s: Shooter, heli: Heli, dist: number) {
     const fm = heli.fm;
     const speed = s.kind === 'aa' ? 950 : 820;

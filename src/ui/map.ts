@@ -6,6 +6,14 @@ const IMG = 512;
 
 export const SITE_COLOR: Record<string, string> = { base: '#6fb0ff', fob: '#8fe08f', cop: '#f2e9a6', lz: '#ffffff' };
 
+export interface SectorMarker {
+  x: number;
+  z: number;
+  name: string;
+  control: number;
+  active: boolean;
+}
+
 export interface MapMarker {
   x: number;
   z: number;
@@ -174,7 +182,7 @@ export class MapRenderer {
     g.fillText('N', size / 2 - 3, 12);
   }
 
-  drawBig(g: CanvasRenderingContext2D, size: number, hx: number, hz: number, heading: number, markers: MapMarker[]) {
+  drawBig(g: CanvasRenderingContext2D, size: number, hx: number, hz: number, heading: number, markers: MapMarker[], sectors: SectorMarker[] = []) {
     g.drawImage(this.img, 0, 0, size, size);
     const toS = (x: number, z: number): [number, number] => [((x + HALF) / WORLD_SIZE) * size, ((z + HALF) / WORLD_SIZE) * size];
     // Grid (1 km).
@@ -190,6 +198,28 @@ export class MapRenderer {
       g.moveTo(0, a);
       g.lineTo(size, a);
       g.stroke();
+    }
+    // Front sectors: control bar (blue = friendly share), letter, and a pulse if fighting is live.
+    for (const sm of sectors) {
+      const [x, y] = toS(sm.x, sm.z);
+      const w = 46;
+      const share = (sm.control + 1) / 2;
+      g.fillStyle = 'rgba(0,0,0,0.55)';
+      g.fillRect(x - w / 2 - 2, y - 5, w + 4, 10);
+      g.fillStyle = '#5aa0ff';
+      g.fillRect(x - w / 2, y - 3, w * share, 6);
+      g.fillStyle = '#ff5a46';
+      g.fillRect(x - w / 2 + w * share, y - 3, w * (1 - share), 6);
+      g.font = 'bold 12px ui-monospace, monospace';
+      g.fillStyle = '#fff';
+      g.fillText(sm.name.replace('Sector ', ''), x + w / 2 + 6, y + 4);
+      if (sm.active) {
+        g.strokeStyle = 'rgba(255,200,80,0.9)';
+        g.lineWidth = 2;
+        g.beginPath();
+        g.arc(x, y, 18, 0, Math.PI * 2);
+        g.stroke();
+      }
     }
     for (const s of this.world.sites) {
       const [x, y] = toS(s.x, s.z);

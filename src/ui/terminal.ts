@@ -5,7 +5,7 @@ import { fmtDist, fmtMoney, fmtTime } from '../util/math';
 import { RANKS, UPGRADES } from '../game/career';
 import type { Contract, Payout } from '../game/missions';
 
-type Tab = 'contracts' | 'services' | 'hangar' | 'career';
+type Tab = 'contracts' | 'services' | 'hangar' | 'front' | 'career';
 
 export const PRICES = { fuelPerKg: 1.2, repairPerHp: 90, flare: 60 };
 
@@ -119,11 +119,12 @@ export class Terminal {
     const s = this.site!;
     const tabs: [Tab, string][] = [['contracts', 'Contracts'], ['services', 'Services']];
     if (s.services.hangar) tabs.push(['hangar', 'Hangar']);
-    tabs.push(['career', 'Career']);
+    tabs.push(['front', 'Front'], ['career', 'Career']);
     let body = '';
     if (this.tab === 'contracts') body = this.renderContracts();
     else if (this.tab === 'services') body = this.renderServices();
     else if (this.tab === 'hangar') body = this.renderHangar();
+    else if (this.tab === 'front') body = this.renderFront();
     else body = this.renderCareer();
     this.el.innerHTML = `
       <div class="term">
@@ -217,6 +218,31 @@ export class Terminal {
         ${next ? `<button data-act="upgrade" data-id="${u.id}" ${g.career.data.money < next.cost ? 'disabled' : ''}>${fmtMoney(next.cost)}</button>` : '<button disabled>MAX</button>'}</div>`;
     }
     return html;
+  }
+
+  private renderFront(): string {
+    const camp = this.game.battle.campaign;
+    const here = this.site ? camp.sectorAt(this.site.z) : null;
+    const bar = (c: number) => {
+      const share = Math.round(((c + 1) / 2) * 100);
+      return `<div style="display:flex;height:8px;width:120px;border-radius:2px;overflow:hidden"><div style="width:${share}%;background:#5aa0ff"></div><div style="flex:1;background:#ff5a46"></div></div>`;
+    };
+    const rows = camp.sectors
+      .map((s) => {
+        const c = camp.control(s);
+        const pct = (n: number) => Math.round(n * 100) + '%';
+        return `<tr style="${s === here ? 'background:rgba(242,233,166,0.08)' : ''}">
+          <td><b>${s.name}</b>${s === here ? ' ◂ here' : ''}</td><td>${bar(c)}</td><td>${esc(camp.status(s))}</td>
+          <td>${Math.floor(s.inf.blue)} / ${Math.floor(s.inf.red)}</td><td>${Math.floor(s.armor.blue)} / ${Math.floor(s.armor.red)}</td>
+          <td>${pct(s.fort.blue)} / ${pct(s.fort.red)}</td><td>${s.ammo.blue.toFixed(1)}×</td><td>${s.arty.blue.toFixed(1)}</td></tr>`;
+      })
+      .join('');
+    return `<p style="color:#a9b5a3;margin-top:0">Sectors run north (A) to south (J) along the front. Friendly / enemy numbers.
+      Deliveries to outposts and landing zones near the line change these: troops reinforce, ammo raises firepower,
+      supplies build fortifications, howitzers add artillery, vehicles add armor.</p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;font-family:var(--mono)">
+      <tr style="color:#9dff9d;text-align:left"><th>Sector</th><th>Control</th><th>Status</th><th>Infantry</th><th>Armor</th><th>Fortified</th><th>Ammo</th><th>Arty</th></tr>
+      ${rows}</table>`;
   }
 
   private renderCareer(): string {

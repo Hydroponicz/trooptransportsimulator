@@ -11,6 +11,8 @@ import { SlingSystem } from './game/sling';
 import { MissionSystem, siteRisk, type Payout } from './game/missions';
 import { Threats } from './game/threats';
 import { Traffic } from './game/traffic';
+import { Campaign } from './battle/campaign';
+import { Battle } from './battle/battle';
 import { Career, RANKS } from './game/career';
 import { Hud } from './ui/hud';
 import { MapRenderer } from './ui/map';
@@ -39,6 +41,7 @@ export class Game {
   missions: MissionSystem;
   threats: Threats;
   traffic: Traffic;
+  battle: Battle;
   hud: Hud;
   map: MapRenderer;
   terminal: Terminal;
@@ -111,6 +114,20 @@ export class Game {
       toast: (m, k) => this.toast(m, k),
     });
     this.scene.add(this.threats.group);
+
+    const campaign = career.data.campaign ? new Campaign(career.data.campaign, this.rng.fork()) : Campaign.fresh(this.rng.fork());
+    career.data.campaign = campaign.data;
+    this.battle = new Battle(this.world, campaign, this.effects, this.audio, this.threats, this.rng.fork(), {
+      radio: (from, msg) => {
+        this.hud.radio(from, msg);
+        this.audio.radio();
+      },
+      onHeliHit: (d) => {
+        this.missions.onHit();
+        this.cam.shake = Math.min(1.5, this.cam.shake + d * 0.08);
+      },
+    });
+    this.scene.add(this.battle.group);
 
     this.missions = new MissionSystem(this.world.sites, this.rng.fork(), this.cargo, this.sling, this.effects, this.world.terrain, {
       toast: (m, k) => this.toast(m, k),
@@ -413,6 +430,7 @@ export class Game {
       rotorsTurning: fm.rpm > 0.3,
     });
     this.threats.update(dt, h, this.cam.camera.position);
+    this.battle.update(dt, h, this.cam.camera.position);
     this.traffic.update(dt, this.cam.camera.position);
     this.updateEffects(dt);
     this.effects.update(dt, this.cam.camera.position);
@@ -654,6 +672,7 @@ export class Game {
     if (p.contract.type.kind === 'troops' || p.contract.type.kind === 'casualties') c.data.stats.troopsMoved += p.contract.count;
     c.data.stats.cargoKg += p.contract.mass;
     const promoted = c.addXp(p.xp) ? RANKS[c.rank].name : null;
+    const warReport = this.battle.campaign.applyDelivery(p.contract);
     c.save();
     this.audio.cash();
     const hot = siteRisk(p.contract.to) >= 2;
@@ -662,6 +681,10 @@ export class Game {
       this.terminal.payout(p, promoted, () => {
         if (promoted) this.hud.bigText('PROMOTED', promoted, 3);
         else if (hot) this.toast('Get out of there — the LZ is still hot!', 'bad');
+        if (warReport) {
+          this.hud.radio('Brigade TOC', warReport);
+          this.audio.radio();
+        }
       });
     }, 900);
   }

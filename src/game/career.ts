@@ -56,6 +56,8 @@ export interface Stats {
   earned: number;
 }
 
+import type { CampaignData } from '../battle/campaign';
+
 export interface SaveData {
   version: 1;
   seed: number;
@@ -64,6 +66,8 @@ export interface SaveData {
   upgrades: Record<UpgradeId, number>;
   stats: Stats;
   sas: number;
+  /** The state of the war along the front. */
+  campaign?: CampaignData;
 }
 
 const KEY = 'tts-career-v1';
