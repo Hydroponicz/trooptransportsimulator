@@ -27,12 +27,6 @@ const _n = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _qi = new THREE.Quaternion();
 const UP = new THREE.Vector3(0, 1, 0);
-const _e = new THREE.Euler();
-const _qt = new THREE.Quaternion();
-const _qe = new THREE.Quaternion();
-/** Rotation rates (rad/s) when the stick is held past the attitude limit. */
-const FLIP_PITCH_RATE = 1.05;
-const FLIP_ROLL_RATE = 1.2;
 
 /**
  * Rigid-body tandem-rotor flight model.
@@ -74,12 +68,6 @@ export class FlightModel {
   roll = 0;
   heading = 0;
   settled = false;
-  /** Heading reference held through aerobatics (when the nose heading is meaningless). */
-  refHeading = 0;
-  private extraPitch = 0;
-  private extraRoll = 0;
-  private fullPitchT = 0;
-  private fullRollT = 0;
   /** Called on first wheel contact with the (negative) vertical speed. */
   onTouchdown: ((vs: number) => void) | null = null;
   /** Called when the hull itself hits the ground hard. */
@@ -208,8 +196,7 @@ export class FlightModel {
         tp += Math.atan(af) * trimF;
         tr -= Math.atan(ar) * trimF;
       }
-      const upright = up.y > 0.5 && Math.abs(this.pitch) < 1.1;
-      if (this.sas === 2 && upright && Math.abs(inp.pitch) < 0.05 && Math.abs(inp.roll) < 0.05 && this.groundSpeed < 15) {
+      if (this.sas === 2 && Math.abs(inp.pitch) < 0.05 && Math.abs(inp.roll) < 0.05 && this.groundSpeed < 15) {
         const hf = _v3.set(fwd.x, 0, fwd.z).normalize();
         const vf = this.vel.dot(hf);
         const hr = new THREE.Vector3(right.x, 0, right.z).normalize();
@@ -217,40 +204,15 @@ export class FlightModel {
         tp = clamp(vf * 0.05, -0.18, 0.18);
         tr = clamp(-vr * 0.05, -0.18, 0.18);
       }
-      // Holding full stick past the normal attitude limit keeps the target
-      // rotating, so the aircraft can be flipped or rolled right over.
-      if (upright) this.refHeading = this.heading;
-      // A short grace period at the limit so brief full-stick inputs stay safe.
-      const FULL = 0.9;
-      const GRACE = 0.6;
-      this.fullPitchT = Math.abs(inp.pitch) > FULL ? this.fullPitchT + dt : 0;
-      this.fullRollT = Math.abs(inp.roll) > FULL ? this.fullRollT + dt : 0;
-      if (this.fullPitchT > GRACE) this.extraPitch -= Math.sign(inp.pitch) * FLIP_PITCH_RATE * dt;
-      else this.extraPitch = 0;
-      if (this.fullRollT > GRACE) this.extraRoll += Math.sign(inp.roll) * FLIP_ROLL_RATE * dt;
-      else this.extraRoll = 0;
-      // Target orientation (heading, pitch, roll) and the shortest rotation to it.
-      _e.set(tp + this.extraPitch, -this.refHeading, -(tr + this.extraRoll), 'YXZ');
-      _qt.setFromEuler(_e);
-      _qe.copy(_qi).multiply(_qt);
-      if (_qe.w < 0) _qe.set(-_qe.x, -_qe.y, -_qe.z, -_qe.w);
-      const half = Math.acos(clamp(_qe.w, -1, 1));
-      const sinHalf = Math.sin(half);
-      const k = sinHalf > 1e-5 ? (2 * half) / sinHalf : 2;
-      const maxP = this.extraPitch !== 0 ? FLIP_PITCH_RATE : 0.42;
-      const maxR = this.extraRoll !== 0 ? FLIP_ROLL_RATE : 0.6;
-      // Recovering from an unusual attitude happens at the flip rate too.
-      const unusual = !upright;
-      wDes.x = clamp(1.6 * _qe.x * k, -(unusual ? FLIP_PITCH_RATE : maxP), unusual ? FLIP_PITCH_RATE : maxP);
-      wDes.z = clamp(1.7 * _qe.z * k, -(unusual ? FLIP_ROLL_RATE : maxR), unusual ? FLIP_ROLL_RATE : maxR);
+      wDes.x = clamp(1.6 * (tp - this.pitch), -0.42, 0.42);
+      wDes.z = clamp(-1.7 * (tr - this.roll), -0.6, 0.6);
     } else {
       wDes.x = -inp.pitch * 0.45 - this.pitch * 0.12;
       wDes.z = -inp.roll * 0.7 + this.roll * 0.12;
     }
     // Yaw about the world vertical: pedals, coordinated turns and weathervaning.
     let yawW = -inp.yaw * 0.55 * (1 - 0.45 * hsF);
-    const coordOk = up.y > 0.3 ? smoothstep(1.45, 1.05, Math.abs(this.roll)) : 0;
-    yawW += ((-G * Math.tan(clamp(this.roll, -1.1, 1.1))) / Math.max(hs, 12)) * hsF * (this.sas >= 1 ? 1 : 0.6) * coordOk;
+    yawW += ((-G * Math.tan(clamp(this.roll, -1.1, 1.1))) / Math.max(hs, 12)) * hsF * (this.sas >= 1 ? 1 : 0.6);
     yawW += -clamp(vaBody.x / Math.max(hs, 8), -1, 1) * 0.7 * hsF;
     const worldUpB = _v3.copy(UP).applyQuaternion(_qi);
     wDes.addScaledVector(worldUpB, yawW);

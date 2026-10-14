@@ -123,7 +123,7 @@ export class CameraRig {
       // Follow the direction of travel at speed, the nose at hover.
       const hs = fm.groundSpeed;
       const travel = Math.atan2(fm.vel.x, -fm.vel.z);
-      let want = fm.refHeading;
+      let want = fm.heading;
       if (hs > 12) {
         let d = travel - fm.heading;
         d = Math.atan2(Math.sin(d), Math.cos(d));
@@ -132,7 +132,7 @@ export class CameraRig {
       let dh = want - this.heading;
       dh = Math.atan2(Math.sin(dh), Math.cos(dh));
       this.heading += dh * (1 - Math.exp(-3 * dt));
-      if (!this.initialized) this.heading = fm.refHeading;
+      if (!this.initialized) this.heading = fm.heading;
       if (this.mode === 'orbit') this.orbitA += dt * 0.12;
       const yaw = this.heading + this.yawOff + (this.lookBack ? Math.PI : 0) + this.orbitA * (this.mode === 'orbit' ? 1 : 0);
       const d = this.mode === 'orbit' ? this.dist * 1.6 : this.dist;
