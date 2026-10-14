@@ -177,7 +177,7 @@ export class Game {
       normalAt: (x, z, o, y) => (roads.surfaceAt(x, z, y) > terrainG.heightAt(x, z) + 0.05 ? o.set(0, 1, 0) : terrainG.normalAt(x, z, o)),
       waterDepth: (x, z, y) => (roads.surfaceAt(x, z, y) > -1e9 ? 0 : Math.max(0, WATER_LEVEL - terrainG.heightAt(x, z))),
       grip: (x, z, y) => (roads.surfaceAt(x, z, y) > -1e9 ? 1.0 : 0.8),
-      blocked: (pt) => !!this.world.colliders.hit(pt, 0, true) || this.world.vegetation.hit(pt) || roads.bridgeRail(pt),
+      blocked: (pt) => !!this.world.colliders.hit(pt, 0, true) || this.world.vegetation.hit(pt) || roads.bridgeRail(pt) || !!this.traffic?.hit(pt),
     };
     this.humvee = new Humvee();
     this.humvee.onImpact = (sp) => {
@@ -190,6 +190,7 @@ export class Game {
 
     for (const s of this.world.smokeSpots) this.effects.addEmitter(s, 'burning', 3);
     this.traffic = new Traffic(this.world, this.rng.fork(), this.effects);
+    this.traffic.onHonk = (at) => this.audio.horn(Math.max(0.05, 1 - at.distanceTo(this.cam.camera.position) / 250), true);
     this.scene.add(this.traffic.group);
 
     const wa = this.rng.range(0, Math.PI * 2);
@@ -605,7 +606,14 @@ export class Game {
     this.threats.update(dt, h, this.cam.camera.position);
     this.battle.update(dt, h, this.cam.camera.position);
     this.air.update(dt, h, this.cam.camera.position);
-    this.traffic.update(dt, this.cam.camera.position);
+    {
+      const h = this.heli.fm;
+      const ground = this.world.terrain.surfaceAt(h.pos.x, h.pos.z);
+      this.traffic.update(dt, this.cam.camera.position, {
+        humvee: this.humvee.pos,
+        heli: !this.heli.crashed && h.pos.y - ground < 8 ? h.pos : undefined,
+      });
+    }
     this.updateEffects(dt);
     this.effects.update(dt, this.cam.camera.position);
     this.updateDecor(dt);

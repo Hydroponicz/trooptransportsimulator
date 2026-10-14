@@ -145,16 +145,22 @@ front so battles happen on sensible terrain. Places include:
   - Intact villages sit behind each line, with streets, apartment blocks, a
     church, and farmland, barns and silos around them.
 
-Roads link everything, and supply convoys drive them in their own lanes.
+Roads link everything. Supply traffic of cargo trucks, fuel tankers, HMMWVs
+and MRAPs drives the whole network in convoys. They keep to the right-hand
+lane, steer smoothly through bends and junctions, slow for curves and keep
+their distance. They brake for your Humvee, your landed helicopter and each
+other, sound their horns if you block them for too long, and turn around
+inside bases before heading out again. They are solid, so drive around them.
+
 The network is laid out like a real one:
 
 - Every base, FOB and outpost faces its connections, with a gated entry
   control point (guard towers, T-walls and barriers). One access road runs
   in from the gate to the motor pool. Bigger sites can have a back gate,
   with a main street through the site joining the two.
-- Supply routes meet at a paved junction outside each gate. They branch off
-  one another at T-junctions, like a tree, instead of all fanning out of the
-  base.
+- Supply routes meet at a junction outside each gate. They branch off one
+  another at T-junctions with rounded corners, like a tree, instead of all
+  fanning out of the base.
 
 There are three kinds of road:
 
@@ -211,6 +217,8 @@ src/
   heli/heli.ts       aircraft entity: damage, ramp, rotors, collisions
   heli/chinookModel.ts  procedural CH-47 mesh
   vehicles/humvee.ts drivable Humvee: suspension, tires, drivetrain, model
+  vehicles/models.ts AI vehicle models (truck, tanker, HMMWV, MRAP) with animated wheels
+  game/traffic.ts    AI supply traffic: routing, steering, following, braking
   game/missions.ts   contracts, pay, mission phases, payouts
   game/cargo.ts      troops / litters / pallets walking on and off the ramp
   game/sling.ts      hook, rope constraint, slung-load physics

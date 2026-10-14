@@ -7,6 +7,16 @@ import { gravelTexture, roadTexture } from '../util/textures';
 
 const GRID = 50;
 
+function inPolygon(poly: THREE.Vector2[], x: number, z: number): boolean {
+  let inside = false;
+  for (let i = 0, k = poly.length - 1; i < poly.length; k = i++) {
+    const a = poly[i];
+    const b = poly[k];
+    if (a.y > z !== b.y > z && x < ((b.x - a.x) * (z - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
 /** Main supply routes are paved two-lane roads, the rest narrower and rougher. */
 export type RoadClass = 'main' | 'secondary' | 'track';
 export const ROAD_SPEC: Record<RoadClass, { hw: number; shoulder: number }> = {
@@ -145,7 +155,7 @@ export class Roads {
   private freeStarts = new Set<number>();
 
   /** Drivable junction pads (fill the corners where roads meet). */
-  private padSurf: { x: number; z: number; y: number }[] = [];
+  private padSurf: { x: number; z: number; y: number; fillets: THREE.Vector2[][]; rank: number }[] = [];
   static readonly PAD_R = 11;
 
   /** Per road: whether its start / end meets another road's end. */
@@ -375,16 +385,64 @@ export class Roads {
       this.spans.push(bridges);
     }
     this.cutAndFill();
-    // Junction pads: flat paved discs at the height of the roads meeting there.
+    // Junction pads: the paved area where roads meet, shaped as the outline
+    // around each road's mouth (no circles), at the junction's height.
     this.padSurf = [];
+    const seenJ = new Set<string>();
     for (const j of [...this.gates.map((g) => g.junction), ...this.junctionPads]) {
+      const kj = `${Math.round(j.x)},${Math.round(j.y)}`;
+      if (seenJ.has(kj)) continue;
+      seenJ.add(kj);
       let y: number | null = null;
+      // Each road leaving the junction: outward direction and carriageway half-width.
+      const arms: { a: THREE.Vector2; hw: number }[] = [];
+      let rank = 0;
       this.paths.forEach((p, pi) => {
-        if (y !== null) return;
-        if (p[0].distanceTo(j) < 1) y = this.heights[pi][0];
-        else if (p[p.length - 1].distanceTo(j) < 1) y = this.heights[pi][p.length - 1];
+        const atStart = p[0].distanceTo(j) < 1;
+        const atEnd = p[p.length - 1].distanceTo(j) < 1;
+        if (!atStart && !atEnd) return;
+        if (y === null) y = this.heights[pi][atStart ? 0 : p.length - 1];
+        const far = atStart ? p[Math.min(2, p.length - 1)] : p[Math.max(0, p.length - 3)];
+        arms.push({ a: far.clone().sub(j).normalize(), hw: this.hw(pi) });
+        rank = Math.max(rank, { track: 0, secondary: 1, main: 2 }[this.classes[pi]]);
       });
-      if (y !== null) this.padSurf.push({ x: j.x, z: j.y, y });
+      if (y === null || arms.length < 2) continue;
+      // Corner fillets between neighbouring arms (sorted around the junction):
+      // a curved infill from one road's edge to the next, like a kerb radius.
+      arms.sort((p, q) => Math.atan2(p.a.y, p.a.x) - Math.atan2(q.a.y, q.a.x));
+      const fillets: THREE.Vector2[][] = [];
+      for (let k = 0; k < arms.length; k++) {
+        const A = arms[k];
+        const B = arms[(k + 1) % arms.length];
+        let ang = Math.atan2(B.a.y, B.a.x) - Math.atan2(A.a.y, A.a.x);
+        if (ang <= 0) ang += Math.PI * 2;
+        if (ang > Math.PI * 0.85) continue; // nearly straight through: nothing to fill
+        const nA = new THREE.Vector2(-A.a.y, A.a.x); // A's edge facing B
+        const nB = new THREE.Vector2(B.a.y, -B.a.x); // B's edge facing A
+        const r = 9 + Math.max(A.hw, B.hw);
+        const PA = j.clone().addScaledVector(nA, A.hw).addScaledVector(A.a, r);
+        const PB = j.clone().addScaledVector(nB, B.hw).addScaledVector(B.a, r);
+        // Kerb control point: where the two edge lines meet.
+        const oA = j.clone().addScaledVector(nA, A.hw);
+        const oB = j.clone().addScaledVector(nB, B.hw);
+        const den = A.a.x * B.a.y - A.a.y * B.a.x;
+        let C = PA.clone().add(PB).multiplyScalar(0.5);
+        if (Math.abs(den) > 1e-3) {
+          const t = ((oB.x - oA.x) * B.a.y - (oB.y - oA.y) * B.a.x) / den;
+          if (t > 0 && t < r * 2) C = oA.clone().addScaledVector(A.a, t);
+        }
+        const poly = [j.clone(), PA];
+        for (let q = 1; q < 8; q++) {
+          const u = q / 8;
+          poly.push(new THREE.Vector2(
+            (1 - u) * (1 - u) * PA.x + 2 * u * (1 - u) * C.x + u * u * PB.x,
+            (1 - u) * (1 - u) * PA.y + 2 * u * (1 - u) * C.y + u * u * PB.y,
+          ));
+        }
+        poly.push(PB);
+        fillets.push(poly);
+      }
+      this.padSurf.push({ x: j.x, z: j.y, y, fillets, rank });
     }
     const ends = this.paths.flatMap((p) => [p[0], p[p.length - 1]]);
     const linked = (q: THREE.Vector2, self: number) => ends.some((e, k) => Math.floor(k / 2) !== self && e.distanceTo(q) < 1);
@@ -531,7 +589,7 @@ export class Roads {
     });
     if (best === -Infinity)
       for (const pd of this.padSurf)
-        if (Math.hypot(x - pd.x, z - pd.z) < Roads.PAD_R && pd.y + 0.12 <= below) best = Math.max(best, pd.y + 0.12);
+        if (Math.hypot(x - pd.x, z - pd.z) < 30 && pd.y + 0.12 <= below && pd.fillets.some((f) => inPolygon(f, x, z))) best = Math.max(best, pd.y + 0.12);
     return best;
   }
 
@@ -701,24 +759,39 @@ export class Roads {
     const shoulderMat = new THREE.MeshLambertMaterial({ vertexColors: true, map: gravelTexture(), polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
     const gravel = new THREE.Color(0x8a8172);
     const verge = new THREE.Color(0x6f6650);
-    // Paved junction pads where roads meet outside the gates.
-    const padMat = new THREE.MeshLambertMaterial({ map: textures.secondary, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -3 });
-    const seen = new Set<string>();
-    for (const jp of [...this.gates.map((g) => g.junction), ...this.junctionPads]) {
-      const g = { junction: jp };
-      const padY = this.padSurf.find((pd) => Math.hypot(pd.x - jp.x, pd.z - jp.y) < 1)?.y ?? -Infinity;
-      const k = `${Math.round(g.junction.x)},${Math.round(g.junction.y)}`;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      const geo = new THREE.CircleGeometry(Roads.PAD_R, 28).rotateX(-Math.PI / 2);
-      const p = geo.getAttribute('position') as THREE.BufferAttribute;
-      for (let v = 0; v < p.count; v++) {
-        const x = g.junction.x + p.getX(v);
-        const z = g.junction.y + p.getZ(v);
-        p.setXYZ(v, x, Math.max(this.terrain.heightAt(x, z), padY) + 0.09, z);
-      }
+    // Paved junction areas.
+    // Junction surface matches the best road meeting there.
+    const padMats = [
+      new THREE.MeshLambertMaterial({ map: gravelTexture(), color: 0xa08e6c, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -3 }),
+      new THREE.MeshLambertMaterial({ map: roadTexture('plainworn'), polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -3 }),
+      new THREE.MeshLambertMaterial({ map: roadTexture('plain'), polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -3 }),
+    ];
+    for (const pd of this.padSurf) {
+      const pos: number[] = [];
+      const uv: number[] = [];
+      const Y = (x: number, z: number) => Math.max(this.terrain.heightAt(x, z), pd.y) + 0.09;
+      // Fan out from the junction centre over each fillet.
+      for (const f of pd.fillets)
+        for (let i = 1; i + 1 < f.length; i++)
+          for (const q of [f[0], f[i + 1], f[i]]) {
+            pos.push(q.x, Y(q.x, q.y), q.y);
+            uv.push(q.x / 10, q.y / 10);
+          }
+      if (!pos.length) continue;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
       geo.computeVertexNormals();
-      const m = new THREE.Mesh(geo, padMat);
+      if ((geo.getAttribute('normal') as THREE.BufferAttribute).getY(0) < 0) {
+        const p = geo.getAttribute('position') as THREE.BufferAttribute;
+        for (let i = 0; i < p.count; i += 3) {
+          const t = [p.getX(i + 1), p.getY(i + 1), p.getZ(i + 1)];
+          p.setXYZ(i + 1, p.getX(i + 2), p.getY(i + 2), p.getZ(i + 2));
+          p.setXYZ(i + 2, t[0], t[1], t[2]);
+        }
+        geo.computeVertexNormals();
+      }
+      const m = new THREE.Mesh(geo, padMats[pd.rank]);
       m.receiveShadow = true;
       this.group.add(m);
     }

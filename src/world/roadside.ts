@@ -351,9 +351,9 @@ export function buildRoadside(
         const tl = p.distanceTo(q) || 1;
         tx = (q.x - p.x) / tl;
         tz = (q.y - p.y) / tl;
-        // Right-hand side of the direction of travel.
-        x = p.x + tz * o;
-        z = p.y - tx * o;
+        // Right-hand side of the direction of travel (right = (−tz, tx)).
+        x = p.x - tz * o;
+        z = p.y + tx * o;
         if (!nearSite(path[i].x, path[i].y, 25) && clearOfOthers(x, z, pi, 2) && !onBridge(x, z) && terrain.heightAt(x, z) > 1) {
           found = true;
           break;

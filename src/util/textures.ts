@@ -146,11 +146,11 @@ export function smokeSpriteTexture(): THREE.Texture {
  * secondary: worn, patched asphalt with a faded centre line.
  * track: compacted gravel with wheel ruts.
  */
-export function roadTexture(kind: 'main' | 'secondary' | 'track'): THREE.Texture {
+export function roadTexture(kind: 'main' | 'secondary' | 'track' | 'plain' | 'plainworn'): THREE.Texture {
   const W = 256;
   const H = 512;
   const [c, g] = canvas(W, H);
-  const base = kind === 'main' ? [64, 66, 68] : kind === 'secondary' ? [92, 90, 85] : [139, 123, 94];
+  const base = kind === 'main' || kind === 'plain' ? [64, 66, 68] : kind === 'secondary' || kind === 'plainworn' ? [92, 90, 85] : [139, 123, 94];
   const img = g.createImageData(W, H);
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
@@ -201,10 +201,11 @@ export function roadTexture(kind: 'main' | 'secondary' | 'track'): THREE.Texture
       g.fillRect(x, y, 1 + Math.random() * 2, 1 + Math.random() * 2);
     }
   } else {
-    const worn = kind === 'secondary';
+    const worn = kind === 'secondary' || kind === 'plainworn';
     blotch(worn ? 50 : 25, 'rgba(40,40,40,0.18)', 10, 50, 20, 120);
     blotch(worn ? 30 : 12, 'rgba(150,150,145,0.12)', 10, 40, 20, 90);
-    for (const u of [0.15, 0.35, 0.65, 0.85]) band(u, 0.08, 'rgba(30,30,32,0.18)');
+    const plain = kind === 'plain' || kind === 'plainworn';
+    if (!plain) for (const u of [0.15, 0.35, 0.65, 0.85]) band(u, 0.08, 'rgba(30,30,32,0.18)');
     if (worn) {
       // Patch repairs.
       for (let k = 0; k < 3; k++) {
@@ -246,7 +247,9 @@ export function roadTexture(kind: 'main' | 'secondary' | 'track'): THREE.Texture
         g.fillRect(u * W - (w * W) / 2, y, w * W, 1);
       }
     };
-    if (!worn) {
+    if (plain) {
+      // Junction asphalt: no markings.
+    } else if (!worn) {
       paint(0.03, 0.016, 'rgba(235,235,225,0.95)', 0, 1, 0.93);
       paint(0.97, 0.016, 'rgba(235,235,225,0.95)', 0, 1, 0.93);
       paint(0.5, 0.016, 'rgba(240,240,232,0.95)', 0, 0.3, 0.95);
@@ -255,7 +258,7 @@ export function roadTexture(kind: 'main' | 'secondary' | 'track'): THREE.Texture
     }
   }
   const t = new THREE.CanvasTexture(c);
-  t.wrapS = THREE.ClampToEdgeWrapping;
+  t.wrapS = kind === 'plain' || kind === 'plainworn' ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
   t.wrapT = THREE.RepeatWrapping;
   t.anisotropy = 8;
   t.colorSpace = THREE.SRGBColorSpace;

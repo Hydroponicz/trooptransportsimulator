@@ -296,8 +296,9 @@ export class AudioEngine {
     };
   }
 
-  horn() {
-    for (const f of [330, 415]) {
+  /** Horn; `vol` scales it (distant traffic), `low` is a deeper truck horn. */
+  horn(vol = 1, low = false) {
+    for (const f of low ? [196, 247] : [330, 415]) {
       const ctx = this.ctx;
       if (!ctx) return;
       const o = ctx.createOscillator();
@@ -309,8 +310,8 @@ export class AudioEngine {
       const g = ctx.createGain();
       const t0 = ctx.currentTime;
       g.gain.setValueAtTime(0, t0);
-      g.gain.linearRampToValueAtTime(0.07, t0 + 0.02);
-      g.gain.setValueAtTime(0.07, t0 + 0.45);
+      g.gain.linearRampToValueAtTime(0.07 * vol, t0 + 0.02);
+      g.gain.setValueAtTime(0.07 * vol, t0 + 0.45);
       g.gain.linearRampToValueAtTime(0, t0 + 0.5);
       o.connect(lp).connect(g).connect(this.master);
       o.start(t0);
