@@ -106,7 +106,7 @@ export class Input {
     }
 
     // Keyboard: ramp deflection in/out for smooth control.
-    const sIn = 2.2;
+    const sIn = 1.5;
     const sOut = 4.5;
     const ramp = (cur: number, tgt: number) => approach(cur, tgt, (tgt === 0 || Math.sign(tgt) !== Math.sign(cur) ? sOut : sIn) * dt);
     this.pitch = ramp(this.pitch, tp);

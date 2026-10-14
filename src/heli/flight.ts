@@ -184,6 +184,18 @@ export class FlightModel {
     if (this.sas >= 1) {
       let tp = -inp.pitch * 0.49;
       let tr = inp.roll * 0.61;
+      // Wind trim: lean into the wind so a hands-off hover doesn't get blown away.
+      // Fades out with airspeed, where wind only bends the ground track.
+      const trimF = 1 - smoothstep(12, 25, hs);
+      if (trimF > 0) {
+        const hfw = _v3.set(fwd.x, 0, fwd.z).normalize();
+        const wf = env.wind.x * hfw.x + env.wind.z * hfw.z;
+        const wr = env.wind.x * -hfw.z + env.wind.z * hfw.x;
+        const af = (0.025 * this.rpm * wf + (7 * Math.abs(wf) * wf) / m) / G;
+        const ar = (0.05 * this.rpm * wr + (28 * Math.abs(wr) * wr) / m) / G;
+        tp += Math.atan(af) * trimF;
+        tr -= Math.atan(ar) * trimF;
+      }
       if (this.sas === 2 && Math.abs(inp.pitch) < 0.05 && Math.abs(inp.roll) < 0.05 && this.groundSpeed < 15) {
         const hf = _v3.set(fwd.x, 0, fwd.z).normalize();
         const vf = this.vel.dot(hf);

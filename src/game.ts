@@ -133,7 +133,7 @@ export class Game {
     this.scene.add(this.traffic.group);
 
     const wa = this.rng.range(0, Math.PI * 2);
-    const ws = this.rng.range(2, 6);
+    const ws = this.rng.range(1.5, 5);
     this.windBase.set(Math.sin(wa) * ws, 0, Math.cos(wa) * ws);
     this.wind.copy(this.windBase);
 
