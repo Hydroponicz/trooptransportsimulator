@@ -183,13 +183,13 @@ export function buildRoadside(
   // with containers, tanks, a shed and trucks inside.
   roads.paths.forEach((path, pi) => {
     const cls = roads.classes[pi];
-    if (cls === 'track' || path.length < 60) return;
+    if (cls === 'track' || path.length < 34) return;
     const spec = ROAD_SPEC[cls];
     const outer = spec.hw + spec.shoulder;
-    const attempts = Math.floor((path.length * 7) / 1800) + 1;
+    const attempts = Math.floor((path.length * 7) / 1200) + 1;
     let lastAt = -1e9;
     for (let k = 0; k < attempts * 4 && attempts > 0; k++) {
-      if (!rng.chance(0.35)) continue;
+      if (!rng.chance(0.5)) continue;
       const i = rng.int(10, path.length - 11);
       if (Math.abs(i - lastAt) * 7 < 900) continue;
       const p = path[i];
