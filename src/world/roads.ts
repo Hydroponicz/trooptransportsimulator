@@ -23,7 +23,7 @@ export interface RailSeg {
   y0: number;
   y1: number;
 }
-const _near = new Map<number, { d: number; y: number }>();
+const _near = new Map<number, { d: number; w: number; wh: number }>();
 
 interface Seg {
   ax: number;
@@ -38,6 +38,8 @@ interface Seg {
 export class Roads {
   readonly paths: THREE.Vector2[][] = [];
   readonly classes: RoadClass[] = [];
+  /** Site gates (for the entry control points) with the junction outside each. */
+  readonly gates: { x: number; z: number; dx: number; dz: number; junction: THREE.Vector2; site: string }[] = [];
   private grid = new Map<number, Seg[]>();
   group = new THREE.Group();
 
@@ -53,10 +55,43 @@ export class Roads {
     return sp.hw + sp.shoulder;
   }
 
-  add(ax: number, az: number, bx: number, bz: number, rng: RNG, cls: RoadClass = 'secondary') {
+  /**
+   * Lay a road from A to B. `straight` roads (site access roads) don't wander;
+   * `leaveA`/`leaveB` are directions the road heads off in from each end, so
+   * roads leave a junction outward rather than cutting back past the site.
+   */
+  add(
+    ax: number,
+    az: number,
+    bx: number,
+    bz: number,
+    rng: RNG,
+    cls: RoadClass = 'secondary',
+    opts: { straight?: boolean; leaveA?: THREE.Vector2; leaveB?: THREE.Vector2; freeEnd?: boolean; freeStart?: boolean } = {},
+  ) {
     this.classes.push(cls);
-    let pts = [new THREE.Vector2(ax, az), new THREE.Vector2(bx, bz)];
-    for (let depth = 0; depth < 5; depth++) {
+    if (opts.freeEnd) this.freeEnds.add(this.paths.length);
+    if (opts.freeStart) this.freeStarts.add(this.paths.length);
+    const A = new THREE.Vector2(ax, az);
+    const B = new THREE.Vector2(bx, bz);
+    let pts = [A];
+    const span = A.distanceTo(B);
+    // How far to run out along a leave direction: full when the other end is
+    // straight ahead, little or nothing when it is off to the side (no hooks).
+    const reach = (from: THREE.Vector2, dir: THREE.Vector2, to: THREE.Vector2) => {
+      const ahead = dir.dot(to.clone().sub(from).normalize());
+      return ahead <= 0.1 ? 0 : Math.min(120, span * 0.2) * Math.min(1, (ahead - 0.1) / 0.6);
+    };
+    if (opts.leaveA && span > 250) {
+      const r = reach(A, opts.leaveA, B);
+      if (r > 15) pts.push(A.clone().addScaledVector(opts.leaveA, r));
+    }
+    if (opts.leaveB && span > 250) {
+      const r = reach(B, opts.leaveB, A);
+      if (r > 15) pts.push(B.clone().addScaledVector(opts.leaveB, r));
+    }
+    pts.push(B);
+    for (let depth = 0; depth < (opts.straight ? 0 : 5); depth++) {
       const next: THREE.Vector2[] = [pts[0]];
       for (let i = 1; i < pts.length; i++) {
         const a = pts[i - 1];
@@ -69,13 +104,76 @@ export class Roads {
       }
       pts = next;
     }
-    const curve = new THREE.SplineCurve(pts);
+    // Centripetal Catmull-Rom: no loops or cusps where control points are unevenly spaced.
+    const curve = new THREE.CatmullRomCurve3(pts.map((q) => new THREE.Vector3(q.x, 0, q.y)), false, 'centripetal');
     const total = curve.getLength();
-    const samples = curve.getSpacedPoints(Math.max(4, Math.floor(total / 7)));
+    const samples = curve.getSpacedPoints(Math.max(4, Math.floor(total / 7))).map((q) => new THREE.Vector2(q.x, q.z));
+    // Round off tight corners so curves are drivable (ends stay put).
+    for (let it = 0; it < 24; it++) {
+      const prev = samples.map((q) => q.clone());
+      for (let i = 1; i < samples.length - 1; i++) {
+        samples[i].x = prev[i].x * 0.5 + (prev[i - 1].x + prev[i + 1].x) * 0.25;
+        samples[i].y = prev[i].y * 0.5 + (prev[i - 1].y + prev[i + 1].y) * 0.25;
+      }
+    }
     this.paths.push(samples);
     const pathIndex = this.paths.length - 1;
     for (let i = 1; i < samples.length; i++) this.index({ ax: samples[i - 1].x, az: samples[i - 1].y, bx: samples[i].x, bz: samples[i].y, path: pathIndex, i: i - 1 });
   }
+
+  /** Split road `pi` at sample k (for a T-junction); returns the new road's index. */
+  split(pi: number, k: number): number {
+    const path = this.paths[pi];
+    const tail = this.paths.length;
+    this.paths.push(path.slice(k));
+    this.paths[pi] = path.slice(0, k + 1);
+    this.classes.push(this.classes[pi]);
+    // The split point isn't a real road end: both pieces take their height
+    // there from the profile, not the raw ground.
+    if (this.freeEnds.has(pi)) this.freeEnds.add(tail);
+    this.freeEnds.add(pi);
+    this.freeStarts.add(tail);
+    this.grid.clear();
+    this.paths.forEach((pts, p) => {
+      for (let i = 1; i < pts.length; i++) this.index({ ax: pts[i - 1].x, az: pts[i - 1].y, bx: pts[i].x, bz: pts[i].y, path: p, i: i - 1 });
+    });
+    return this.paths.length - 1;
+  }
+
+  /** Roads whose far end may sit on a cut or embankment (site access roads). */
+  private freeEnds = new Set<number>();
+  private freeStarts = new Set<number>();
+
+  /** Drivable junction pads (fill the corners where roads meet). */
+  private padSurf: { x: number; z: number; y: number }[] = [];
+  static readonly PAD_R = 11;
+
+  /** Per road: whether its start / end meets another road's end. */
+  private endLinks: [boolean, boolean][] = [];
+
+  /** Undo the most recent add() (used when a candidate road is rejected). */
+  removeLast() {
+    const pi = this.paths.length - 1;
+    this.paths.pop();
+    this.classes.pop();
+    this.freeEnds.delete(pi);
+    this.freeStarts.delete(pi);
+    this.grid.clear();
+    this.paths.forEach((pts, p) => {
+      for (let i = 1; i < pts.length; i++) this.index({ ax: pts[i - 1].x, az: pts[i - 1].y, bx: pts[i].x, bz: pts[i].y, path: p, i: i - 1 });
+    });
+  }
+
+  /** How many samples of road `pi` (away from its ends) run alongside another road. */
+  overlap(pi: number): number {
+    const path = this.paths[pi];
+    let n = 0;
+    for (let i = 4; i < path.length - 4; i++) if (this.distanceExcept(path[i].x, path[i].y, pi) < this.outer(pi) + 2) n++;
+    return n;
+  }
+
+  /** Extra paved pads at T-junctions. */
+  readonly junctionPads: THREE.Vector2[] = [];
 
   private index(s: Seg) {
     const m = 12;
@@ -158,6 +256,8 @@ export class Roads {
     const MIN_DECK = WATER_LEVEL + 3.6;
     for (const path of this.paths) {
       const n = path.length;
+      const free = this.freeEnds.has(this.heights.length);
+      const freeStart = this.freeStarts.has(this.heights.length);
       const ground = path.map((p) => this.terrain.heightAt(p.x, p.y));
       const spans: { a: number; b: number }[] = [];
       for (let i = 0; i < n; i++) {
@@ -194,9 +294,9 @@ export class Roads {
       const pins = path.map((p) => this.joinHeight(p.x, p.y, this.heights.length));
       // Limit the grade in both directions; road ends stay on their plateaus.
       for (let it = 0; it < 4; it++) {
-        road[0] = ground[0];
-        road[n - 1] = ground[n - 1];
-        for (let i = 0; i < n; i++) if (pins[i] !== null) road[i] = pins[i]!;
+        if (!freeStart) road[0] = ground[0];
+        if (!free) road[n - 1] = ground[n - 1];
+        for (let i = 0; i < n; i++) if (pins[i] !== null && this.terrain.siteInfluence(path[i].x, path[i].y) <= 0.6) road[i] = pins[i]!;
         for (let i = 1; i < n; i++) {
           const g = MAX_GRADE * path[i].distanceTo(path[i - 1]);
           road[i] = Math.min(road[i - 1] + g, Math.max(road[i - 1] - g, road[i]));
@@ -209,24 +309,44 @@ export class Roads {
       }
       // Where a pad sits too high or low for the grade limit to reach in time,
       // the last stretch becomes a steeper approach ramp that meets the pad.
-      const onPad = path.map((p, i) => i === 0 || i === n - 1 || this.terrain.siteInfluence(p.x, p.y) > 0.6);
+      // Fixed points: site pads sit on the ground; where this road meets one
+      // already graded it takes that road's height (ends included); other
+      // ends sit on the ground.
+      const onPad = path.map(() => false);
       for (let i = 0; i < n; i++) {
-        if (onPad[i]) road[i] = ground[i];
-        else if (pins[i] !== null) {
-          road[i] = pins[i]!;
-          onPad[i] = true;
-        }
+        const end = (i === 0 && !freeStart) || (i === n - 1 && !free);
+        if (this.terrain.siteInfluence(path[i].x, path[i].y) > 0.6) road[i] = ground[i];
+        else if (pins[i] !== null) road[i] = pins[i]!;
+        else if (end) road[i] = ground[i];
+        else continue;
+        onPad[i] = true;
       }
       const STEEP = 0.3;
-      for (let it = 0; it < 2; it++) {
+      // Near a junction the road stays nearly level for ~30 m, so it doesn't
+      // climb away over the shoulder of the road it joins.
+      const cap = path.map(() => STEEP);
+      for (let i = 0; i < n; i++) {
+        if (pins[i] === null) continue;
+        let along = 0;
+        for (let k = i; k < n && along < 30; k++) {
+          cap[k] = Math.min(cap[k], 0.06);
+          if (k + 1 < n) along += path[k + 1].distanceTo(path[k]);
+        }
+        along = 0;
+        for (let k = i; k >= 0 && along < 30; k--) {
+          cap[k] = Math.min(cap[k], 0.06);
+          if (k > 0) along += path[k].distanceTo(path[k - 1]);
+        }
+      }
+      for (let it = 0; it < 3; it++) {
         for (let i = 1; i < n; i++) {
           if (onPad[i]) continue;
-          const g = STEEP * path[i].distanceTo(path[i - 1]);
+          const g = cap[i] * path[i].distanceTo(path[i - 1]);
           road[i] = Math.min(road[i - 1] + g, Math.max(road[i - 1] - g, road[i]));
         }
         for (let i = n - 2; i >= 0; i--) {
           if (onPad[i]) continue;
-          const g = STEEP * path[i].distanceTo(path[i + 1]);
+          const g = cap[i] * path[i].distanceTo(path[i + 1]);
           road[i] = Math.min(road[i + 1] + g, Math.max(road[i + 1] - g, road[i]));
         }
       }
@@ -238,7 +358,9 @@ export class Roads {
       for (const sp of spans) for (let k = sp.a; k <= sp.b; k++) road[k] = Math.max(road[k], MIN_DECK);
       // Anything carried well above the ground (valley crossings) becomes a
       // viaduct on piers rather than a tall earth embankment.
-      const raised = (k: number) => ground[k] < 1.4 || road[k] - ground[k] > 2.5;
+      // (Not right at a junction: there it stays on an embankment so the
+      // roads can meet on solid ground.)
+      const raised = (k: number) => ground[k] < 1.4 || (road[k] - ground[k] > 2.5 && cap[k] >= STEEP);
       const bridges: { a: number; b: number }[] = [];
       for (let i = 0; i < n; i++) {
         if (!raised(i)) continue;
@@ -253,6 +375,20 @@ export class Roads {
       this.spans.push(bridges);
     }
     this.cutAndFill();
+    // Junction pads: flat paved discs at the height of the roads meeting there.
+    this.padSurf = [];
+    for (const j of [...this.gates.map((g) => g.junction), ...this.junctionPads]) {
+      let y: number | null = null;
+      this.paths.forEach((p, pi) => {
+        if (y !== null) return;
+        if (p[0].distanceTo(j) < 1) y = this.heights[pi][0];
+        else if (p[p.length - 1].distanceTo(j) < 1) y = this.heights[pi][p.length - 1];
+      });
+      if (y !== null) this.padSurf.push({ x: j.x, z: j.y, y });
+    }
+    const ends = this.paths.flatMap((p) => [p[0], p[p.length - 1]]);
+    const linked = (q: THREE.Vector2, self: number) => ends.some((e, k) => Math.floor(k / 2) !== self && e.distanceTo(q) < 1);
+    this.endLinks = this.paths.map((p, pi) => [linked(p[0], pi), linked(p[p.length - 1], pi)]);
   }
 
   /** Height of an already graded road (index < upto) at a point within 7 m of it, unless it is bridged there. */
@@ -269,7 +405,8 @@ export class Roads {
       const t = Math.max(0, Math.min(1, ((x - s.ax) * dx + (z - s.az) * dz) / l2));
       const d = Math.hypot(x - (s.ax + dx * t), z - (s.az + dz * t));
       if (d >= best) continue;
-      if (this.spans[s.path].some((sp) => s.i >= sp.a && s.i + 1 <= sp.b)) continue;
+      // Pass under bridges, except where the roads actually join.
+      if (d > 0.5 && this.spans[s.path].some((sp) => s.i >= sp.a && s.i + 1 <= sp.b)) continue;
       const h = this.heights[s.path];
       best = d;
       y = h[s.i] + (h[s.i + 1] - h[s.i]) * t;
@@ -348,22 +485,53 @@ export class Roads {
     if (!arr || !this.heights.length) return -Infinity;
     // Per road, the nearest segment decides (taking the max over neighbouring
     // segments would turn every slope into a staircase).
+    // Per road: on it if within its half-width of the centreline; the height is
+    // a smooth kernel-weighted average of nearby sample heights, which is
+    // continuous everywhere (picking a nearest segment leaves seams in bends).
     const near = _near;
     near.clear();
+    const R = 10;
+    const acc = (path: number, d: number, px: number, pz: number, h: number) => {
+      const dd = Math.hypot(x - px, z - pz);
+      let n = near.get(path);
+      if (!n) near.set(path, (n = { d: Infinity, w: 0, wh: 0 }));
+      if (d < n.d) n.d = d;
+      if (dd < R) {
+        const w = (1 - dd / R) * (1 - dd / R);
+        n.w += w;
+        n.wh += w * h;
+      }
+    };
     for (const s of arr) {
       const dx = s.bx - s.ax;
       const dz = s.bz - s.az;
       const l2 = dx * dx + dz * dz || 1;
-      const t = Math.max(0, Math.min(1, ((x - s.ax) * dx + (z - s.az) * dz) / l2));
-      const d = Math.hypot(x - (s.ax + dx * t), z - (s.az + dz * t));
-      if (d > this.outer(s.path)) continue;
-      const cur = near.get(s.path);
-      if (cur && cur.d <= d) continue;
+      const raw = ((x - s.ax) * dx + (z - s.az) * dz) / l2;
+      const last = s.i === this.paths[s.path].length - 2;
+      // A road's surface stops at its end (no flat disc beyond it, which at a
+      // junction would sit above the road you arrive on).
+      // Ends that meet another road reach a little further, closing gaps on
+      // the outside of a bend at the joint.
+      const len0 = Math.sqrt(l2);
+      const links = this.endLinks[s.path];
+      const reachA = (links?.[0] ? 3 : 0.35) / len0;
+      const reachB = (links?.[1] ? 3 : 0.35) / len0;
+      const beyond = (s.i === 0 && raw < -reachA) || (last && raw > 1 + reachB);
+      const t = Math.max(0, Math.min(1, raw));
+      const d = beyond ? Infinity : Math.hypot(x - (s.ax + dx * t), z - (s.az + dz * t));
       const h = this.heights[s.path];
-      near.set(s.path, { d, y: h[s.i] + (h[s.i + 1] - h[s.i]) * t + 0.12 });
+      acc(s.path, d, s.ax, s.az, h[s.i]);
+      if (last) acc(s.path, Infinity, s.bx, s.bz, h[s.i + 1]);
     }
     let best = -Infinity;
-    for (const { y } of near.values()) if (y > best && y <= below) best = y;
+    near.forEach((n, path) => {
+      if (n.d > this.outer(path) || n.w <= 0) return;
+      const y = n.wh / n.w + 0.12;
+      if (y > best && y <= below) best = y;
+    });
+    if (best === -Infinity)
+      for (const pd of this.padSurf)
+        if (Math.hypot(x - pd.x, z - pd.z) < Roads.PAD_R && pd.y + 0.12 <= below) best = Math.max(best, pd.y + 0.12);
     return best;
   }
 
@@ -371,6 +539,7 @@ export class Roads {
   bridgeRail(p: THREE.Vector3): boolean {
     // Where another road joins, its lane is open.
     if (this.surfaceAt(p.x, p.z, p.y + 1.6) > p.y - 2.2) return false;
+    if (this.padSurf.some((pd) => Math.hypot(pd.x - p.x, pd.z - p.z) < Roads.PAD_R + 4)) return false;
     for (const d of this.decks) {
       const dx = d.x1 - d.x0;
       const dz = d.z1 - d.z0;
@@ -429,9 +598,20 @@ export class Roads {
       link(u, v, len);
       link(v, u, len);
     }
-    const src = key(ax, az);
-    const dst = key(bx, bz);
-    if (!adj.has(src) || !adj.has(dst)) return null;
+    // Snap each end to the nearest road end (a site's access road ends inside it).
+    const snap = (x: number, z: number) => {
+      let best: string | null = null;
+      let bd = 260;
+      for (const p of this.paths)
+        for (const q of [p[0], p[p.length - 1]]) {
+          const d = Math.hypot(q.x - x, q.y - z);
+          if (d < bd) (bd = d), (best = key(q.x, q.y));
+        }
+      return best;
+    };
+    const src = snap(ax, az);
+    const dst = snap(bx, bz);
+    if (!src || !dst || !adj.has(src) || !adj.has(dst)) return null;
     const dist = new Map<string, number>([[src, 0]]);
     const open = new Set([src]);
     while (open.size) {
@@ -463,14 +643,16 @@ export class Roads {
     const key = `${Math.round(x)},${Math.round(z)}`;
     const cached = this.stops.get(key);
     if (cached) return cached;
-    const want = Math.max(28, Math.min(60, radius * 0.55));
-    let best: { pi: number; i: number; err: number } | null = null;
-    this.paths.forEach((path, pi) =>
-      path.forEach((q, i) => {
-        const err = Math.abs(Math.hypot(q.x - x, q.y - z) - want);
-        if (err < 12 && (!best || err < best.err)) best = { pi, i, err };
-      }),
-    );
+    // The road end nearest the site centre is its access road's motor-pool end;
+    // the stop is a few samples out from it, still inside the site.
+    void radius;
+    let best: { pi: number; i: number; d: number } | null = null;
+    this.paths.forEach((path, pi) => {
+      for (const i of [0, path.length - 1]) {
+        const d = Math.hypot(path[i].x - x, path[i].y - z);
+        if (d < 260 && (!best || d < best.d)) best = { pi, i: i === 0 ? Math.min(3, path.length - 1) : Math.max(0, path.length - 4), d };
+      }
+    });
     if (!best) return null;
     const { pi, i } = best as { pi: number; i: number };
     const path = this.paths[pi];
@@ -519,6 +701,27 @@ export class Roads {
     const shoulderMat = new THREE.MeshLambertMaterial({ vertexColors: true, map: gravelTexture(), polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
     const gravel = new THREE.Color(0x8a8172);
     const verge = new THREE.Color(0x6f6650);
+    // Paved junction pads where roads meet outside the gates.
+    const padMat = new THREE.MeshLambertMaterial({ map: textures.secondary, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -3 });
+    const seen = new Set<string>();
+    for (const jp of [...this.gates.map((g) => g.junction), ...this.junctionPads]) {
+      const g = { junction: jp };
+      const padY = this.padSurf.find((pd) => Math.hypot(pd.x - jp.x, pd.z - jp.y) < 1)?.y ?? -Infinity;
+      const k = `${Math.round(g.junction.x)},${Math.round(g.junction.y)}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const geo = new THREE.CircleGeometry(Roads.PAD_R, 28).rotateX(-Math.PI / 2);
+      const p = geo.getAttribute('position') as THREE.BufferAttribute;
+      for (let v = 0; v < p.count; v++) {
+        const x = g.junction.x + p.getX(v);
+        const z = g.junction.y + p.getZ(v);
+        p.setXYZ(v, x, Math.max(this.terrain.heightAt(x, z), padY) + 0.09, z);
+      }
+      geo.computeVertexNormals();
+      const m = new THREE.Mesh(geo, padMat);
+      m.receiveShadow = true;
+      this.group.add(m);
+    }
     this.paths.forEach((path, pi) => {
       const cls = this.classes[pi];
       const { hw, shoulder: sh } = ROAD_SPEC[cls];
@@ -654,11 +857,13 @@ export class Roads {
         parts.push(g);
       };
       place(new THREE.BoxGeometry(len, 0.8, deckW), 0, -0.35, 0);
-      // Parapets with a kerb inside them.
-      for (const sd of [1, -1]) {
-        place(new THREE.BoxGeometry(len, 0.95, 0.3), 0, 0.5, sd * (half + 0.25));
-        place(new THREE.BoxGeometry(len, 0.18, 0.6), 0, 0.12, sd * (half - 0.15));
-      }
+      // Parapets with a kerb inside them (left open where roads meet).
+      const atPad = this.padSurf.some((pd) => Math.hypot(pd.x - cx, pd.z - cz) < Roads.PAD_R + 6);
+      if (!atPad)
+        for (const sd of [1, -1]) {
+          place(new THREE.BoxGeometry(len, 0.95, 0.3), 0, 0.5, sd * (half + 0.25));
+          place(new THREE.BoxGeometry(len, 0.18, 0.6), 0, 0.12, sd * (half - 0.15));
+        }
       // Girder under the deck edges.
       for (const sd of [1, -1]) place(new THREE.BoxGeometry(len, 1.2, 0.5), 0, -1.3, sd * (half - 1.2));
       if ((i - a) % 3 === 1) {

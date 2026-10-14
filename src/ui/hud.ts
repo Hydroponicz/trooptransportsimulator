@@ -142,7 +142,7 @@ export class Hud {
       const ground = ct.mode === 'ground';
       let obj = '';
       if (ground && game.mode !== 'drive') {
-        obj = `Road job: get in your Humvee [G]${game.humvee.pos.distanceTo(pp) > 140 ? ' (it is parked elsewhere — check the map)' : ''}.`;
+        obj = `Road job: get in your Humvee [G]${!game.vehiclesTogether() ? ' (it is parked elsewhere — check the map)' : ''}.`;
       } else if (!ground && game.mode === 'drive' && (m.phase === 'pickup' || m.phase === 'transit')) {
         obj = `Helicopter job: drive back to the helicopter and press [G] to switch. The Humvee can't carry this load.`;
       } else if (ground && m.phase === 'pickup') {

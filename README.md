@@ -146,21 +146,32 @@ front so battles happen on sensible terrain. Places include:
     church, and farmland, barns and silos around them.
 
 Roads link everything, and supply convoys drive them in their own lanes.
-There are three kinds:
+The network is laid out like a real one:
 
-- **Main supply routes** (MSRs) run from the main base to each FOB. They are
-  two-lane asphalt with lane markings, steel lattice power lines, and
+- Every base, FOB and outpost faces its connections, with a gated entry
+  control point (guard towers, T-walls and barriers). One access road runs
+  in from the gate to the motor pool. Bigger sites can have a back gate,
+  with a main street through the site joining the two.
+- Supply routes meet at a paved junction outside each gate. They branch off
+  one another at T-junctions, like a tree, instead of all fanning out of the
+  base.
+
+There are three kinds of road:
+
+- **Main supply routes** (MSRs) run between the main base and the FOBs. They
+  are two-lane asphalt with lane markings, steel lattice power lines, and
   streetlights near the bases.
-- **Alternate supply routes** run from FOBs to outposts. They are worn,
+- **Alternate supply routes** run out to the outposts. They are worn,
   patched asphalt with wooden power poles.
 - **Gravel tracks** lead to the towns.
 
-All roads have gravel shoulders and reflector posts. Chain-link fences with
-barbed wire line the approaches to bases, and green route signs give the
-destination and distance as you leave each site. Guard rails, which are
-solid to vehicles, run along embankments and the outside of sharp curves.
-Near the front there are checkpoints of jersey barriers and HESCO walls,
-with burned-out vehicles pushed off the road.
+All roads have gravel shoulders and reflector posts. Green route signs give
+the destination and distance at each junction. Guard rails, which are solid
+to vehicles, run along embankments and the outside of sharp curves. Power
+lines span rivers from tall towers on either bank. Now and then a fenced
+industrial yard sits beside a road, holding containers, fuel tanks, sheds
+and trucks. Near the front there are checkpoints of jersey barriers and
+HESCO walls, with burned-out vehicles pushed off the road.
 
 Roads are graded like real ones: they cut through hills and run on
 embankments. Where they cross a river or a deep valley they go onto bridges

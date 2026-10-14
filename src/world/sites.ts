@@ -173,7 +173,7 @@ export function buildSite(site: Site, props: Props, terrain: Terrain, rng: RNG, 
     for (let i = 0; i < 10; i++)
       L.put('container', 110 + (i % 2) * 7, -60 + Math.floor(i / 2) * 6, Math.PI / 2, 1, rng.pick(CONTAINER_COLORS));
     for (let i = 0; i < 6; i++) L.put('crates', -130 + rng.range(-10, 10), -40 + rng.range(-12, 12), rng.range(0, 3));
-    L.ring('hesco', 165, 4.4, Math.PI / 2, 22);
+    L.ring('hesco', 165, 4.4);
     for (const a of [0.6, 2.4, 3.9, 5.5]) L.put('tower', Math.cos(a) * 157, Math.sin(a) * 157);
     decor.windsocks.push(windsock(L.vec(118, -18)));
     decor.windsocks.push(flag(L.vec(30, -50)));
@@ -193,7 +193,7 @@ export function buildSite(site: Site, props: Props, terrain: Terrain, rng: RNG, 
       L.put('container', -78 + (i % 3) * 7, -30 + Math.floor(i / 3) * 4, Math.PI / 2, 1, rng.pick(CONTAINER_COLORS));
     const H = 100;
     L.wall('hesco', -H, -H, H, -H, 4.4);
-    L.wall('hesco', H, -H, H, H, 4.4, 0.5, 18);
+    L.wall('hesco', H, -H, H, H, 4.4);
     L.wall('hesco', H, H, -H, H, 4.4);
     L.wall('hesco', -H, H, -H, -H, 4.4);
     for (const [x, z] of [[-H + 4, -H + 4], [H - 4, -H + 4], [H - 4, H - 4], [-H + 4, H - 4]]) L.put('tower', x, z);
@@ -201,7 +201,7 @@ export function buildSite(site: Site, props: Props, terrain: Terrain, rng: RNG, 
     decor.windsocks.push(flag(L.vec(36, 40)));
   } else if (site.kind === 'cop') {
     addPad(0, 0, 'H');
-    L.ring('hesco', 56, 4.4, -Math.PI / 2, 12);
+    L.ring('hesco', 56, 4.4);
     L.put('container', -20, 42, 0, 1, rng.pick(CONTAINER_COLORS));
     L.put('container', -12, 44, 0.1, 1, rng.pick(CONTAINER_COLORS));
     L.put('net', 22, 40);

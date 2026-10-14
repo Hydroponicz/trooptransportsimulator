@@ -282,13 +282,21 @@ export class Game {
   }
 
   /** G: hop between the helicopter and the Humvee. */
+  /** Close enough to swap vehicles: within 140 m, or both inside the same base. */
+  vehiclesTogether(): boolean {
+    const a = this.heli.fm.pos;
+    const b = this.humvee.pos;
+    if (a.distanceTo(b) < 140) return true;
+    return this.world.sites.some((s) => s.kind !== 'lz' && Math.hypot(a.x - s.x, a.z - s.z) < s.radius + 20 && Math.hypot(b.x - s.x, b.z - s.z) < s.radius + 20);
+  }
+
   private switchVehicle() {
     const h = this.heli;
     const v = this.humvee;
     if (this.mode === 'fly') {
       if (!h.onGround || h.fm.groundSpeed > 1) return this.toast('Land first to get out of the helicopter', 'bad');
       const d = h.fm.pos.distanceTo(v.pos);
-      if (d > 140) return this.toast(`Your Humvee is ${Math.round(d)} m away${this.siteNameNear(v.pos)}`, 'bad');
+      if (!this.vehiclesTogether()) return this.toast(`Your Humvee is ${Math.round(d)} m away${this.siteNameNear(v.pos)}`, 'bad');
       this.mode = 'drive';
       this.input.collective = 0;
       h.fm.input.collective = 0;
@@ -298,7 +306,7 @@ export class Game {
     } else {
       if (v.groundSpeed > 2) return this.toast('Stop the vehicle first', 'bad');
       const d = v.pos.distanceTo(h.fm.pos);
-      if (d > 140) return this.toast(`Drive back to your helicopter (${Math.round(d)} m)`, 'bad');
+      if (!this.vehiclesTogether()) return this.toast(`Drive back to your helicopter (${Math.round(d)} m)`, 'bad');
       this.mode = 'fly';
       v.input = { throttle: 0, brake: 0, steer: 0, handbrake: true };
       v.doorsOpen = false;
@@ -781,7 +789,7 @@ export class Game {
     if (!p && fm.contacts >= 3 && fm.rpm > 0.97 && fm.input.collective < 0.3 && m && m.phase === 'transit') {
       p = h.rampT > 0.03 ? 'Press <kbd>R</kbd> to raise the ramp' : 'Raise collective <kbd>Shift</kbd> to lift off';
     }
-    if (!p && m && m.c.mode === 'ground' && fm.contacts >= 3) p = this.humvee.pos.distanceTo(fm.pos) < 140 ? 'Road job: press <kbd>G</kbd> to get in your Humvee' : 'Road job: your Humvee is parked elsewhere';
+    if (!p && m && m.c.mode === 'ground' && fm.contacts >= 3) p = this.vehiclesTogether() ? 'Road job: press <kbd>G</kbd> to get in your Humvee' : 'Road job: your Humvee is parked elsewhere';
     if (!p && !fm.engineOn && fm.rpm > 0.05 && fm.contacts >= 3 && this.currentSite && this.currentSite.kind !== 'lz')
       p = `Press <kbd>Tab</kbd> for the ${this.currentSite.name} terminal`;
     this.hud.setPrompt(p);
@@ -792,7 +800,7 @@ export class Game {
     const m = this.missions.active;
     if (v.flipped || v.stalled) return 'Press <kbd>T</kbd> to recover the vehicle';
     if (m && m.c.mode === 'air' && m.phase !== 'complete' && m.phase !== 'failed') {
-      if (v.pos.distanceTo(this.heli.fm.pos) < 140 && v.groundSpeed < 0.5) return 'This is a helicopter job — press <kbd>G</kbd> to get back in the helicopter';
+      if (this.vehiclesTogether() && v.groundSpeed < 0.5) return 'This is a helicopter job — press <kbd>G</kbd> to get back in the helicopter';
       return 'Your active job needs the helicopter (🚁 AIR)';
     }
     if (m && m.c.mode === 'ground') {
@@ -812,7 +820,7 @@ export class Game {
         if (v.rampDown && v.groundSpeed > 3) return 'Rear doors are open — <kbd>R</kbd> to close them';
       } else if (m.phase === 'dropoff') return 'Unloading — hold position';
     }
-    if (v.groundSpeed < 0.5 && this.heli.onGround && v.pos.distanceTo(this.heli.fm.pos) < 140) return 'Press <kbd>G</kbd> to get back in the helicopter';
+    if (v.groundSpeed < 0.5 && this.heli.onGround && this.vehiclesTogether()) return 'Press <kbd>G</kbd> to get back in the helicopter';
     const site = this.siteUnderPlayer();
     if (site && site.kind !== 'lz' && v.groundSpeed < 0.5) return `Press <kbd>Tab</kbd> for the ${site.name} terminal`;
     return '';

@@ -3,7 +3,7 @@ import { Noise2D, RNG } from '../util/noise';
 import { ColliderSet } from './colliders';
 import { Frontline } from './frontline';
 import { Props } from './props';
-import { Roads } from './roads';
+import { Roads, type RoadClass } from './roads';
 import { buildRoadside } from './roadside';
 import { buildSite, type Site, type SiteKind, type SiteDecor } from './sites';
 import { PLAY_HALF, Terrain } from './terrain';
@@ -187,6 +187,9 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
   const colliders = new ColliderSet();
   const props = new Props(colliders);
   const decor: SiteDecor = { group: new THREE.Group(), windsocks: [] };
+  // Plan the road network before building the sites, so each site can be
+  // turned to face its connections with a proper gate.
+  const plan = planNetwork(sites, towns, terrain);
   for (const s of sites) buildSite(s, props, terrain, rng.fork(), decor);
   for (const t of towns) buildTown(t, props, terrain, rng.fork());
 
@@ -228,31 +231,139 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
 
   onProgress?.('Grading roads');
   const roads = new Roads(terrain);
-  const fobs = sites.filter((s) => s.kind === 'fob');
-  const cops = sites.filter((s) => s.kind === 'cop');
-  for (const f of fobs) roads.add(base.x, base.z, f.x, f.z, rng, 'main');
-  for (const c of cops) {
-    const f = fobs.reduce((a, b) => (Math.hypot(a.x - c.x, a.z - c.z) < Math.hypot(b.x - c.x, b.z - c.z) ? a : b));
-    roads.add(f.x, f.z, c.x, c.z, rng, 'secondary');
+  const nearSiteXZ = (x: number, z: number, m: number) => sites.some((st) => Math.hypot(st.x - x, st.z - z) < st.radius + m);
+  // Access roads: from inside each site out through its gate to a junction.
+  const stubs = new Set<number>();
+  for (const g of plan.gates) {
+    roads.add(g.inner.x, g.inner.y, g.junction.x, g.junction.y, rng, g.site.kind === 'cop' ? 'secondary' : 'main', { straight: true, freeEnd: true });
+    stubs.add(roads.paths.length - 1);
+    roads.gates.push({ x: g.gate.x, z: g.gate.y, dx: g.dir.x, dz: g.dir.y, junction: g.junction.clone(), site: g.site.name });
   }
-  // Every town gets a road: rear villages to the nearest friendly hub, contested
-  // towns to the nearest outpost, enemy villages to the nearest enemy-side town.
-  const hubs = [base, ...fobs, ...cops];
+  // Sites with a front and back gate: an internal road joins the two motor pools.
+  for (const site of sites) {
+    const two = plan.gates.filter((g) => g.site === site);
+    if (two.length === 2) {
+      roads.add(two[0].inner.x, two[0].inner.y, two[1].inner.x, two[1].inner.y, rng, site.kind === 'cop' ? 'secondary' : 'main', { straight: true });
+      stubs.add(roads.paths.length - 1);
+    }
+  }
+  // Join a new road onto the network: from the parent's junction, or with a
+  // T-junction off an existing road when that is clearly closer, so roads
+  // branch like a real network instead of running side by side.
+  const connect = (from: THREE.Vector2 | null, fromDir: THREE.Vector2 | undefined, to: THREE.Vector2, toDir: THREE.Vector2 | undefined, cls: RoadClass) => {
+    let best: { pi: number; k: number; d: number } | null = null;
+    roads.paths.forEach((path, pi) => {
+      if (stubs.has(pi) || path.length < 12) return;
+      for (let k = 6; k < path.length - 6; k++) {
+        const dd = Math.hypot(path[k].x - to.x, path[k].y - to.y);
+        if (best && dd >= best.d) continue;
+        if (nearSiteXZ(path[k].x, path[k].y, 30)) continue;
+        // Not on a stretch that will end up a bridge: no water nearby along
+        // the host or the first stretch of the branch, and fairly even ground.
+        const y = terrain.heightAt(path[k].x, path[k].y);
+        const ya = terrain.heightAt(path[k - 6].x, path[k - 6].y);
+        const yb = terrain.heightAt(path[k + 6].x, path[k + 6].y);
+        if (y < 2.5 || Math.abs(y - (ya + yb) / 2) > 3) continue;
+        let wet = false;
+        let lo = Infinity;
+        let hi = -Infinity;
+        for (let q = Math.max(0, k - 10); q <= Math.min(path.length - 1, k + 10); q++) {
+          const g = terrain.heightAt(path[q].x, path[q].y);
+          if (g < 2.5) wet = true;
+          lo = Math.min(lo, g);
+          hi = Math.max(hi, g);
+        }
+        for (let m = 10; m <= 80 && !wet; m += 10) {
+          const bx = path[k].x + ((to.x - path[k].x) / (dd || 1)) * m;
+          const bz = path[k].y + ((to.y - path[k].y) / (dd || 1)) * m;
+          if (terrain.heightAt(bx, bz) < 2.5) wet = true;
+        }
+        if (wet || hi - lo > 8) continue;
+        // The branch must leave at a real angle, not run alongside the host.
+        const tx = path[k + 1].x - path[k - 1].x;
+        const tz = path[k + 1].y - path[k - 1].y;
+        const tl = Math.hypot(tx, tz) || 1;
+        if (Math.abs((tx * (to.x - path[k].x) + tz * (to.y - path[k].y)) / (tl * (dd || 1))) > 0.75) continue;
+        best = { pi, k, d: dd };
+      }
+    });
+    const direct = from ? from.distanceTo(to) : Infinity;
+    const b = best as { pi: number; k: number; d: number } | null;
+    // Would the new road leave its junction alongside a road already leaving it?
+    // Then it must branch off that road rather than run next to it.
+    let sibling = false;
+    if (from) {
+      const want = new THREE.Vector2().subVectors(to, from).normalize();
+      for (const [pi, path] of roads.paths.entries()) {
+        if (stubs.has(pi) || path.length < 6) continue;
+        const atStart = path[0].distanceTo(from) < 1;
+        const atEnd = path[path.length - 1].distanceTo(from) < 1;
+        if (!atStart && !atEnd) continue;
+        const a = atStart ? path[0] : path[path.length - 1];
+        const c = atStart ? path[5] : path[path.length - 6];
+        if (new THREE.Vector2().subVectors(c, a).normalize().dot(want) > 0.8) sibling = true;
+      }
+    }
+    if (b && (b.d < direct * 0.95 || (sibling && b.d < direct * 1.3))) {
+      const host = roads.paths[b.pi];
+      const P = host[b.k].clone();
+      const t = new THREE.Vector2().subVectors(host[b.k + 1], host[b.k - 1]).normalize();
+      const away = new THREE.Vector2().subVectors(to, P);
+      // Leave square to the host road, on the side the destination is.
+      const n = new THREE.Vector2(-t.y, t.x);
+      const leave = n.dot(away) >= 0 ? n : n.clone().negate();
+      roads.split(b.pi, b.k);
+      roads.junctionPads.push(P);
+      layClear(P, leave, to, toDir, cls, true);
+    } else if (from) {
+      layClear(from, fromDir, to, toDir, cls, false);
+    }
+  };
+  // Lay a road, re-rolling its curve (and swinging its departure) if it would
+  // run alongside an existing road; keep the attempt with the least overlap.
+  function layClear(a: THREE.Vector2, leaveA: THREE.Vector2 | undefined, b: THREE.Vector2, leaveB: THREE.Vector2 | undefined, cls: RoadClass, freeStart: boolean) {
+    let bestTry = -1;
+    let bestOverlap = Infinity;
+    for (let t = 0; t < 6; t++) {
+      const swing = t === 0 ? 0 : (t % 2 ? 1 : -1) * 0.35 * Math.ceil(t / 2);
+      const la = leaveA ? leaveA.clone().rotateAround(new THREE.Vector2(), swing) : undefined;
+      const seed = rng.int(0, 1e9);
+      roads.add(a.x, a.y, b.x, b.y, new RNG(seed), cls, { leaveA: la, leaveB, freeStart });
+      const o = roads.overlap(roads.paths.length - 1);
+      roads.removeLast();
+      if (o < bestOverlap) {
+        bestOverlap = o;
+        bestTry = seed * 10 + t;
+      }
+      if (o === 0) break;
+    }
+    const t = bestTry % 10;
+    const seed = Math.floor(bestTry / 10);
+    const swing = t === 0 ? 0 : (t % 2 ? 1 : -1) * 0.35 * Math.ceil(t / 2);
+    roads.add(a.x, a.y, b.x, b.y, new RNG(seed), cls, { leaveA: leaveA ? leaveA.clone().rotateAround(new THREE.Vector2(), swing) : undefined, leaveB, freeStart });
+  }
+  for (const r of plan.links) {
+    const cls = r.a.site.kind === 'cop' || r.b.site.kind === 'cop' ? 'secondary' : 'main';
+    connect(r.a.junction, r.a.dir, r.b.junction, r.b.dir, cls);
+  }
+  // Every town gets a track: rear villages and contested towns join the
+  // nearest road or hub junction, enemy villages the nearest enemy-side town.
   const dist = (a: { x: number; z: number }, b: { x: number; z: number }) => Math.hypot(a.x - b.x, a.z - b.z);
   for (const t of towns) {
-    let from: { x: number; z: number } | null = null;
-    if (t.enemySide && !t.contested) {
+    const hub = plan.townLinks.get(t);
+    const edge = (o: { x: number; z: number }) => {
+      const d = Math.hypot(o.x - t.x, o.z - t.z) || 1;
+      return new THREE.Vector2(t.x + ((o.x - t.x) / d) * t.r * 0.85, t.z + ((o.z - t.z) / d) * t.r * 0.85);
+    };
+    if (hub) {
+      connect(hub.junction, hub.dir, edge({ x: hub.junction.x, z: hub.junction.y }), undefined, 'track');
+    } else if (t.enemySide && !t.contested) {
       const others = towns.filter((o) => o !== t && (o.contested || o.enemySide));
-      if (others.length) from = others.reduce((a, b) => (dist(a, t) < dist(b, t) ? a : b));
-    } else {
-      from = hubs.reduce((a, b) => (dist(a, t) < dist(b, t) ? a : b));
-    }
-    if (from) {
-      // Stop at the edge of town; the town's own streets take it from there.
-      const d = Math.hypot(from.x - t.x, from.z - t.z) || 1;
-      const ex = t.x + ((from.x - t.x) / d) * t.r * 0.85;
-      const ez = t.z + ((from.z - t.z) / d) * t.r * 0.85;
-      roads.add(from.x, from.z, ex, ez, rng, 'track');
+      if (!others.length) continue;
+      const o = others.reduce((a, b) => (dist(a, t) < dist(b, t) ? a : b));
+      const from = new THREE.Vector2(o.x + ((t.x - o.x) / (dist(o, t) || 1)) * o.r * 0.85, o.z + ((t.z - o.z) / (dist(o, t) || 1)) * o.r * 0.85);
+      const e = edge(o);
+      roads.add(from.x, from.y, e.x, e.y, rng, 'track');
     }
   }
   roads.grade();
@@ -270,7 +381,9 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
   group.add(roads.build(colliders));
 
   // Power lines, guard rails, fences, lights, signs and checkpoints.
-  group.add(buildRoadside(roads, terrain, sites, towns, front, props, rng.fork()));
+  const roadside = buildRoadside(roads, terrain, sites, towns, front, props, rng.fork());
+  group.add(roadside);
+  const yards = roadside.userData.yards as { x: number; z: number; r: number }[];
 
   // Rock outcrops and hay bales.
   for (let i = 0; i < 900; i++) {
@@ -302,6 +415,7 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
   const blocked = (x: number, z: number) =>
     nearSite(x, z, 28) ||
     roads.distance(x, z) < 14 ||
+    yards.some((q) => Math.hypot(q.x - x, q.z - z) < q.r) ||
     inFarmland(x, z) ||
     enemies.some((e) => Math.abs(e.pos.x - x) < 14 && Math.abs(e.pos.z - z) < 14);
   const vegetation = new Vegetation(terrain, n3, rng.fork(), blocked);
@@ -324,4 +438,121 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
     windsocks: decor.windsocks,
     group,
   };
+}
+
+interface Gate {
+  site: Site;
+  /** Side of the site: +1 = local +X (main gate), −1 = local −X. */
+  side: number;
+  /** Inner end of the access road (the motor pool). */
+  inner: THREE.Vector2;
+  /** Where the access road crosses the perimeter. */
+  gate: THREE.Vector2;
+  /** Junction outside the gate where supply routes meet. */
+  junction: THREE.Vector2;
+  /** Outward direction. */
+  dir: THREE.Vector2;
+}
+
+/** Local layout of each site's access road: along local X at lane z, from `inner` out past the wall at `wall`. */
+const ACCESS: Record<'base' | 'fob' | 'cop', { inner: number; lane: number; wall: number; out: number }> = {
+  base: { inner: 92, lane: 20, wall: 165, out: 130 },
+  fob: { inner: 60, lane: -22, wall: 100, out: 120 },
+  cop: { inner: 26, lane: -20, wall: 56, out: 100 },
+};
+
+/**
+ * Lay out the road network like a real one: supply routes form a tree
+ * between bases and FOBs (each joins the nearest site already connected),
+ * outposts hang off the nearest hub, and every site is turned so its gate
+ * faces its connections. Roads meet at a junction outside the gate rather
+ * than all converging on the middle of the base.
+ */
+function planNetwork(sites: Site[], towns: Town[], terrain: Terrain) {
+  const base = sites.find((s) => s.kind === 'base')!;
+  const fobs = sites.filter((s) => s.kind === 'fob');
+  const cops = sites.filter((s) => s.kind === 'cop');
+  const d = (a: { x: number; z: number }, b: { x: number; z: number }) => Math.hypot(a.x - b.x, a.z - b.z);
+  const edges: [Site, Site][] = [];
+  // Main supply routes: a spanning tree grown from the main base.
+  const net: Site[] = [base];
+  const left = [...fobs];
+  while (left.length) {
+    let best: [Site, Site, number] | null = null;
+    for (const f of left) for (const n of net) if (!best || d(f, n) < best[2]) best = [n, f, d(f, n)];
+    const [n, f] = best!;
+    edges.push([n, f]);
+    net.push(f);
+    left.splice(left.indexOf(f), 1);
+  }
+  // Outposts, nearest first, to the nearest connected base, FOB or outpost.
+  for (const c of [...cops].sort((a, b) => d(a, base) - d(b, base))) {
+    const n = net.reduce((a, b) => (d(a, c) < d(b, c) ? a : b));
+    edges.push([n, c]);
+    net.push(c);
+  }
+  // Friendly and contested towns get a track from the nearest hub.
+  const townHub = new Map<Town, Site>();
+  for (const t of towns) {
+    if (t.enemySide && !t.contested) continue;
+    townHub.set(t, net.reduce((a, b) => (d(a, t) < d(b, t) ? a : b)));
+  }
+  // Turn each site to face its connections.
+  const dirs = new Map<Site, THREE.Vector2[]>();
+  const push = (s: Site, to: { x: number; z: number }) => {
+    const v = new THREE.Vector2(to.x - s.x, to.z - s.z).normalize();
+    if (!dirs.has(s)) dirs.set(s, []);
+    dirs.get(s)!.push(v);
+  };
+  for (const [a, b] of edges) {
+    push(a, b);
+    push(b, a);
+  }
+  for (const [t, h] of townHub) push(h, t);
+  for (const s of net) {
+    const ds = dirs.get(s);
+    if (!ds?.length) continue;
+    const m = ds.reduce((acc, v) => acc.add(v), new THREE.Vector2());
+    const main = m.length() > 0.35 * ds.length ? m.normalize() : ds[0];
+    s.rot = Math.atan2(-main.y, main.x);
+  }
+  // Gates: everything within ~100° of the main gate uses it; bases and FOBs
+  // get a back gate for connections on the far side.
+  const gates = new Map<string, Gate>();
+  const gateFor = (s: Site, toward: { x: number; z: number }): Gate => {
+    const ax = new THREE.Vector2(Math.cos(s.rot), -Math.sin(s.rot));
+    const v = new THREE.Vector2(toward.x - s.x, toward.z - s.z).normalize();
+    const side = v.dot(ax) > -0.17 ? 1 : -1;
+    const key = `${s.id}:${side}`;
+    let g = gates.get(key);
+    if (g) return g;
+    const A = ACCESS[s.kind as 'base' | 'fob' | 'cop'];
+    const loc = (lx: number) => {
+      const c = Math.cos(s.rot);
+      const sn = Math.sin(s.rot);
+      return new THREE.Vector2(s.x + lx * c + A.lane * sn, s.z - lx * sn + A.lane * c);
+    };
+    const dir = ax.clone().multiplyScalar(side);
+    // Push the junction further out when the site sits well above or below
+    // the land around it (so the access road can ramp down at a sane grade),
+    // and pull it in if it would land in water.
+    let out = A.out;
+    let junction = loc(side * (A.wall + out));
+    const tooSteep = () => Math.abs(terrain.heightAt(junction.x, junction.y) - s.y) > 0.14 * (A.wall + out - A.inner);
+    while (out < A.out + 250 && tooSteep()) {
+      out += 25;
+      junction = loc(side * (A.wall + out));
+    }
+    while (out > 30 && terrain.heightAt(junction.x, junction.y) < 1.5) {
+      out -= 20;
+      junction = loc(side * (A.wall + out));
+    }
+    g = { site: s, side, inner: loc(side * A.inner), gate: loc(side * A.wall), junction, dir };
+    gates.set(key, g);
+    return g;
+  };
+  const links = edges.map(([a, b]) => ({ a: gateFor(a, b), b: gateFor(b, a) }));
+  const townLinks = new Map<Town, Gate>();
+  for (const [t, h] of townHub) townLinks.set(t, gateFor(h, t));
+  return { gates: [...gates.values()], links, townLinks };
 }
