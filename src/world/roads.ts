@@ -379,7 +379,65 @@ export class Roads {
     return null;
   }
 
+  private colliders?: ColliderSet;
+  private stops = new Map<string, { road: THREE.Vector3; wait: THREE.Vector3; heading: number }>();
+
+  /**
+   * A roadside stop for ground vehicles at a site: a point on the road where it
+   * comes into the site, and a clear spot beside it where passengers and
+   * cargo wait. `heading` points along the road, out of the site.
+   */
+  curbside(x: number, z: number, radius: number): { road: THREE.Vector3; wait: THREE.Vector3; heading: number } | null {
+    const key = `${Math.round(x)},${Math.round(z)}`;
+    const cached = this.stops.get(key);
+    if (cached) return cached;
+    const want = Math.max(28, Math.min(60, radius * 0.55));
+    let best: { pi: number; i: number; err: number } | null = null;
+    this.paths.forEach((path, pi) =>
+      path.forEach((q, i) => {
+        const err = Math.abs(Math.hypot(q.x - x, q.y - z) - want);
+        if (err < 12 && (!best || err < best.err)) best = { pi, i, err };
+      }),
+    );
+    if (!best) return null;
+    const { pi, i } = best as { pi: number; i: number };
+    const path = this.paths[pi];
+    const q = path[i];
+    const a = path[Math.max(0, i - 1)];
+    const b = path[Math.min(path.length - 1, i + 1)];
+    let tx = b.x - a.x;
+    let tz = b.y - a.y;
+    const tl = Math.hypot(tx, tz) || 1;
+    tx /= tl;
+    tz /= tl;
+    // Point the heading away from the site centre.
+    if (tx * (q.x - x) + tz * (q.y - z) < 0) {
+      tx = -tx;
+      tz = -tz;
+    }
+    const roadY = this.heights[pi][i];
+    const road = new THREE.Vector3(q.x, roadY, q.y);
+    // Wait beside the road on whichever side is clear, a little toward the site.
+    let wait: THREE.Vector3 | null = null;
+    for (const off of [7, -7, 10, -10, 13, -13]) {
+      const w = new THREE.Vector3(q.x - tz * off - tx * 3, 0, q.y + tx * off - tz * 3);
+      w.y = this.terrain.heightAt(w.x, w.z);
+      let clear = this.distance(w.x, w.z) > 4.5;
+      for (const [dx, dz] of [[0, 0], [3, 0], [-3, 0], [0, 3], [0, -3]])
+        if (clear && this.colliders?.hit(new THREE.Vector3(w.x + dx, w.y + 1, w.z + dz), 1)) clear = false;
+      if (clear) {
+        wait = w;
+        break;
+      }
+    }
+    if (!wait) wait = new THREE.Vector3(q.x - tz * 7, this.terrain.heightAt(q.x - tz * 7, q.y + tx * 7), q.y + tx * 7);
+    const stop = { road, wait, heading: Math.atan2(tx, -tz) };
+    this.stops.set(key, stop);
+    return stop;
+  }
+
   build(colliders?: ColliderSet): THREE.Group {
+    this.colliders = colliders;
     const mat = new THREE.MeshLambertMaterial({
       vertexColors: true,
       polygonOffset: true,

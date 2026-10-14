@@ -257,6 +257,12 @@ export class Game {
   /** Motor pool spot at the main base. */
   parkHumvee() {
     const b = this.world.base;
+    // At the base's roadside stop, where road jobs load.
+    const stop = this.world.roads.curbside(b.x, b.z, b.radius);
+    if (stop) {
+      this.humvee.place(stop.road, stop.heading, this.groundEnv);
+      return;
+    }
     const lx = 10;
     const lz = 40;
     const at = new THREE.Vector3(b.x + lx * Math.cos(b.rot) + lz * Math.sin(b.rot), 0, b.z - lx * Math.sin(b.rot) + lz * Math.cos(b.rot));
@@ -784,20 +790,24 @@ export class Game {
     const v = this.humvee;
     const m = this.missions.active;
     if (v.flipped || v.stalled) return 'Press <kbd>T</kbd> to recover the vehicle';
+    if (m && m.c.mode === 'air' && m.phase !== 'complete' && m.phase !== 'failed') {
+      if (v.pos.distanceTo(this.heli.fm.pos) < 140 && v.groundSpeed < 0.5) return 'This is a helicopter job — press <kbd>G</kbd> to get back in the helicopter';
+      return 'Your active job needs the helicopter (🚁 AIR)';
+    }
     if (m && m.c.mode === 'ground') {
       const g = m.group;
       if (m.phase === 'pickup' && g) {
-        const w = m.c.from.waits[m.c.fromPad];
-        const d = Math.hypot(w.x - v.pos.x, w.z - v.pos.z);
-        if (d < 75) {
-          if (v.groundSpeed > 0.6) return 'Stop next to the passengers';
+        const d = v.rampEndWorld(new THREE.Vector3()).setY(0).distanceTo(new THREE.Vector3(m.pickupPos.x, 0, m.pickupPos.z));
+        if (d < 30) {
+          if (v.groundSpeed > 0.6) return 'Stop here next to the green smoke';
           if (!v.rampDown) return 'Press <kbd>R</kbd> to open the rear doors';
           if (g.aboard < g.total) return `Loading ${g.aboard}/${g.total} — hold position`;
-        }
+        } else if (d < 120) return `Pull up beside the green smoke (${Math.round(d)} m)`;
       } else if (m.phase === 'transit') {
         const d = Math.hypot(m.dropPos.x - v.pos.x, m.dropPos.z - v.pos.z);
-        if (d < 70 && v.groundSpeed > 0.6) return 'Stop by the smoke to unload';
-        if (d < 70 && !v.rampDown) return 'Press <kbd>R</kbd> to open the rear doors and unload';
+        if (d < 30 && v.groundSpeed > 0.6) return 'Stop by the smoke to unload';
+        if (d < 30 && !v.rampDown) return 'Press <kbd>R</kbd> to open the rear doors and unload';
+        if (d >= 30 && d < 120) return `Pull up beside the smoke (${Math.round(d)} m)`;
         if (v.rampDown && v.groundSpeed > 3) return 'Rear doors are open — <kbd>R</kbd> to close them';
       } else if (m.phase === 'dropoff') return 'Unloading — hold position';
     }

@@ -59,6 +59,8 @@ export class Terminal {
         g.missions.accept(c);
         g.audio.beepOk();
         this.close();
+        if (c.mode === 'air' && g.mode === 'drive') g.toast('Helicopter job — get back in the helicopter [G] to fly it', 'info');
+        else if (c.mode === 'ground' && g.mode === 'fly') g.toast('Road job — get in the Humvee [G] to drive it', 'info');
         return;
       }
     } else if (act === 'abandon') {
@@ -111,7 +113,10 @@ export class Terminal {
   }
 
   private contracts(): Contract[] {
-    return this.site ? this.game.missions.board(this.site, this.game.career.rank, this.game.time) : [];
+    if (!this.site) return [];
+    // Jobs for the vehicle you're in come first.
+    const mine = this.game.mode === 'drive' ? 'ground' : 'air';
+    return [...this.game.missions.board(this.site, this.game.career.rank, this.game.time)].sort((a, b) => Number(b.mode === mine) - Number(a.mode === mine));
   }
 
   render() {

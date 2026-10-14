@@ -143,9 +143,11 @@ export class Hud {
       let obj = '';
       if (ground && game.mode !== 'drive') {
         obj = `Road job: get in your Humvee [G]${game.humvee.pos.distanceTo(pp) > 140 ? ' (it is parked elsewhere — check the map)' : ''}.`;
+      } else if (!ground && game.mode === 'drive' && (m.phase === 'pickup' || m.phase === 'transit')) {
+        obj = `Helicopter job: drive back to the helicopter and press [G] to switch. The Humvee can't carry this load.`;
       } else if (ground && m.phase === 'pickup') {
         const g = m.group;
-        obj = g && g.aboard > 0 ? `Loading at ${ct.from.name}: ${g.aboard}/${g.total} aboard` : `Stop by the passengers at ${ct.from.name} and open the rear doors [R].`;
+        obj = g && g.aboard > 0 ? `Loading at ${ct.from.name}: ${g.aboard}/${g.total} aboard` : `Drive to the green smoke by the road at ${ct.from.name}, stop beside it and open the rear doors [R].`;
       } else if (ground && m.phase === 'transit') {
         obj = `Drive to ${ct.to.name} (${fmtDist(ct.route ?? dist)} by road). Stop by the yellow smoke, open the rear doors [R].`;
       } else if (m.phase === 'pickup') {

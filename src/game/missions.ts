@@ -90,6 +90,9 @@ export interface Contract {
   mode: 'air' | 'ground';
   /** Road distance for ground jobs. */
   route?: number;
+  /** Ground jobs: roadside spots where cargo waits and is dropped. */
+  pickupAt?: THREE.Vector3;
+  dropAt?: THREE.Vector3;
 }
 
 export type Phase = 'pickup' | 'transit' | 'dropoff' | 'complete' | 'failed';
@@ -137,15 +140,17 @@ export class Mission {
   get internal() {
     return this.c.type.kind !== 'sling';
   }
+  /** Where the passengers or cargo wait. */
   get pickupPos(): THREE.Vector3 {
+    if (this.c.pickupAt) return this.c.pickupAt;
     return this.internal ? this.c.from.waits[this.c.fromPad] : this.c.from.pads[this.c.fromPad];
   }
   get dropPos(): THREE.Vector3 {
-    return this.c.to.pads[this.c.toPad];
+    return this.c.dropAt ?? this.c.to.pads[this.c.toPad];
   }
   /** Where the player should currently be heading. */
   get target(): THREE.Vector3 {
-    return this.phase === 'pickup' ? this.c.from.pads[this.c.fromPad] : this.dropPos;
+    return this.phase === 'pickup' ? this.c.pickupAt ?? this.c.from.pads[this.c.fromPad] : this.dropPos;
   }
   get targetSite(): Site {
     return this.phase === 'pickup' ? this.c.from : this.c.to;
@@ -185,7 +190,13 @@ export class MissionSystem {
       if (this.active?.group === g) this.hooks.payloadChanged(g.unitMass);
       if (this.active?.group === g) {
         const n = g.aboard;
-        if (n === g.total) this.hooks.toast(`All ${noun(this.active.c.type, n)} aboard — raise the ramp [R] and fly to ${this.active.c.to.name}`, 'good');
+        if (n === g.total)
+          this.hooks.toast(
+            this.active.c.mode === 'ground'
+              ? `All ${noun(this.active.c.type, n)} aboard — close the doors [R] and drive to ${this.active.c.to.name}`
+              : `All ${noun(this.active.c.type, n)} aboard — raise the ramp [R] and fly to ${this.active.c.to.name}`,
+            'good',
+          );
         else if (n === 1 || n % 4 === 0) this.hooks.toast(`${n}/${g.total} ${noun(this.active.c.type, g.total)} aboard`);
       }
     };
@@ -273,6 +284,9 @@ export class MissionSystem {
         if (out.some((c) => c.mode === 'ground' && c.to === to && c.type === t)) continue;
         const route = this.roads.route(site.x, site.z, to.x, to.z);
         if (route === null || route < 700 || route > 8000) continue;
+        const a = this.roads.curbside(site.x, site.z, site.radius);
+        const b = this.roads.curbside(to.x, to.z, to.radius);
+        if (!a || !b) continue;
         const count = rng.int(t.min, t.max);
         const mass = count * t.unitMass;
         const risk = Math.max(siteRisk(site), siteRisk(to));
@@ -295,6 +309,8 @@ export class MissionSystem {
           xp: Math.round(pay / 45),
           mode: 'ground',
           route,
+          pickupAt: a.wait,
+          dropAt: b.wait,
         });
         made++;
       }
@@ -315,8 +331,23 @@ export class MissionSystem {
     const what = c.type.kind === 'sling' ? `one ${c.type.name.toLowerCase()}, ${(c.mass / 1000).toFixed(1)} tonnes external` : `${c.count} ${noun(c.type, c.count)}, ${(c.mass / 1000).toFixed(1)} tonnes`;
     this.hooks.radio(
       `${c.from.name} Ops`,
-      `${CALLSIGN}, tasking: ${what} at ${c.from.name}${c.from.pads.length > 1 ? ` pad ${c.fromPad + 1}` : ''}, for ${c.to.name}.${c.type.urgent ? ' Priority urgent.' : ''}${siteRisk(c.to) >= 2 ? ' Be advised, destination is hot.' : ''}`,
+      `${CALLSIGN}, tasking: ${what} at ${c.from.name}${c.mode === 'ground' ? ', roadside by the green smoke' : c.from.pads.length > 1 ? ` pad ${c.fromPad + 1}` : ''}, for ${c.to.name}${c.mode === 'ground' ? ' by road' : ''}.${c.type.urgent ? ' Priority urgent.' : ''}${siteRisk(c.to) >= 2 ? ' Be advised, destination is hot.' : ''}`,
     );
+  }
+
+  /** A smoke spot 6 m further from the road than a roadside point. */
+  private besideRoad(p: THREE.Vector3): THREE.Vector3 {
+    const out = this.tmp.copy(p);
+    for (let k = 0; k < 6 && this.roads.distance(out.x, out.z) < 13; k++) {
+      const e = 0.5;
+      const gx = this.roads.distance(out.x + e, out.z) - this.roads.distance(out.x - e, out.z);
+      const gz = this.roads.distance(out.x, out.z + e) - this.roads.distance(out.x, out.z - e);
+      const gl = Math.hypot(gx, gz) || 1;
+      out.x += (gx / gl) * 1.2;
+      out.z += (gz / gl) * 1.2;
+    }
+    out.y = this.terrain.heightAt(out.x, out.z) + 0.3;
+    return out;
   }
 
   abandon(silent = false) {
@@ -386,7 +417,7 @@ export class MissionSystem {
     m.elapsed += dt;
     const c = m.c;
     const hp = carrier.pos;
-    const dPickup = Math.hypot(hp.x - c.from.pads[c.fromPad].x, hp.z - c.from.pads[c.fromPad].z);
+    const dPickup = Math.hypot(hp.x - m.target.x, hp.z - m.target.z);
     const dDrop = Math.hypot(hp.x - m.dropPos.x, hp.z - m.dropPos.z);
 
     // Spawn the cargo when the player gets close enough to see it.
@@ -394,7 +425,7 @@ export class MissionSystem {
       m.spawned = true;
       const pad = c.from.pads[c.fromPad];
       if (m.internal) {
-        m.group = this.cargo.spawnWaiting(c.type.actor!, c.count, c.type.unitMass, c.from.waits[c.fromPad], pad);
+        m.group = this.cargo.spawnWaiting(c.type.actor!, c.count, c.type.unitMass, m.pickupPos, c.pickupAt ? this.roads.curbside(c.from.x, c.from.z, c.from.radius)?.road ?? pad : pad);
       } else {
         const load = new SlingLoad(c.type.sling!, c.mass);
         load.placeAt(pad, this.terrain, this.rng.range(0, Math.PI * 2));
@@ -412,19 +443,21 @@ export class MissionSystem {
       this.hooks.radio(
         c.to.name,
         hot
-          ? `${CALLSIGN}, LZ is HOT, taking fire from the east! Red smoke is out. Make it quick.`
-          : `${CALLSIGN}, ${c.to.name}. LZ is cold, yellow smoke is out. Cleared to land.`,
+          ? `${CALLSIGN}, ${c.mode === 'ground' ? 'we are' : 'LZ is HOT,'} taking fire from the east! Red smoke is out${c.mode === 'ground' ? ' by the road' : ''}. Make it quick.`
+          : c.mode === 'ground'
+            ? `${CALLSIGN}, ${c.to.name}. Yellow smoke is out by the road — pull up beside it.`
+            : `${CALLSIGN}, ${c.to.name}. LZ is cold, yellow smoke is out. Cleared to land.`,
       );
     }
     if (m.phase === 'pickup' && !m.pickupSmoke && dPickup < 1800) {
-      const sp = m.internal ? c.from.waits[c.fromPad] : c.from.pads[c.fromPad];
-      m.pickupSmoke = this.effects.addEmitter(this.tmp.copy(sp).add(new THREE.Vector3(m.internal ? 6 : 14, 0.3, 0)), 'green');
+      const sp = m.internal ? m.pickupPos : c.from.pads[c.fromPad];
+      m.pickupSmoke = this.effects.addEmitter(c.mode === 'ground' ? this.besideRoad(sp) : this.tmp.copy(sp).add(new THREE.Vector3(m.internal ? 6 : 14, 0.3, 0)), 'green');
     }
     if (m.phase !== 'pickup' && !m.dropSmoke && dDrop < 1800) {
       this.effects.removeEmitter(m.pickupSmoke);
       m.pickupSmoke = null;
       const hot = siteRisk(c.to) >= 2;
-      m.dropSmoke = this.effects.addEmitter(this.tmp.copy(m.dropPos).add(new THREE.Vector3(16, 0.3, 4)), hot ? 'red' : 'yellow');
+      m.dropSmoke = this.effects.addEmitter(c.mode === 'ground' ? this.besideRoad(m.dropPos) : this.tmp.copy(m.dropPos).add(new THREE.Vector3(16, 0.3, 4)), hot ? 'red' : 'yellow');
     }
 
     this.wear(m, carrier, dt);
@@ -433,11 +466,11 @@ export class MissionSystem {
     if (m.phase === 'pickup') {
       if (m.internal && m.group && rightVehicle) {
         const rampEnd = carrier.rampEndWorld(this.tmp);
-        const close = Math.hypot(rampEnd.x - c.from.waits[c.fromPad].x, rampEnd.z - c.from.waits[c.fromPad].z) < 75;
+        const close = Math.hypot(rampEnd.x - m.pickupPos.x, rampEnd.z - m.pickupPos.z) < (c.mode === 'ground' ? 30 : 75);
         if (m.group.allAboard) {
           m.phase = 'transit';
         } else if (close && carrier.loadable && !carrier.rampDown && carrier.onGround && Math.random() < dt * 0.4) {
-          this.hooks.toast('Lower the ramp [R] to load', 'info');
+          this.hooks.toast(c.mode === 'ground' ? 'Open the rear doors [R] to load' : 'Lower the ramp [R] to load', 'info');
         }
       } else if (m.load && this.sling.hooked === m.load) {
         m.phase = 'transit';
@@ -445,11 +478,17 @@ export class MissionSystem {
       }
     } else if (m.phase === 'transit') {
       if (m.internal && m.group) {
-        if (rightVehicle && carrier.loadable && carrier.rampDown && dDrop < 70) {
+        if (rightVehicle && carrier.loadable && carrier.rampDown && dDrop < (c.mode === 'ground' ? 30 : 70)) {
           m.phase = 'dropoff';
           const rally = this.tmp2.copy(m.dropPos);
-          const dir = this.tmp.copy(carrier.rampEndWorld(this.tmp)).sub(hp).setY(0).normalize();
-          rally.addScaledVector(dir, 34);
+          if (c.mode === 'ground') {
+            // Walk off the road into the site.
+            const dir = this.tmp.set(c.to.x - rally.x, 0, c.to.z - rally.z).normalize();
+            rally.addScaledVector(dir, 18);
+          } else {
+            const dir = this.tmp.copy(carrier.rampEndWorld(this.tmp)).sub(hp).setY(0).normalize();
+            rally.addScaledVector(dir, 34);
+          }
           this.cargo.setRally(m.group, rally);
           this.hooks.toast('Unloading…', 'info');
         }
@@ -476,7 +515,7 @@ export class MissionSystem {
     const c = m.c;
     const rampEnd = carrier.rampEndWorld(this.tmp);
     const ok = carrier.loadable && carrier.rampDown;
-    const canLoad = m.phase === 'pickup' && ok && Math.hypot(rampEnd.x - c.from.waits[c.fromPad].x, rampEnd.z - c.from.waits[c.fromPad].z) < 75;
+    const canLoad = m.phase === 'pickup' && ok && Math.hypot(rampEnd.x - m.pickupPos.x, rampEnd.z - m.pickupPos.z) < (c.mode === 'ground' ? 30 : 75);
     const canUnload = m.phase === 'dropoff' && ok;
     return { canLoad, canUnload };
   }
