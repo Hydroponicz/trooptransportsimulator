@@ -64,7 +64,6 @@ export class Game {
   mapOpen = false;
   currentSite: Site | null = null;
   slingTargetRel: { f: number; r: number; h: number; ok: boolean } | null = null;
-  private acc = 0;
   private last = performance.now();
   private flightEnv: FlightEnv;
   private crashTimer = -1;
@@ -340,10 +339,10 @@ export class Game {
     this.last = performance.now();
     this.toast(`Welcome to ${this.world.base.name}. Press [I] to start the engines.`, 'good');
     this.toast('Open the base terminal with [Tab] to pick up a contract.');
-    const loop = () => {
+    const loop = (ts: number) => {
       if (!this.running) return;
       requestAnimationFrame(loop);
-      this.frame();
+      this.frame(ts);
     };
     requestAnimationFrame(loop);
   }
@@ -355,15 +354,16 @@ export class Game {
     void this.audio.ctx?.suspend();
   }
 
-  private frame() {
-    const now = performance.now();
-    const dt = Math.min(0.1, (now - this.last) / 1000);
-    this.last = now;
+  /** `now` is the vsync-aligned rAF timestamp, steadier than reading the clock. */
+  private frame(now = performance.now()) {
+    // The first rAF timestamp can precede the start time: never step backwards.
+    const dt = Math.max(0, Math.min(0.1, (now - this.last) / 1000));
+    this.last = Math.max(this.last, now);
     this.input.update(dt);
     this.handleActions();
     const modal = this.paused || this.terminal.isOpen || this.terminal.dialogOpen;
     this.input.enabled = !modal;
-    if (!modal) this.simulate(dt);
+    if (!modal && dt > 0) this.simulate(dt);
     const mouse = this.input.consumeMouse();
     this.cam.lookBack = this.input.key('KeyB');
     this.humvee.setInteriorView(this.mode === 'drive' && this.cam.mode === 'cockpit');
@@ -572,12 +572,15 @@ export class Game {
       v.input.handbrake = inp.key('Space') || (!fwdKey && !backKey && v.groundSpeed < 0.5);
     }
 
-    this.acc += dt;
-    while (this.acc >= STEP) {
-      this.acc -= STEP;
-      h.physicsStep(STEP, this.flightEnv);
-      this.sling.step(STEP, h);
-      v.step(STEP, this.groundEnv);
+    // Substep the whole frame (never more than STEP each) so the simulation advances
+    // exactly as far as the frame does: a fixed-step accumulator without render
+    // interpolation made the aircraft jump 0–2 steps per frame and shimmer.
+    const steps = Math.ceil(dt / STEP - 1e-6);
+    const sub = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      h.physicsStep(sub, this.flightEnv);
+      this.sling.step(sub, h);
+      v.step(sub, this.groundEnv);
     }
     v.update(dt);
     // Stuck on its roof or side: offer a recovery.
