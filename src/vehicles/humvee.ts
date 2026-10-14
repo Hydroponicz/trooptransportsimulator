@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { clamp, smoothstep } from '../util/math';
+import type { CabinLayout } from '../game/cargo';
 
 const G = 9.81;
 
@@ -31,6 +32,21 @@ const WHEELS = [
   { x: 0.98, z: 1.55, front: false },
 ];
 const MOUNT_Y = -0.25;
+
+/** The open cargo bed (body frame): troop benches, a two-tier litter rack, one pallet. */
+export const BED: CabinLayout = (() => {
+  const F = 0.4;
+  const seats: CabinLayout['seats'] = [];
+  for (const z of [0.85, 1.75])
+    for (const sx of [-1, 1]) seats.push({ pos: new THREE.Vector3(sx * 0.78, F, z), heading: (sx * Math.PI) / 2 });
+  return {
+    floor: F,
+    hinge: new THREE.Vector3(0, F, 2.3),
+    seats,
+    litters: [new THREE.Vector3(0, F + 0.62, 1.5), new THREE.Vector3(0, F + 1.2, 1.5)],
+    pallets: [new THREE.Vector3(0, F, 1.38)],
+  };
+})();
 const REST = 0.5;
 const RADIUS = 0.45;
 const BUMPERS = [
@@ -69,16 +85,27 @@ function buildModel() {
   };
   add(new THREE.BoxGeometry(2.25, 0.8, 4.7), olive, 0, 0, 0);
   add(new THREE.BoxGeometry(2.1, 0.3, 1.6), olive, 0, 0.5, -1.45);
-  exterior.push(add(new THREE.BoxGeometry(2.05, 0.85, 2.2), olive, 0, 0.82, 0.1));
+  // Two-door cab; the open cargo bed behind it carries the load in plain view.
+  exterior.push(add(new THREE.BoxGeometry(2.05, 0.85, 1.4), olive, 0, 0.82, -0.3));
   exterior.push(add(new THREE.BoxGeometry(1.85, 0.5, 0.06), glass, 0, 0.9, -1.02));
+  exterior.push(add(new THREE.BoxGeometry(1.6, 0.4, 0.06), glass, 0, 0.95, 0.42));
   for (const sx of [-1, 1]) {
     exterior.push(add(new THREE.BoxGeometry(0.06, 0.45, 0.8), glass, sx * 1.03, 0.92, -0.45));
-    exterior.push(add(new THREE.BoxGeometry(0.06, 0.45, 0.8), glass, sx * 1.03, 0.92, 0.55));
     // Wheel arches / fenders.
     add(new THREE.BoxGeometry(0.4, 0.2, 1.2), olive, sx * 1.1, 0.25, -1.62);
     add(new THREE.BoxGeometry(0.4, 0.2, 1.2), olive, sx * 1.1, 0.25, 1.55);
   }
-  add(new THREE.BoxGeometry(2.05, 0.6, 1.25), canvas, 0, 0.72, 1.75);
+  // Cargo bed: low side walls, troop benches over the wheel wells, rails and tie-downs.
+  const F = BED.floor;
+  add(new THREE.BoxGeometry(2.0, 0.03, 1.95), dark, 0, F + 0.015, 1.38);
+  for (const sx of [-1, 1]) {
+    add(new THREE.BoxGeometry(0.08, 0.45, 1.98), olive, sx * 1.06, F + 0.22, 1.37);
+    add(new THREE.BoxGeometry(0.34, 0.05, 1.8), canvas, sx * 0.84, F + 0.42, 1.38);
+    add(new THREE.BoxGeometry(0.3, 0.38, 1.8), olive, sx * 0.86, F + 0.2, 1.38);
+    add(new THREE.CylinderGeometry(0.025, 0.025, 1.9, 6).rotateX(Math.PI / 2), dark, sx * 1.06, F + 0.85, 1.38);
+    for (const z of [0.5, 1.38, 2.26]) add(new THREE.CylinderGeometry(0.022, 0.022, 0.4, 5), dark, sx * 1.06, F + 0.65, z);
+    for (const z of [0.7, 1.4, 2.1]) add(new THREE.TorusGeometry(0.05, 0.01, 4, 8).rotateX(Math.PI / 2), dark, sx * 0.62, F + 0.02, z);
+  }
   exterior.push(add(new THREE.CylinderGeometry(0.55, 0.6, 0.28, 12), dark, 0, 1.38, 0.15));
   exterior.push(add(new THREE.BoxGeometry(0.9, 0.5, 0.06), dark, 0, 1.6, -0.25));
   exterior.push(add(new THREE.CylinderGeometry(0.05, 0.05, 1.1, 5).rotateX(Math.PI / 2), dark, 0, 1.6, -0.75));
@@ -104,10 +131,14 @@ function buildModel() {
   for (const sx of [-1, 1]) {
     inside(new THREE.BoxGeometry(0.08, 0.7, 0.08), trim, sx * 0.97, 0.98, -1.0).rotation.x = -0.12; // A-pillars
     inside(new THREE.BoxGeometry(0.1, 0.7, 0.12), trim, sx * 0.97, 0.98, 0.12); // B-pillars
-    inside(new THREE.BoxGeometry(0.06, 0.4, 2.1), trim, sx * 1.0, 0.48, 0.1); // door panels
+    inside(new THREE.BoxGeometry(0.06, 0.4, 1.35), trim, sx * 1.0, 0.48, -0.3); // door panels
   }
   inside(new THREE.BoxGeometry(2.0, 0.06, 0.12), trim, 0, 1.33, -1.0); // windscreen header
-  inside(new THREE.BoxGeometry(2.0, 0.04, 2.2), trim, 0, 1.37, 0.1); // roof lining
+  inside(new THREE.BoxGeometry(2.0, 0.04, 1.4), trim, 0, 1.37, -0.3); // roof lining
+  // Back wall with a window onto the bed.
+  inside(new THREE.BoxGeometry(2.0, 0.38, 0.05), trim, 0, 0.57, 0.38);
+  inside(new THREE.BoxGeometry(2.0, 0.1, 0.05), trim, 0, 1.3, 0.38);
+  for (const sx of [-1, 1]) inside(new THREE.BoxGeometry(0.2, 0.5, 0.05), trim, sx * 0.9, 1.0, 0.38);
   inside(new THREE.BoxGeometry(0.25, 0.3, 1.2), panel, 0, 0.55, -0.1); // centre console
   // Rear door, hinged at the bottom.
   const door = new THREE.Group();
@@ -221,7 +252,13 @@ export class Humvee {
     return this.worldPoint(_v.set(0, -0.7, 3.4), out);
   }
   cabinWorld(out: THREE.Vector3) {
-    return this.worldPoint(_v.set(0, 0.2, 0.8), out);
+    return this.worldPoint(_v.set(0, 0.6, 1.4), out);
+  }
+  get cabinFrame(): THREE.Object3D {
+    return this.group;
+  }
+  get cabinLayout(): CabinLayout {
+    return BED;
   }
 
   step(dt: number, env: GroundEnv) {

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { RNG } from '../util/noise';
 import type { Site, SiteKind } from '../world/sites';
-import type { ActorKind, CargoGroup, CargoManager } from './cargo';
+import type { ActorKind, CabinLayout, CargoGroup, CargoManager } from './cargo';
 import { SlingLoad, type SlingModel, type SlingSystem } from './sling';
 import type { LandingRating } from '../heli/heli';
 import type { Roads } from '../world/roads';
@@ -23,6 +23,9 @@ export interface Carrier {
   readonly pitch: number;
   rampEndWorld(out: THREE.Vector3): THREE.Vector3;
   cabinWorld(out: THREE.Vector3): THREE.Vector3;
+  /** Body frame and layout that loaded people and cargo ride in. */
+  readonly cabinFrame: THREE.Object3D;
+  readonly cabinLayout: CabinLayout;
 }
 
 export interface CargoType {
@@ -50,7 +53,7 @@ export interface CargoType {
 /** Jobs done by road in the Humvee. */
 export const GROUND_CARGO: CargoType[] = [
   { id: 'g_fireteam', name: 'Fire Team Transport', kind: 'troops', actor: 'soldier', unitMass: 115, min: 2, max: 4, payMult: 1, fragility: 0.6, minRank: 0, from: ['base', 'fob', 'cop'], to: ['base', 'fob', 'cop'], weight: 4, icon: '🚙', desc: 'Drive a fire team to its new post.' },
-  { id: 'g_supply', name: 'Supply Run', kind: 'pallets', actor: 'pallet', unitMass: 350, min: 1, max: 2, payMult: 1.1, fragility: 0.8, minRank: 0, from: ['base', 'fob'], to: ['fob', 'cop'], weight: 3, icon: '🚙', desc: 'Crates of rations and spares. Stick to the roads, the bumps break things.' },
+  { id: 'g_supply', name: 'Supply Run', kind: 'pallets', actor: 'pallet', unitMass: 600, min: 1, max: 1, payMult: 1.1, fragility: 0.8, minRank: 0, from: ['base', 'fob'], to: ['fob', 'cop'], weight: 3, icon: '🚙', desc: 'Crates of rations and spares. Stick to the roads, the bumps break things.' },
   { id: 'g_casevac', name: 'Ground CASEVAC', kind: 'casualties', actor: 'casualty', unitMass: 190, min: 1, max: 2, payMult: 1.5, fragility: 2, minRank: 0, urgent: true, from: ['cop', 'fob'], to: ['base', 'fob'], weight: 2, icon: '🚑', desc: 'Lightly wounded, stable for road transport. Drive smooth.' },
   { id: 'g_escort', name: 'Officer Transport', kind: 'troops', actor: 'soldier', unitMass: 110, min: 1, max: 2, payMult: 1.35, fragility: 1.3, minRank: 0, from: ['base', 'fob', 'cop'], to: ['base', 'fob', 'cop'], weight: 2, icon: '🎖️', desc: 'Brass on a site visit. A comfortable ride is appreciated.' },
 ];
@@ -193,8 +196,8 @@ export class MissionSystem {
         if (n === g.total)
           this.hooks.toast(
             this.active.c.mode === 'ground'
-              ? `All ${noun(this.active.c.type, n)} aboard — close the doors [R] and drive to ${this.active.c.to.name}`
-              : `All ${noun(this.active.c.type, n)} aboard — raise the ramp [R] and fly to ${this.active.c.to.name}`,
+              ? `${n === 1 ? 'The' : 'All'} ${noun(this.active.c.type, n)} ${n === 1 ? 'is' : 'are'} aboard — close the doors [R] and drive to ${this.active.c.to.name}`
+              : `${n === 1 ? 'The' : 'All'} ${noun(this.active.c.type, n)} ${n === 1 ? 'is' : 'are'} aboard — raise the ramp [R] and fly to ${this.active.c.to.name}`,
             'good',
           );
         else if (n === 1 || n % 4 === 0) this.hooks.toast(`${n}/${g.total} ${noun(this.active.c.type, g.total)} aboard`);

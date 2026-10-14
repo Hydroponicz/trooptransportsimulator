@@ -24,9 +24,14 @@ You need a browser with WebGL. A gamepad is optional.
 1. **Pick a job.** Land at a base, FOB or outpost and open the terminal (`Tab`).
    Contracts list the cargo, the route, the distance, the time limit, the risk
    and the pay. Harder work unlocks as you rank up.
-2. **Load up.** Land near the green smoke and lower the ramp (`R`). Troops,
-   litter teams and pallet crews walk aboard, and every passenger adds real
-   mass to the aircraft. For sling loads, hover with the hook over the load,
+2. **Load up.** Land near the green smoke and lower the ramp (`R`). The crew
+   chief waves the load aboard from the ramp. Troops file up the aisle, sit
+   on the red webbing seats and buckle in. Litter teams carry casualties up
+   the ramp, lift the litters onto stanchions (two tiers), strap them down
+   and sit beside them. Pallet crews push pallets in on a pallet jack, park
+   the jack by their seat, ratchet a strap down at each corner and sit.
+   Everything stays visible in the cabin, and unloading plays it all in
+   reverse. Every passenger adds real mass to the aircraft. For sling loads, hover with the hook over the load,
    2–9 m up, and press `H`. The hook camera (`C`) and the drift display help.
 3. **Fly it.** Watch torque, rotor RPM, fuel and your cargo condition. Hard
    g-loads, steep banks, hits and rough landings all damage the cargo, and the
@@ -50,7 +55,9 @@ Terminals also list **road jobs** (🚙 ROAD; helicopter jobs are tagged
 and escort runs between sites on the road network. They work like the
 helicopter jobs: drive to the pickup, open the doors (`R`) and wait while
 everyone boards, then drive to the destination and open the doors again to
-unload. The time limit is set from the route length by road at convoy speed,
+unload. The Humvee has an open cargo bed, so you can watch the load ride:
+troops on the bench seats, casualties on a two-tier litter rack, or a
+strapped-down pallet. The time limit is set from the route length by road at convoy speed,
 not the straight-line distance, so a job that is 3 km by air can be 5 km by
 road with more time to match. Pay scales with road distance and risk.
 
@@ -220,7 +227,8 @@ src/
   vehicles/models.ts AI vehicle models (truck, tanker, HMMWV, MRAP) with animated wheels
   game/traffic.ts    AI supply traffic: routing, steering, following, braking
   game/missions.ts   contracts, pay, mission phases, payouts
-  game/cargo.ts      troops / litters / pallets walking on and off the ramp
+  game/cargo.ts      boarding: troops, litter teams and pallet crews loading, securing and riding in the cabin
+  game/soldiers.ts   instanced articulated soldier models and their poses (walk, carry, push, strap, sit)
   game/sling.ts      hook, rope constraint, slung-load physics
   game/threats.ts    enemy fire, missiles, flares, mortars, ambient battle
   battle/            campaign sectors, materialized battles, trenches, AI aircraft

@@ -52,6 +52,8 @@ export interface ChinookParts {
   exhaustR: THREE.Object3D;
   cockpitInterior: THREE.Group;
   exterior: THREE.Group;
+  /** Cabin light (on when the ramp is open). */
+  cabinLight: THREE.PointLight;
 }
 
 function roundedRect(w: number, h: number, r: number): THREE.Shape {
@@ -112,10 +114,14 @@ export function buildChinook(): ChinookParts {
     return m;
   };
 
-  // Main cabin: rounded box extruded along Z.
-  const cabin = new THREE.ExtrudeGeometry(roundedRect(3.8, 3.6, 0.75), { depth: 13.2, bevelEnabled: false, curveSegments: 4 });
+  // Main cabin: a hollow rounded tube (open at the back, where the ramp is).
+  const shellShape = roundedRect(3.8, 3.6, 0.75);
+  shellShape.holes.push(roundedRect(3.44, 3.24, 0.6) as unknown as THREE.Path);
+  const cabin = new THREE.ExtrudeGeometry(shellShape, { depth: 13.2, bevelEnabled: false, curveSegments: 4 });
   cabin.translate(0, 0.2, -6.2);
   add(cabin, olive);
+  // Aft pylon closure above the ramp opening.
+  add(new THREE.BoxGeometry(3.5, 0.75, 0.12), olive, 0, 1.45, 6.94);
 
   // Chin / lower nose.
   add(
@@ -241,10 +247,9 @@ export function buildChinook(): ChinookParts {
   add(new THREE.BoxGeometry(0.4, 0.25, 0.4), dark, HOOK_POS.x, HOOK_POS.y + 0.1, HOOK_POS.z);
 
   // Rear opening (visible when the ramp is down).
-  const rearOpening = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 2.7), new THREE.MeshBasicMaterial({ color: 0x0e0f0c }));
-  rearOpening.position.set(0, -0.1, 7.02);
+  // (The cabin is modelled inside now; the old black backdrop is never shown.)
+  const rearOpening = new THREE.Mesh(new THREE.PlaneGeometry(0.01, 0.01), new THREE.MeshBasicMaterial({ color: 0x0e0f0c }));
   rearOpening.visible = false;
-  exterior.add(rearOpening);
 
   // Ramp hinged at the bottom of the rear.
   const ramp = new THREE.Group();
@@ -259,6 +264,8 @@ export function buildChinook(): ChinookParts {
   const cabinPoint = new THREE.Object3D();
   cabinPoint.position.set(0, -1.2, 2.5);
   exterior.add(cabinPoint);
+
+  const cabinInterior = buildCabinInterior(add, exterior, interior, dark, olive);
 
   // Rotors.
   const bladeMat = new THREE.MeshStandardMaterial({ color: 0x2a2b26, roughness: 0.6, metalness: 0.2, transparent: true });
@@ -320,7 +327,6 @@ export function buildChinook(): ChinookParts {
   add(new THREE.BoxGeometry(0.05, 1.6, 2.6), interior, 1.75, -0.6, -7.3, cockpitInterior);
   add(new THREE.BoxGeometry(0.05, 1.6, 2.6), interior, -1.75, -0.6, -7.3, cockpitInterior);
   add(new THREE.BoxGeometry(3.4, 0.05, 2.6), interior, 0, -0.75, -7.3, cockpitInterior);
-  add(new THREE.BoxGeometry(3.4, 2.4, 0.1), interior, 0, 0.4, -5.95, cockpitInterior);
   cockpitInterior.visible = false;
 
   return {
@@ -344,5 +350,116 @@ export function buildChinook(): ChinookParts {
     exhaustR: exhausts[1],
     cockpitInterior,
     exterior,
+    cabinLight: cabinInterior.light,
   };
+}
+
+// ---------------------------------------------------------------- Cabin
+
+/** Cabin floor height in the body frame. */
+export const CABIN_FLOOR = -1.47;
+
+/**
+ * Where people and cargo go in the cabin (body frame, forward = −Z).
+ * Seat entries are soldier root positions (under the pelvis) and headings.
+ */
+export const CABIN = (() => {
+  const seats: { pos: THREE.Vector3; heading: number }[] = [];
+  // Troop seats along both walls, filled front to back, alternating sides.
+  for (let i = 0; i < 15; i++) {
+    const z = -5.3 + i * 0.6;
+    seats.push({ pos: new THREE.Vector3(-1.36, CABIN_FLOOR, z), heading: -Math.PI / 2 });
+    seats.push({ pos: new THREE.Vector3(1.36, CABIN_FLOOR, z), heading: Math.PI / 2 });
+  }
+  // Litters on centreline stanchions, two tiers.
+  const litters = [-3.7, -1.2].flatMap((z) => [new THREE.Vector3(0, CABIN_FLOOR + 0.42, z), new THREE.Vector3(0, CABIN_FLOOR + 1.15, z)]);
+  // Pallets on the roller tracks, front to back.
+  const pallets = [-4.6, -3.0, -1.4, 0.2, 1.8].map((z) => new THREE.Vector3(0, CABIN_FLOOR, z));
+  return { seats, litters, pallets, hinge: new THREE.Vector3(0, CABIN_FLOOR, 6.85), floor: CABIN_FLOOR, crewChief: new THREE.Vector3(1.36, CABIN_FLOOR, 5.7), gunner: new THREE.Vector3(1.2, CABIN_FLOOR, -5.55) };
+})();
+
+type AddFn = (geo: THREE.BufferGeometry, mat: THREE.Material, x?: number, y?: number, z?: number, parent?: THREE.Object3D) => THREE.Mesh;
+
+function buildCabinInterior(add: AddFn, exterior: THREE.Group, liner: THREE.Material, dark: THREE.Material, olive: THREE.Material) {
+  const g = new THREE.Group();
+  exterior.add(g);
+  const F = CABIN_FLOOR;
+  const quilt = new THREE.MeshStandardMaterial({ color: 0x6b705c, roughness: 0.95 });
+  const floorMat = new THREE.MeshStandardMaterial({ color: 0x3d3f38, roughness: 0.85, metalness: 0.2 });
+  const metal = new THREE.MeshStandardMaterial({ color: 0x8a8d86, roughness: 0.5, metalness: 0.6 });
+  const webbing = new THREE.MeshStandardMaterial({ color: 0x8a3428, roughness: 0.9 });
+  const lamp = new THREE.MeshBasicMaterial({ color: 0xffeccc });
+  const redLamp = new THREE.MeshBasicMaterial({ color: 0xff3a2a });
+  const glassIn = new THREE.MeshBasicMaterial({ color: 0x7d8f98 });
+
+  const z0 = -5.95;
+  const z1 = 6.95;
+  const len = z1 - z0;
+  const zc = (z0 + z1) / 2;
+  // Floor, wall lining and ceiling.
+  add(new THREE.BoxGeometry(3.36, 0.06, len), floorMat, 0, F - 0.03, zc, g);
+  for (const sx of [-1, 1]) {
+    add(new THREE.BoxGeometry(0.05, 2.6, len), quilt, sx * 1.66, F + 1.45, zc, g);
+    // Roller tracks and tie-down rings.
+    add(new THREE.BoxGeometry(0.28, 0.035, len - 0.4), metal, sx * 0.55, F + 0.018, zc, g);
+    for (let z = z0 + 0.6; z < z1 - 0.3; z += 0.5) add(new THREE.CylinderGeometry(0.035, 0.035, 0.03, 6), dark, sx * 0.55, F + 0.04, z, g);
+    for (let z = z0 + 0.4; z < z1 - 0.3; z += 1.0) add(new THREE.TorusGeometry(0.06, 0.012, 4, 8).rotateX(Math.PI / 2), metal, sx * 1.0, F + 0.02, z, g);
+  }
+  add(new THREE.BoxGeometry(3.0, 0.05, len), quilt, 0, 1.76, zc, g);
+  // Hook hatch ("hell hole").
+  add(new THREE.BoxGeometry(0.9, 0.012, 0.9), dark, 0, F + 0.01, 0.2, g);
+  add(new THREE.BoxGeometry(0.95, 0.03, 0.06), metal, 0, F + 0.02, -0.25, g);
+  add(new THREE.BoxGeometry(0.95, 0.03, 0.06), metal, 0, F + 0.02, 0.65, g);
+  // Frames (ribs).
+  for (let z = z0 + 0.4; z < z1; z += 0.8) {
+    for (const sx of [-1, 1]) add(new THREE.BoxGeometry(0.1, 2.7, 0.08), liner, sx * 1.62, F + 1.42, z, g);
+    add(new THREE.BoxGeometry(3.0, 0.1, 0.08), liner, 0, 1.7, z, g);
+  }
+  // Ceiling: cable trays and dome lights.
+  for (const sx of [-0.7, 0.7]) add(new THREE.BoxGeometry(0.16, 0.06, len - 0.4), dark, sx, 1.66, zc, g);
+  add(new THREE.CylinderGeometry(0.03, 0.03, len - 0.4, 6).rotateX(Math.PI / 2), metal, 0.3, 1.68, zc, g);
+  add(new THREE.CylinderGeometry(0.025, 0.025, len - 0.4, 6).rotateX(Math.PI / 2), metal, -0.3, 1.68, zc, g);
+  for (let z = z0 + 1.2; z < z1; z += 2.4) {
+    add(new THREE.BoxGeometry(0.35, 0.04, 0.2), lamp, 0, 1.71, z, g);
+    add(new THREE.BoxGeometry(0.12, 0.04, 0.12), redLamp, 0.45, 1.71, z + 0.4, g);
+  }
+  // Windows (light coming in).
+  for (const sx of [-1, 1])
+    for (let z = z0 + 1.0; z < z1 - 1.5; z += 1.6) add(new THREE.CircleGeometry(0.16, 12).rotateY(-sx * Math.PI / 2), glassIn, sx * 1.632, F + 1.75, z, g);
+  // Troop seats: red webbing on tube frames, folded up between occupied rows.
+  for (const s of CABIN.seats) {
+    const sx = Math.sign(s.pos.x);
+    add(new THREE.BoxGeometry(0.44, 0.04, 0.5), webbing, sx * 1.4, F + 0.44, s.pos.z, g);
+    add(new THREE.BoxGeometry(0.04, 0.55, 0.5), webbing, sx * 1.62, F + 0.78, s.pos.z, g);
+    add(new THREE.CylinderGeometry(0.018, 0.018, 0.44, 5), metal, sx * 1.18, F + 0.22, s.pos.z - 0.24, g);
+  }
+  // Seat rails along the walls.
+  for (const sx of [-1, 1]) {
+    add(new THREE.CylinderGeometry(0.022, 0.022, 9.2, 6).rotateX(Math.PI / 2), metal, sx * 1.19, F + 0.45, -0.95, g);
+    add(new THREE.CylinderGeometry(0.022, 0.022, 9.2, 6).rotateX(Math.PI / 2), metal, sx * 1.6, F + 1.08, -0.95, g);
+  }
+  // Bulkhead to the cockpit with a doorway.
+  add(new THREE.BoxGeometry(1.25, 3.0, 0.08), liner, -1.07, F + 1.5, z0, g);
+  add(new THREE.BoxGeometry(1.25, 3.0, 0.08), liner, 1.07, F + 1.5, z0, g);
+  add(new THREE.BoxGeometry(0.9, 0.9, 0.08), liner, 0, F + 2.6, z0, g);
+  // Crew chief's jump seat by the ramp and the door-gun mount up front.
+  add(new THREE.BoxGeometry(0.44, 0.05, 0.44), webbing, 1.4, F + 0.44, CABIN.crewChief.z, g);
+  add(new THREE.BoxGeometry(0.05, 0.6, 0.44), webbing, 1.62, F + 0.8, CABIN.crewChief.z, g);
+  add(new THREE.BoxGeometry(0.4, 0.05, 0.4), webbing, 1.25, F + 0.5, CABIN.gunner.z, g);
+  add(new THREE.CylinderGeometry(0.04, 0.05, 1.1, 6), metal, 1.5, F + 0.95, CABIN.gunner.z - 0.4, g);
+  // M240 on its pintle, poking out of the window.
+  const gun = new THREE.Group();
+  gun.position.set(1.55, F + 1.5, CABIN.gunner.z - 0.4);
+  gun.rotation.y = -Math.PI / 2 + 0.25;
+  g.add(gun);
+  add(new THREE.BoxGeometry(0.1, 0.14, 0.75), dark, 0, 0, 0, gun);
+  add(new THREE.CylinderGeometry(0.025, 0.025, 0.7, 6).rotateX(Math.PI / 2), dark, 0, 0.02, -0.7, gun);
+  add(new THREE.BoxGeometry(0.16, 0.14, 0.18), olive, -0.1, -0.06, 0.05, gun);
+  // Fuel and fire extinguisher bottles on the forward bulkhead.
+  add(new THREE.CylinderGeometry(0.09, 0.09, 0.5, 8), redLamp, -1.3, F + 0.9, z0 + 0.15, g);
+  // Cabin light.
+  const light = new THREE.PointLight(0xfff0d8, 0, 14, 1.6);
+  light.position.set(0, 1.3, 1.5);
+  g.add(light);
+  return { group: g, light };
 }

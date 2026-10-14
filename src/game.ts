@@ -14,6 +14,7 @@ import { Traffic } from './game/traffic';
 import { Campaign } from './battle/campaign';
 import { Battle } from './battle/battle';
 import { AirOps } from './battle/air';
+import { CABIN } from './heli/chinookModel';
 import { Humvee, type GroundEnv } from './vehicles/humvee';
 import type { Carrier } from './game/missions';
 import { Career, RANKS } from './game/career';
@@ -602,6 +603,17 @@ export class Game {
       cabin: carrier.cabinWorld(tmpB),
       heliPos: fm.pos,
       rotorsTurning: fm.rpm > 0.3,
+      frame: carrier.cabinFrame,
+      layout: carrier.cabinLayout,
+      crew: {
+        frame: h.parts.exterior,
+        chiefSeat: CABIN.crewChief,
+        gunnerSeat: CABIN.gunner,
+        hinge: CABIN.hinge,
+        rampT: h.rampT,
+        marshalling: carrier === h && (lc.canLoad || lc.canUnload),
+        visible: !h.crashed && h.parts.root.visible,
+      },
     });
     this.threats.update(dt, h, this.cam.camera.position);
     this.battle.update(dt, h, this.cam.camera.position);

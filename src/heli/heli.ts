@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { clamp, smoothstep } from '../util/math';
-import { buildChinook, AFT_HUB, FRONT_HUB, GEAR_Y, HOOK_POS, HULL_POINTS, ROTOR_RADIUS, type ChinookParts } from './chinookModel';
+import type { CabinLayout } from '../game/cargo';
+import { buildChinook, CABIN, AFT_HUB, FRONT_HUB, GEAR_Y, HOOK_POS, HULL_POINTS, ROTOR_RADIUS, type ChinookParts } from './chinookModel';
 import { FlightModel, type FlightEnv } from './flight';
 import type { World } from '../world/worldgen';
 
@@ -160,7 +161,9 @@ export class Heli {
     this.rampT = clamp(this.rampT + (this.rampOpen ? dt : -dt) / 3.2, 0, 1);
     const e = smoothstep(0, 1, this.rampT);
     this.parts.ramp.rotation.x = -1.3 + e * (1.3 + 0.2);
-    this.parts.rearOpening.visible = this.rampT > 0.05;
+    this.parts.rearOpening.visible = false;
+    // Cabin lights: bright with the ramp open, dim night lighting otherwise.
+    this.parts.cabinLight.intensity = 1.5 + e * 9;
 
     // Rotors: CCW forward, CW aft (seen from above), 225 RPM at 100%.
     this.rotorAngle += fm.rpm * 23.6 * dt;
@@ -193,6 +196,12 @@ export class Heli {
   }
   cabinWorld(out: THREE.Vector3) {
     return this.parts.cabinPoint.getWorldPosition(out);
+  }
+  get cabinFrame(): THREE.Object3D {
+    return this.parts.exterior;
+  }
+  get cabinLayout(): CabinLayout {
+    return CABIN;
   }
   /** Computed from physics state (not the scene graph) so it's exact during substeps. */
   hookWorld(out: THREE.Vector3) {
