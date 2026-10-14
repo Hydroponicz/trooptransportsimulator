@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { RNG } from '../util/noise';
 import type { World, EnemyKind } from '../world/worldgen';
 import type { Heli } from '../heli/heli';
+import type { PlayerTarget } from './target';
 import type { Effects } from '../fx/effects';
 import type { AudioEngine } from '../audio';
 import type { Site } from '../world/sites';
@@ -134,13 +135,15 @@ export class Threats {
     return true;
   }
 
-  update(dt: number, heli: Heli, camPos: THREE.Vector3) {
-    const fm = heli.fm;
-    const hp = fm.pos;
+  update(dt: number, player: PlayerTarget, camPos: THREE.Vector3) {
+    const hp = player.pos;
+    const air = player.kind === 'air';
     const terrain = this.world.terrain;
     this.flareCooldown -= dt;
     this.underFire = Math.max(0, this.underFire - dt);
-    const alive = !heli.crashed;
+    const alive = !player.destroyed;
+    // Aim at the middle of a vehicle on the ground, not its wheels.
+    const aimY = air ? 0 : 1.0;
 
     // --- Shooters -------------------------------------------------------
     const heliSide = this.world.front.side(hp.x, hp.z);
@@ -153,7 +156,7 @@ export class Threats {
       s.losT -= dt;
       if (s.losT <= 0) {
         s.losT = 0.5;
-        s.los = terrain.lineOfSight(s.pos.x, s.pos.y + 0.5, s.pos.z, hp.x, hp.y, hp.z, 30);
+        s.los = terrain.lineOfSight(s.pos.x, s.pos.y + 0.5, s.pos.z, hp.x, hp.y + aimY, hp.z, air ? 30 : 12);
       }
       if (!s.los) {
         s.burst = 0;
@@ -161,7 +164,8 @@ export class Threats {
       }
       s.cooldown -= dt;
       if (s.kind === 'manpads') {
-        if (s.cooldown <= 0 && fm.agl > 5) {
+        // Heat-seekers are for aircraft.
+        if (s.cooldown <= 0 && air && player.agl > 5) {
           s.cooldown = this.rng.range(28, 45);
           this.launchMissile(s.pos);
         }
@@ -177,14 +181,15 @@ export class Threats {
         while (s.burstT <= 0 && s.burst > 0) {
           s.burstT += s.kind === 'aa' ? 0.11 : 0.075;
           s.burst--;
-          this.fire(s, heli, dist);
+          this.fire(s, player, dist);
         }
       }
     }
 
     // --- Bullets --------------------------------------------------------
-    const axisA = this.tmp.set(0, 0, -7).applyQuaternion(fm.quat).add(hp);
-    const axisB = this.tmp2.set(0, 0.5, 7).applyQuaternion(fm.quat).add(hp);
+    const L = player.hitHalfLength;
+    const axisA = this.tmp.set(0, aimY * 0.6, -L).applyQuaternion(player.quat).add(hp);
+    const axisB = this.tmp2.set(0, aimY * 0.6 + (air ? 0.5 : 0), L).applyQuaternion(player.quat).add(hp);
     for (let i = this.bullets.length - 1; i >= 0; i--) {
       const b = this.bullets[i];
       const p0 = b.p.clone();
@@ -193,9 +198,9 @@ export class Threats {
       b.life -= dt;
       let dead = b.life <= 0;
       if (!dead && alive && p0.distanceToSquared(hp) < 160 * 160) {
-        if (segSegDist(p0, b.p, axisA, axisB) < 2.3) {
+        if (segSegDist(p0, b.p, axisA, axisB) < player.hitRadius) {
           dead = true;
-          heli.damage(b.dmg, 'Ground fire');
+          player.damage(b.dmg, air ? 'Ground fire' : 'Small-arms fire');
           this.hooks.onHit(b.dmg);
           this.effects.sparks(b.p, 8);
           this.audio.hit();
@@ -225,10 +230,10 @@ export class Threats {
       const m = this.missiles[i];
       m.life -= dt;
       m.speed = Math.min(520, m.speed + 300 * dt);
-      const tgt = m.target && this.flares.includes(m.target) ? m.target.p : m.target ? null : hp;
+      const tgt = m.target && this.flares.includes(m.target) ? m.target.p : m.target || !air ? null : hp;
       if (tgt) {
         const tgo = m.p.distanceTo(tgt) / m.speed;
-        const lead = m.target ? tgt.clone() : tgt.clone().addScaledVector(fm.vel, tgo * 0.9);
+        const lead = m.target ? tgt.clone() : tgt.clone().addScaledVector(player.vel, tgo * 0.9);
         const want = lead.sub(m.p).normalize();
         const cur = m.v.clone().normalize();
         const ang = cur.angleTo(want);
@@ -241,11 +246,11 @@ export class Threats {
       m.mesh.lookAt(this.tmp.copy(m.p).add(m.v));
       this.effects.smoke.emit({ x: m.p.x, y: m.p.y, z: m.p.z, life: 3, size0: 1.2, size1: 5, r: 0.9, g: 0.9, b: 0.88, alpha: 0.6, drag: 1, buoyancy: 0.3 });
       this.effects.fire.emit({ x: m.p.x, y: m.p.y, z: m.p.z, life: 0.08, size0: 2.5, size1: 1, r: 2, g: 1.5, b: 0.8, alpha: 1, fadeIn: 0.01 });
-      if (!m.target) warning = true;
+      if (!m.target && air) warning = true;
       let boom = m.life <= 0 || m.p.y < terrain.heightAt(m.p.x, m.p.z);
-      if (!boom && !m.target && alive && m.p.distanceTo(hp) < 9) {
+      if (!boom && !m.target && alive && air && m.p.distanceTo(hp) < 9) {
         boom = true;
-        heli.damage(48, 'Missile');
+        player.damage(48, 'Missile');
         this.hooks.onHit(48);
         this.audio.hit();
       }
@@ -275,7 +280,7 @@ export class Threats {
         const dh = at.distanceTo(hp);
         if (dh < 16 && alive) {
           const dmg = (1 - dh / 16) * 22;
-          heli.damage(dmg, 'Mortar');
+          player.damage(dmg, 'Mortar');
           this.hooks.onHit(dmg);
         }
       }
@@ -284,21 +289,21 @@ export class Threats {
     this.updateAmbient(dt, camPos);
   }
 
-  /** Fire one round at the helicopter from an arbitrary position (battlefield units). */
-  shootAt(from: THREE.Vector3, heli: Heli, kind: 'mg' | 'aa') {
-    if (heli.crashed) return;
+  /** Fire one round at the player from an arbitrary position (battlefield units). */
+  shootAt(from: THREE.Vector3, player: PlayerTarget, kind: 'mg' | 'aa') {
+    if (player.destroyed) return;
     const s = { pos: from, kind } as Shooter;
-    this.fire(s, heli, from.distanceTo(heli.fm.pos));
+    this.fire(s, player, from.distanceTo(player.pos));
   }
 
-  private fire(s: Shooter, heli: Heli, dist: number) {
-    const fm = heli.fm;
+  private fire(s: Shooter, player: PlayerTarget, dist: number) {
     const speed = s.kind === 'aa' ? 950 : 820;
     const tof = dist / speed;
-    const aim = fm.pos.clone().addScaledVector(fm.vel, tof * this.rng.range(0.75, 1.1));
+    const aim = player.pos.clone().addScaledVector(player.vel, tof * this.rng.range(0.75, 1.1));
+    if (player.kind === 'ground') aim.y += 1.0;
     const dir = aim.sub(s.pos).normalize();
     // Harder to hit fast, low movers; easier to hit a hovering target.
-    const spread = (s.kind === 'aa' ? 0.011 : 0.017) * (1 + fm.groundSpeed / 30) + 0.004 + (fm.agl < 25 ? 0.006 : 0);
+    const spread = (s.kind === 'aa' ? 0.011 : 0.017) * (1 + player.groundSpeed / 30) + 0.004 + (player.agl < 25 ? 0.006 : 0);
     dir.x += this.rng.gauss() * spread;
     dir.y += this.rng.gauss() * spread + 0.002;
     dir.z += this.rng.gauss() * spread;

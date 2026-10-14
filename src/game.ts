@@ -15,6 +15,7 @@ import { Campaign } from './battle/campaign';
 import { Battle } from './battle/battle';
 import { AirOps } from './battle/air';
 import { CABIN } from './heli/chinookModel';
+import type { PlayerTarget } from './game/target';
 import { Humvee, type GroundEnv } from './vehicles/humvee';
 import type { Carrier } from './game/missions';
 import { Career, RANKS } from './game/career';
@@ -181,10 +182,15 @@ export class Game {
     };
     this.humvee = new Humvee();
     this.humvee.onImpact = (sp) => {
-      this.humvee.hp = Math.max(0, this.humvee.hp - (sp - 4) * 3);
+      this.humvee.damage((sp - 4) * 3, 'Collision');
       this.audio.thud(Math.min(1.2, sp / 8));
       this.cam.shake = Math.min(1.5, this.cam.shake + sp * 0.05);
     };
+    this.humvee.onDamage = (a, src) => {
+      if (src !== 'Collision') this.audio.hit();
+      this.onDamage(a, src);
+    };
+    this.humvee.onDestroyed = (reason) => this.onHumveeDestroyed(reason);
     this.scene.add(this.humvee.group);
     this.parkHumvee();
 
@@ -260,6 +266,7 @@ export class Game {
     const b = this.world.base;
     // At the base's roadside stop, where road jobs load.
     const stop = this.world.roads.curbside(b.x, b.z, b.radius);
+    this.humvee.repair();
     if (stop) {
       this.humvee.place(stop.road, stop.heading, this.groundEnv);
       return;
@@ -269,6 +276,11 @@ export class Game {
     const at = new THREE.Vector3(b.x + lx * Math.cos(b.rot) + lz * Math.sin(b.rot), 0, b.z - lx * Math.sin(b.rot) + lz * Math.cos(b.rot));
     this.humvee.place(at, b.rot + Math.PI / 2, this.groundEnv);
     this.humvee.hp = 100;
+  }
+
+  /** What enemies see and shoot at. */
+  get player(): PlayerTarget {
+    return this.mode === 'drive' ? this.humvee : this.heli;
   }
 
   /** Whatever the player is currently in. */
@@ -424,7 +436,7 @@ export class Game {
       this.cam.next();
       this.audio.click();
     }
-    if (h.crashed) {
+    if (h.crashed || (this.mode === 'drive' && this.humvee.destroyed)) {
       inp.clearActions();
       return;
     }
@@ -566,6 +578,7 @@ export class Game {
         if (v.speed > 1) brake = 1;
         else throttle = -1;
       }
+      if (v.destroyed) (throttle = 0), (brake = 1);
       v.input.throttle = throttle;
       v.input.brake = brake;
       v.input.steer += (steerKey - v.input.steer) * Math.min(1, dt * 6);
@@ -620,9 +633,11 @@ export class Game {
         visible: !h.crashed && h.parts.root.visible,
       },
     });
-    this.threats.update(dt, h, this.cam.camera.position);
-    this.battle.update(dt, h, this.cam.camera.position);
-    this.air.update(dt, h, this.cam.camera.position);
+    // Enemy fire, the battles along the front and air strikes follow whatever the player is in.
+    const player = this.player;
+    this.threats.update(dt, player, this.cam.camera.position);
+    this.battle.update(dt, player, this.cam.camera.position);
+    this.air.update(dt, player, this.cam.camera.position);
     {
       const h = this.heli.fm;
       const ground = this.world.terrain.surfaceAt(h.pos.x, h.pos.z);
@@ -896,7 +911,21 @@ export class Game {
     this.crashTimer = 0;
   }
 
+  private onHumveeDestroyed(reason: string) {
+    const v = this.humvee;
+    this.effects.explosion(v.pos.clone().setY(v.pos.y + 0.8), 1.4);
+    this.audio.explosion(this.cam.camera.position.distanceTo(v.pos), 1.4);
+    this.wreckSmoke = this.effects.addEmitter(v.pos.clone().setY(v.pos.y + 0.6), 'burning', 6);
+    v.scorch();
+    v.doorsOpen = false;
+    this.cam.shake = 1.6;
+    this.hud.bigText('VEHICLE DESTROYED', reason, 3);
+    this.missions.fail('Vehicle lost');
+    this.crashTimer = 0;
+  }
+
   private showCrashDialog() {
+    if (this.humvee.destroyed && !this.heli.crashed) return this.showVehicleLostDialog();
     const fee = Math.min(this.career.data.money, 10000);
     this.terminal.dialog(
       `<h2>Aircraft lost</h2><div class="sub">${this.heli.crashReason}</div>
@@ -911,6 +940,31 @@ export class Game {
           this.threats.clearHotZones();
           this.heli.fm.payload = 0;
           this.respawn();
+        },
+      },
+    );
+  }
+
+  private showVehicleLostDialog() {
+    const fee = Math.min(this.career.data.money, 2500);
+    this.terminal.dialog(
+      `<h2>Vehicle lost</h2><div class="sub">Humvee knocked out</div>
+      <p>The crew bailed out and was picked up. A replacement Humvee is waiting at the ${this.world.base.name} motor pool.</p>
+      <table><tr><td>Recovery &amp; replacement deductible</td><td class="neg">−${fmtMoney(fee)}</td></tr></table>
+      <div class="actions"><button class="primary" data-act="ok">Return to ${this.world.base.name}</button></div>`,
+      {
+        ok: () => {
+          this.career.data.money -= fee;
+          this.career.save();
+          this.terminal.closeDialog();
+          this.threats.clearHotZones();
+          this.effects.removeEmitter(this.wreckSmoke);
+          this.wreckSmoke = null;
+          this.crashTimer = -1;
+          this.humvee.repair();
+          this.humvee.payload = 0;
+          this.parkHumvee();
+          this.cam.snap();
         },
       },
     );

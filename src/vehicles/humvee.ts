@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { clamp, smoothstep } from '../util/math';
 import type { CabinLayout } from '../game/cargo';
+import type { PlayerTarget } from '../game/target';
 
 const G = 9.81;
 
@@ -164,7 +165,7 @@ function buildModel() {
 }
 
 /** A drivable HMMWV with raycast-style suspension and a simple tire model. */
-export class Humvee {
+export class Humvee implements PlayerTarget {
   readonly kind = 'ground' as const;
   group: THREE.Group;
   private door: THREE.Group;
@@ -176,6 +177,47 @@ export class Humvee {
   emptyMass = 2700;
   payload = 0;
   hp = 100;
+  /** Knocked out by enemy fire or a crash: burning, undrivable until recovered. */
+  destroyed = false;
+  readonly hitHalfLength = 2.3;
+  readonly hitRadius = 1.3;
+  readonly agl = 0.5;
+  onDamage: ((amount: number, source: string) => void) | null = null;
+  onDestroyed: ((source: string) => void) | null = null;
+
+  damage(amount: number, source: string) {
+    if (this.destroyed || amount <= 0) return;
+    this.hp = Math.max(0, this.hp - amount);
+    this.onDamage?.(amount, source);
+    if (this.hp <= 0) {
+      this.destroyed = true;
+      this.input.throttle = 0;
+      this.input.handbrake = true;
+      this.onDestroyed?.(source);
+    }
+  }
+
+  /** Fresh vehicle (after recovery to the motor pool). */
+  repair() {
+    this.hp = 100;
+    this.destroyed = false;
+    this.group.traverse((o) => {
+      const mat = (o as THREE.Mesh).isMesh ? ((o as THREE.Mesh).material as THREE.MeshStandardMaterial) : null;
+      if (mat?.userData.baseColor !== undefined) mat.color.setHex(mat.userData.baseColor);
+    });
+  }
+
+  /** Scorch the paint when knocked out. */
+  scorch() {
+    this.group.traverse((o) => {
+      const m = o as THREE.Mesh;
+      const mat = m.isMesh ? (m.material as THREE.MeshStandardMaterial) : null;
+      if (!mat?.color || mat.transparent) return;
+      // Materials are shared between parts: remember the paint once, on the material.
+      if (mat.userData.baseColor === undefined) mat.userData.baseColor = mat.color.getHex();
+      mat.color.setHex(0x1c1b18);
+    });
+  }
   input: DriveInput = { throttle: 0, brake: 0, steer: 0, handbrake: true };
   steerAngle = 0;
   doorsOpen = false;

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { World } from '../world/worldgen';
 import type { Effects, SmokeEmitter } from '../fx/effects';
 import type { AudioEngine } from '../audio';
-import type { Heli } from '../heli/heli';
+import type { PlayerTarget } from '../game/target';
 import type { RNG } from '../util/noise';
 import { clamp } from '../util/math';
 import type { Battle } from './battle';
@@ -133,8 +133,8 @@ export class AirOps {
   }
 
   /** Schedule a strike near the player when there is something to see. */
-  private plan(heli: Heli) {
-    const hp = heli.fm.pos;
+  private plan(player: PlayerTarget) {
+    const hp = player.pos;
     const side: Side = this.rng.chance(0.55) ? 'blue' : 'red';
     let target = this.battle.strikeTarget(side, hp);
     if (!target) {
@@ -177,9 +177,9 @@ export class AirOps {
     return true;
   }
 
-  update(dt: number, heli: Heli, camPos: THREE.Vector3) {
+  update(dt: number, player: PlayerTarget, camPos: THREE.Vector3) {
     this.next -= dt;
-    if (this.next <= 0) this.next = this.plan(heli) ? this.rng.range(45, 100) : 20;
+    if (this.next <= 0) this.next = this.plan(player) ? this.rng.range(45, 100) : 20;
 
     for (let i = this.jets.length - 1; i >= 0; i--) {
       const j = this.jets[i];

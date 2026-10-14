@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { clamp, smoothstep } from '../util/math';
 import type { CabinLayout } from '../game/cargo';
+import type { PlayerTarget } from '../game/target';
 import { buildChinook, CABIN, AFT_HUB, FRONT_HUB, GEAR_Y, HOOK_POS, HULL_POINTS, ROTOR_RADIUS, type ChinookParts } from './chinookModel';
 import { FlightModel, type FlightEnv } from './flight';
 import type { World } from '../world/worldgen';
@@ -15,7 +16,7 @@ export interface HeliEvents {
 
 const _p = new THREE.Vector3();
 
-export class Heli {
+export class Heli implements PlayerTarget {
   readonly kind = 'air' as const;
   fm = new FlightModel();
   parts: ChinookParts;
@@ -220,6 +221,24 @@ export class Heli {
   get pos() {
     return this.fm.pos;
   }
+  // PlayerTarget: what enemy fire and battles aim at.
+  get vel() {
+    return this.fm.vel;
+  }
+  get quat() {
+    return this.fm.quat;
+  }
+  get agl() {
+    return this.fm.agl;
+  }
+  get groundSpeed() {
+    return this.fm.groundSpeed;
+  }
+  get destroyed() {
+    return this.crashed;
+  }
+  readonly hitHalfLength = 7;
+  readonly hitRadius = 2.3;
   get onGround() {
     return this.fm.contacts >= 3;
   }

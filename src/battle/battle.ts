@@ -3,7 +3,7 @@ import type { World } from '../world/worldgen';
 import type { Effects, SmokeEmitter } from '../fx/effects';
 import type { AudioEngine } from '../audio';
 import type { Threats } from '../game/threats';
-import type { Heli } from '../heli/heli';
+import type { PlayerTarget } from '../game/target';
 import type { RNG } from '../util/noise';
 import { clamp } from '../util/math';
 import { Campaign, enemyOf, SIDES, type SectorState, type Side } from './campaign';
@@ -34,7 +34,7 @@ interface Soldier extends SoldierView {
   aimT: number;
 }
 
-type Target = { soldier: Soldier } | { vehicle: Vehicle } | { heli: true };
+type Target = { soldier: Soldier } | { vehicle: Vehicle } | { player: true };
 
 interface Shell {
   t: number;
@@ -42,6 +42,8 @@ interface Shell {
   from: Side;
   hitVehicle: Vehicle | null;
   scale: number;
+  /** A direct hit on the player's vehicle (RPG or tank round): damage on impact. */
+  hitPlayer?: number;
 }
 
 interface Front {
@@ -88,6 +90,7 @@ export class Battle {
   private tmp = new THREE.Vector3();
   private tmp2 = new THREE.Vector3();
   private time = 0;
+  private lastArmorWarn = -999;
   private lastRadio = -999;
 
   constructor(
@@ -312,14 +315,14 @@ export class Battle {
   // ---------------------------------------------------------------------------
   // Main update
 
-  update(dt: number, heli: Heli, camPos: THREE.Vector3) {
+  update(dt: number, player: PlayerTarget, camPos: THREE.Vector3) {
     this.time += dt;
     this.soundBudget = Math.min(16, this.soundBudget + dt * 14);
     this.campaign.tick(dt);
 
     // Activate sectors near the player, retire distant ones.
     // Keep the (up to) two sectors nearest the player live; swap out farther ones.
-    const hp = heli.fm.pos;
+    const hp = player.pos;
     const ranked = this.campaign.sectors
       .map((s) => {
         this.sectorCenter(s, this.tmp);
@@ -334,15 +337,15 @@ export class Battle {
     }
     for (const id of want) if (!this.fronts.has(id) && this.fronts.size < 2) this.materialize(this.campaign.sectors[id]);
 
-    for (const f of this.fronts.values()) this.updateFront(f, dt, heli, camPos);
-    this.updateShells(dt, heli, camPos);
+    for (const f of this.fronts.values()) this.updateFront(f, dt, player, camPos);
+    this.updateShells(dt, player, camPos);
 
     this.views.length = 0;
     for (const f of this.fronts.values()) for (const s of f.soldiers) this.views.push(s);
     this.renderer.render(this.views);
   }
 
-  private updateFront(f: Front, dt: number, heli: Heli, camPos: THREE.Vector3) {
+  private updateFront(f: Front, dt: number, player: PlayerTarget, camPos: THREE.Vector3) {
     const s = f.s;
     // --- Construction ---------------------------------------------------
     for (const side of SIDES) {
@@ -363,7 +366,7 @@ export class Battle {
     f.assaultT -= dt;
     if (f.assaultT <= 0) {
       f.assaultT = this.rng.range(50, 110);
-      this.launchAssault(f, heli);
+      this.launchAssault(f, player);
     }
     if (f.assaultSide) {
       const group = f.soldiers.filter((x) => x.assault === f.assaultId);
@@ -424,11 +427,11 @@ export class Battle {
         if (sol.deadT > 50) f.soldiers.splice(i, 1);
         continue;
       }
-      this.updateSoldier(f, sol, dt, heli, camPos);
+      this.updateSoldier(f, sol, dt, player, camPos);
     }
 
     // --- Vehicles ---------------------------------------------------------
-    for (const v of f.vehicles) if (!v.dead) this.updateVehicle(f, v, dt, heli, camPos);
+    for (const v of f.vehicles) if (!v.dead) this.updateVehicle(f, v, dt, player, camPos);
     for (let i = f.wrecks.length - 1; i >= 0; i--) {
       const w = f.wrecks[i];
       w.t += dt;
@@ -442,7 +445,7 @@ export class Battle {
     }
   }
 
-  private launchAssault(f: Front, heli: Heli) {
+  private launchAssault(f: Front, player: PlayerTarget) {
     const s = f.s;
     const pb = this.campaign.power(s, 'blue');
     const pr = this.campaign.power(s, 'red');
@@ -476,7 +479,7 @@ export class Battle {
         v.pause = 0;
       }
     this.sectorCenter(s, this.tmp);
-    const near = Math.hypot(this.tmp.x - heli.fm.pos.x, this.tmp.z - heli.fm.pos.z) < 2200;
+    const near = Math.hypot(this.tmp.x - player.pos.x, this.tmp.z - player.pos.z) < 2200;
     if (near && this.time - this.lastRadio > 45) {
       this.lastRadio = this.time;
       if (side === 'red') this.hooks.radio(`${s.name} TOC`, 'Enemy assault on our line! All callsigns, troops in contact.');
@@ -491,14 +494,16 @@ export class Battle {
     return f.soldiers.filter((x) => x.alive && x.side !== sol.side);
   }
 
-  private acquire(f: Front, sol: Soldier, heli: Heli): Target | null {
+  private acquire(f: Front, sol: Soldier, player: PlayerTarget): Target | null {
     const eye = sol.pos.y + (sol.inTrench ? 1.0 : 1.5);
     const terrain = this.world.terrain;
     // Enemy troops fire on a helicopter that comes close.
-    if (sol.side === 'red' && !heli.crashed && sol.role !== 'engineer') {
-      const hp = heli.fm.pos;
+    if (sol.side === 'red' && !player.destroyed && sol.role !== 'engineer') {
+      const hp = player.pos;
       const d = sol.pos.distanceTo(hp);
-      if (d < 450 && heli.fm.agl < 200 && (d < 250 || this.rng.chance(0.5)) && terrain.lineOfSight(sol.pos.x, eye, sol.pos.z, hp.x, hp.y, hp.z, 16)) return { heli: true };
+      const py = hp.y + (player.kind === 'ground' ? 1.2 : 0);
+      const reach = player.kind === 'ground' && sol.role === 'at' ? 320 : 450;
+      if (d < reach && player.agl < 200 && (d < 250 || this.rng.chance(0.5)) && terrain.lineOfSight(sol.pos.x, eye, sol.pos.z, hp.x, py, hp.z, 16)) return { player: true };
     }
     if (sol.role === 'at') {
       let best: Vehicle | null = null;
@@ -530,8 +535,8 @@ export class Battle {
     return null;
   }
 
-  private targetPos(t: Target, heli: Heli, out: THREE.Vector3): THREE.Vector3 | null {
-    if ('heli' in t) return out.copy(heli.fm.pos);
+  private targetPos(t: Target, player: PlayerTarget, out: THREE.Vector3): THREE.Vector3 | null {
+    if ('player' in t) return player.destroyed ? null : out.copy(player.pos).setY(player.pos.y + (player.kind === 'ground' ? 1.0 : 0));
     if ('vehicle' in t) return t.vehicle.dead ? null : out.copy(t.vehicle.pos).setY(t.vehicle.pos.y + 1.4);
     const s = t.soldier;
     if (!s.alive) return null;
@@ -556,7 +561,7 @@ export class Battle {
     return false;
   }
 
-  private updateSoldier(f: Front, sol: Soldier, dt: number, heli: Heli, camPos: THREE.Vector3) {
+  private updateSoldier(f: Front, sol: Soldier, dt: number, player: PlayerTarget, camPos: THREE.Vector3) {
     sol.aimT = Math.max(0, sol.aimT - dt);
     sol.aiming = sol.aimT > 0;
     let canFire = true;
@@ -625,10 +630,10 @@ export class Battle {
     sol.acquireT -= dt;
     if (sol.acquireT <= 0) {
       sol.acquireT = this.rng.range(0.9, 1.6);
-      sol.target = this.acquire(f, sol, heli);
+      sol.target = this.acquire(f, sol, player);
     }
     if (!canFire || !sol.target) return;
-    const tp = this.targetPos(sol.target, heli, this.tmp2);
+    const tp = this.targetPos(sol.target, player, this.tmp2);
     if (!tp) {
       sol.target = null;
       return;
@@ -640,7 +645,7 @@ export class Battle {
       const ammo = f.s.ammo[sol.side];
       if (sol.role === 'at') {
         sol.cd = this.rng.range(14, 22);
-        this.fireRocket(f, sol, tp, camPos);
+        this.fireRocket(f, sol, tp, player, camPos);
         return;
       }
       sol.burst = sol.role === 'mg' ? this.rng.int(8, 14) : this.rng.int(2, 5);
@@ -653,7 +658,7 @@ export class Battle {
         sol.burstT += sol.role === 'mg' ? 0.09 : 0.18;
         sol.burst--;
         sol.aimT = 0.4;
-        this.fireRound(f, sol, tp, heli, sol.burst === 0, camPos);
+        this.fireRound(f, sol, tp, player, sol.burst === 0, camPos);
       }
     }
   }
@@ -665,11 +670,11 @@ export class Battle {
     return out.set(sol.pos.x + fx * 0.7, sol.pos.y + sol.sink + h, sol.pos.z + fz * 0.7);
   }
 
-  private fireRound(f: Front, sol: Soldier, tp: THREE.Vector3, heli: Heli, last: boolean, camPos: THREE.Vector3) {
+  private fireRound(f: Front, sol: Soldier, tp: THREE.Vector3, player: PlayerTarget, last: boolean, camPos: THREE.Vector3) {
     const from = this.muzzle(sol, new THREE.Vector3());
     const target = sol.target!;
-    if ('heli' in target) {
-      this.threats.shootAt(from, heli, 'mg');
+    if ('player' in target) {
+      this.threats.shootAt(from, player, 'mg');
       return;
     }
     const dir = tp.clone().sub(from);
@@ -696,11 +701,12 @@ export class Battle {
     }
   }
 
-  private fireRocket(f: Front, sol: Soldier, tp: THREE.Vector3, camPos: THREE.Vector3) {
+  private fireRocket(f: Front, sol: Soldier, tp: THREE.Vector3, player: PlayerTarget, camPos: THREE.Vector3) {
     const from = this.muzzle(sol, new THREE.Vector3());
     const target = sol.target!;
     const dist = from.distanceTo(tp);
-    const hit = 'vehicle' in target ? this.rng.chance(0.4) : this.rng.chance(0.25);
+    const atPlayer = 'player' in target && player.kind === 'ground';
+    const hit = 'vehicle' in target ? this.rng.chance(0.4) : this.rng.chance(atPlayer ? 0.35 : 0.25);
     const at = hit ? tp.clone() : tp.clone().add(new THREE.Vector3(this.rng.gauss() * 10, 0, this.rng.gauss() * 10));
     at.y = Math.max(at.y, this.ground(at.x, at.z));
     const v = at.clone().sub(from).normalize().multiplyScalar(240);
@@ -708,7 +714,7 @@ export class Battle {
     for (let k = 0; k < 6; k++)
       this.effects.smoke.emit({ x: from.x, y: from.y, z: from.z, vx: -v.x * 0.01 + this.rng.gauss(), vy: 0.5, vz: -v.z * 0.01 + this.rng.gauss(), life: 2.5, size0: 1, size1: 4, r: 0.85, g: 0.85, b: 0.82, alpha: 0.6, drag: 1.5 });
     this.sound(from, camPos, 'rocket');
-    this.shells.push({ t: dist / 240, at, from: sol.side, hitVehicle: hit && 'vehicle' in target ? target.vehicle : null, scale: 0.7 });
+    this.shells.push({ t: dist / 240, at, from: sol.side, hitVehicle: hit && 'vehicle' in target ? target.vehicle : null, scale: 0.7, hitPlayer: hit && atPlayer ? 34 : undefined });
   }
 
   private kill(f: Front, e: Soldier) {
@@ -755,7 +761,7 @@ export class Battle {
     return false;
   }
 
-  private updateVehicle(f: Front, v: Vehicle, dt: number, heli: Heli, camPos: THREE.Vector3) {
+  private updateVehicle(f: Front, v: Vehicle, dt: number, player: PlayerTarget, camPos: THREE.Vector3) {
     const s = f.s;
     // Movement.
     if (v.pause > 0) v.pause -= dt;
@@ -813,10 +819,18 @@ export class Battle {
         }
         if (best) v.target = best;
       }
-      if (!v.target) {
-        if (v.side === 'red' && v.kind === 'apc' && !heli.crashed && heli.fm.pos.distanceTo(v.pos) < 700 && heli.fm.agl < 250) {
-          const hp = heli.fm.pos;
-          if (terrain.lineOfSight(v.pos.x, eye, v.pos.z, hp.x, hp.y, hp.z, 20)) v.target = 'heli';
+      if (!v.target && v.side === 'red' && !player.destroyed) {
+        const hp = player.pos;
+        const d = hp.distanceTo(v.pos);
+        const py = hp.y + (player.kind === 'ground' ? 1.2 : 0);
+        // APCs hose anything low and close; tanks only bother with vehicles on the ground.
+        const wants = v.kind === 'apc' ? d < 700 && player.agl < 250 : player.kind === 'ground' && d < 800 && this.rng.chance(0.5);
+        if (wants && terrain.lineOfSight(v.pos.x, eye, v.pos.z, hp.x, py, hp.z, 20)) {
+          v.target = 'player';
+          if (player.kind === 'ground' && this.time - this.lastArmorWarn > 40) {
+            this.lastArmorWarn = this.time;
+            this.hooks.radio(`${s.name} TOC`, v.kind === 'tank' ? 'Enemy armor has eyes on your vehicle! Break contact, get behind cover!' : 'Enemy APC engaging your vehicle — keep moving!');
+          }
         }
       }
       if (!v.target) {
@@ -829,7 +843,7 @@ export class Battle {
     }
     const tgt = v.target;
     let tp: THREE.Vector3 | null = null;
-    if (tgt === 'heli') tp = heli.fm.pos;
+    if (tgt === 'player') tp = player.pos;
     else if (tgt instanceof Vehicle) tp = tgt.dead ? null : tgt.pos;
     else if (tgt && (tgt as Soldier).alive) tp = (tgt as Soldier).pos;
     if (!tp) {
@@ -851,7 +865,9 @@ export class Battle {
     if (v.kind === 'tank') {
       v.fireCd = this.rng.range(7, 12) / clamp(s.ammo[v.side], 0.5, 1.6);
       const isVeh = tgt instanceof Vehicle;
-      const hit = this.rng.chance(isVeh ? 0.38 : 0.3);
+      const atPlayer = tgt === 'player';
+      // A moving Humvee is much harder to hit than a parked one.
+      const hit = this.rng.chance(isVeh ? 0.38 : atPlayer ? 0.3 * clamp(1 - player.groundSpeed / 22, 0.25, 1) : 0.3);
       const at = tp.clone();
       if (!hit) at.add(new THREE.Vector3(this.rng.gauss() * 14, 0, this.rng.gauss() * 14));
       at.y = this.ground(at.x, at.z) + (hit && isVeh ? 1.2 : 0);
@@ -861,14 +877,14 @@ export class Battle {
         this.effects.smoke.emit({ x: muzzle.x, y: muzzle.y, z: muzzle.z, vx: vel.x * 0.004 + this.rng.gauss() * 2, vy: this.rng.range(0, 2), vz: vel.z * 0.004 + this.rng.gauss() * 2, life: 3, size0: 2, size1: 7, r: 0.75, g: 0.72, b: 0.66, alpha: 0.6, drag: 1.2 });
       this.effects.fire.emit({ x: muzzle.x, y: muzzle.y, z: muzzle.z, life: 0.12, size0: 6, size1: 3, r: 2, g: 1.5, b: 0.6, alpha: 1, fadeIn: 0.01 });
       this.sound(muzzle, camPos, 'cannon');
-      this.shells.push({ t: dist / 1500, at, from: v.side, hitVehicle: hit && isVeh ? (tgt as Vehicle) : null, scale: 1 });
+      this.shells.push({ t: dist / 1500, at, from: v.side, hitVehicle: hit && isVeh ? (tgt as Vehicle) : null, scale: 1, hitPlayer: hit && atPlayer ? 45 : undefined });
     } else {
       // APC autocannon/MG bursts.
       v.fireCd = this.rng.range(2.5, 5);
       this.sound(muzzle, camPos, 'mg');
       for (let k = 0; k < 8; k++) {
-        if (tgt === 'heli') {
-          this.threats.shootAt(muzzle, heli, 'mg');
+        if (tgt === 'player') {
+          this.threats.shootAt(muzzle, player, 'mg');
           continue;
         }
         const dir = tp.clone().setY(tp.y + 1).sub(muzzle).normalize();
@@ -877,7 +893,7 @@ export class Battle {
         dir.z += this.rng.gauss() * 0.02;
         this.effects.tracer(muzzle.clone().addScaledVector(dir, -k * 3), dir.multiplyScalar(800), dist / 800, v.side === 'blue' ? 0xff5a3a : 0x7dff6a);
       }
-      if (tgt && !(tgt instanceof Vehicle) && tgt !== 'heli') {
+      if (tgt && !(tgt instanceof Vehicle) && tgt !== 'player') {
         const e = tgt as Soldier;
         const cover = e.inTrench ? 0.3 : e.pose === 'prone' ? 0.6 : 1;
         if (this.rng.chance(0.12 * cover)) this.kill(f, e);
@@ -900,12 +916,14 @@ export class Battle {
   // ---------------------------------------------------------------------------
   // Shells, rockets and artillery impacts
 
-  private updateShells(dt: number, heli: Heli, camPos: THREE.Vector3) {
+  private updateShells(dt: number, player: PlayerTarget, camPos: THREE.Vector3) {
     for (let i = this.shells.length - 1; i >= 0; i--) {
       const sh = this.shells[i];
       sh.t -= dt;
       if (sh.t > 0) continue;
       this.shells.splice(i, 1);
+      // A direct hit lands on the vehicle where it is now.
+      if (sh.hitPlayer && !player.destroyed) sh.at.copy(player.pos).setY(player.pos.y + 1);
       const d = sh.at.distanceTo(camPos);
       this.effects.explosion(sh.at, sh.scale, d < 2500);
       this.audio.explosion(d, sh.scale);
@@ -930,10 +948,17 @@ export class Battle {
             if (v.hp <= 0) this.destroyVehicle(f, v);
           }
       }
-      const dh = sh.at.distanceTo(heli.fm.pos);
-      if (dh < 18 && !heli.crashed) {
+      if (player.destroyed) continue;
+      if (sh.hitPlayer) {
+        player.damage(sh.hitPlayer, sh.scale < 1 ? 'RPG hit' : 'Tank round');
+        this.hooks.onHeliHit(sh.hitPlayer);
+        this.effects.sparks(sh.at, 20);
+        continue;
+      }
+      const dh = sh.at.distanceTo(player.pos);
+      if (dh < 18) {
         const dmg = (1 - dh / 18) * 18 * sh.scale;
-        heli.damage(dmg, 'Shellfire');
+        player.damage(dmg, 'Shellfire');
         this.hooks.onHeliHit(dmg);
       }
     }

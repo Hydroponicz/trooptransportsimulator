@@ -78,6 +78,16 @@ and grip better than grass, and bridges have guard rails. Deep water stalls
 the engine. If you roll it or get stuck, `T` calls a recovery truck ($400)
 that puts you back on the nearest road.
 
+The war doesn't stop for the Humvee. Drive near the front line and the
+battles load in around you just as they do for the helicopter: trenches,
+infantry, armour, artillery and air strikes. Enemy riflemen and machine
+gunners shoot at your vehicle, APCs hose it, RPG teams and tanks go for it
+(a moving Humvee is much harder to hit than a parked one), and mortars and
+shellfire land around you. MANPADS only go after aircraft. Hits and hard
+crashes wear down the hull; if it reaches zero the Humvee is knocked out,
+the contract fails, and a replacement waits at the motor pool for a $2,500
+deductible.
+
 ## Flight model
 
 The flight model is a rigid body simulated at 120 Hz:
