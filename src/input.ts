@@ -46,6 +46,14 @@ export class Input {
   wheel = 0;
   dragging = false;
   usingPad = false;
+  /**
+   * 'virtual': keys push a simulated spring-centred stick with inertia and a
+   * soft centre (expo). 'direct': keys ramp straight to full deflection.
+   */
+  controlMode: 'virtual' | 'direct' = 'virtual';
+  /** Raw virtual stick position (before the response curve), for the HUD. */
+  stick = { x: 0, y: 0, pedal: 0 };
+  private stickVel = { x: 0, y: 0, pedal: 0 };
   /** When false, flight keys are ignored (menus open). */
   enabled = true;
   /**
@@ -126,13 +134,41 @@ export class Input {
       if (k('ControlLeft') || k('ControlRight') || k('PageDown')) dc -= rate;
     }
 
-    // Keyboard: ramp deflection in/out for smooth control.
-    const sIn = 1.5;
-    const sOut = 4.5;
-    const ramp = (cur: number, tgt: number) => approach(cur, tgt, (tgt === 0 || Math.sign(tgt) !== Math.sign(cur) ? sOut : sIn) * dt);
-    this.pitch = ramp(this.pitch, tp);
-    this.roll = ramp(this.roll, tr);
-    this.yaw = ramp(this.yaw, ty);
+    if (this.controlMode === 'virtual') {
+      // A held key pushes the stick like a hand would: steady force against a
+      // centring spring, with mass and damping, so it moves smoothly and
+      // drifts back to centre when released.
+      const axis = (k: 'x' | 'y' | 'pedal', key: number) => {
+        const push = 10; // hand force
+        const spring = key !== 0 ? 4 : 18; // centring spring (softer while held)
+        const damping = 8.5;
+        const target = key * 1.15; // slightly past the stop so holding reaches full
+        const acc = (target - this.stick[k]) * (key !== 0 ? push : 0) - this.stick[k] * spring * (key !== 0 ? 0.25 : 1) - this.stickVel[k] * damping;
+        this.stickVel[k] += acc * dt;
+        this.stick[k] = clamp(this.stick[k] + this.stickVel[k] * dt, -1, 1);
+        if (Math.abs(this.stick[k]) >= 1 && Math.sign(this.stickVel[k]) === Math.sign(this.stick[k])) this.stickVel[k] = 0;
+        if (key === 0 && Math.abs(this.stick[k]) < 0.002 && Math.abs(this.stickVel[k]) < 0.01) this.stick[k] = this.stickVel[k] = 0;
+      };
+      axis('y', tp);
+      axis('x', tr);
+      axis('pedal', ty);
+      // Soft centre: small deflections give fine control, full stick still reaches 1.
+      const expo = (v: number, e: number) => (1 - e) * v + e * v * v * v;
+      this.pitch = expo(this.stick.y, 0.55);
+      this.roll = expo(this.stick.x, 0.55);
+      this.yaw = expo(this.stick.pedal, 0.4);
+    } else {
+      // Direct: ramp deflection in/out.
+      const sIn = 1.5;
+      const sOut = 4.5;
+      const ramp = (cur: number, tgt: number) => approach(cur, tgt, (tgt === 0 || Math.sign(tgt) !== Math.sign(cur) ? sOut : sIn) * dt);
+      this.pitch = ramp(this.pitch, tp);
+      this.roll = ramp(this.roll, tr);
+      this.yaw = ramp(this.yaw, ty);
+      this.stick.x = this.roll;
+      this.stick.y = this.pitch;
+      this.stick.pedal = this.yaw;
+    }
     this.collective = clamp(this.collective + dc * dt, 0, 1);
 
     // Gamepad: only takes over once the player actually moves it, and
@@ -166,6 +202,10 @@ export class Input {
         this.pitch = -ry * Math.abs(ry) ** 0.4;
         this.roll = rx * Math.abs(rx) ** 0.4;
         this.yaw = lx;
+        this.stick.x = rx;
+        this.stick.y = -ry;
+        this.stick.pedal = lx;
+        this.stickVel.x = this.stickVel.y = this.stickVel.pedal = 0;
         this.collective = clamp(this.collective + (-ly * 0.5 + (rt - lt) * 0.5) * dt, 0, 1);
       }
       gp.buttons.forEach((b, i) => {

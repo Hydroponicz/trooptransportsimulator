@@ -163,6 +163,7 @@ export class Game {
     };
 
     this.heli.fm.sas = career.data.sas;
+    this.input.controlMode = career.data.controlMode ?? 'virtual';
     this.applyUpgrades();
     this.respawn(true);
     window.addEventListener('resize', () => this.resize());
@@ -347,6 +348,7 @@ export class Game {
           ${document.fullscreenElement ? '' : '<button class="primary" data-act="fsresume">Back to fullscreen</button>'}
           <button class="${document.fullscreenElement ? 'primary' : ''}" data-act="resume">Resume</button>
           <button data-act="vol">Volume: ${Math.round(this.audio.volume * 100)}%</button>
+          <button data-act="ctl">Keyboard: ${this.input.controlMode === 'virtual' ? 'Virtual stick' : 'Direct'}</button>
           ${document.fullscreenElement ? '<button data-act="fs">Exit fullscreen</button>' : ''}
           <button data-act="quit">Save &amp; quit to menu</button>
         </div>`,
@@ -354,6 +356,13 @@ export class Game {
           resume: () => {
             this.terminal.closeDialog();
             this.paused = false;
+          },
+          ctl: () => {
+            this.input.controlMode = this.input.controlMode === 'virtual' ? 'direct' : 'virtual';
+            this.career.data.controlMode = this.input.controlMode;
+            this.career.save();
+            this.paused = false;
+            this.togglePause();
           },
           vol: () => {
             const v = this.audio.volume >= 1 ? 0 : Math.round((this.audio.volume + 0.2) * 10) / 10;

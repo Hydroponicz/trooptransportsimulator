@@ -156,10 +156,10 @@ export class FlightModel {
     // --- Rotor thrust ---------------------------------------------------
     this.ige = clamp(1 - this.agl / 18, 0, 1) ** 1.5;
     this.etl = smoothstep(5, 16, hs);
-    this.vrs = smoothstep(-4.5, -9, va.y) * (1 - smoothstep(7, 13, hs)) * smoothstep(0.15, 0.4, inp.collective);
+    this.vrs = smoothstep(-6.5, -11, va.y) * (1 - smoothstep(5, 10, hs)) * smoothstep(0.15, 0.4, inp.collective);
     const density = 1 - clamp(this.pos.y, 0, 3000) * 0.00007;
     const T =
-      inp.collective * this.maxThrust * this.rpm * this.rpm * (1 + 0.18 * this.ige) * (1 + 0.12 * this.etl) * density * (1 - 0.38 * this.vrs);
+      inp.collective * this.maxThrust * this.rpm * this.rpm * (1 + 0.18 * this.ige) * (1 + 0.12 * this.etl) * density * (1 - 0.28 * this.vrs);
     this.thrust = T;
     const tdir = _v2
       .copy(up)
@@ -182,8 +182,8 @@ export class FlightModel {
     const wDes = new THREE.Vector3();
     const hsF = smoothstep(12, 30, hs);
     if (this.sas >= 1) {
-      let tp = -inp.pitch * 0.49;
-      let tr = inp.roll * 0.61;
+      let tp = -inp.pitch * 0.44;
+      let tr = inp.roll * 0.52;
       // Wind trim: lean into the wind so a hands-off hover doesn't get blown away.
       // Fades out with airspeed, where wind only bends the ground track.
       const trimF = 1 - smoothstep(12, 25, hs);
@@ -204,14 +204,14 @@ export class FlightModel {
         tp = clamp(vf * 0.05, -0.18, 0.18);
         tr = clamp(-vr * 0.05, -0.18, 0.18);
       }
-      wDes.x = clamp(2.2 * (tp - this.pitch), -0.8, 0.8);
-      wDes.z = clamp(-2.2 * (tr - this.roll), -1.1, 1.1);
+      wDes.x = clamp(1.6 * (tp - this.pitch), -0.42, 0.42);
+      wDes.z = clamp(-1.7 * (tr - this.roll), -0.6, 0.6);
     } else {
-      wDes.x = -inp.pitch * 0.6 - this.pitch * 0.12;
-      wDes.z = -inp.roll * 0.95 + this.roll * 0.12;
+      wDes.x = -inp.pitch * 0.45 - this.pitch * 0.12;
+      wDes.z = -inp.roll * 0.7 + this.roll * 0.12;
     }
     // Yaw about the world vertical: pedals, coordinated turns and weathervaning.
-    let yawW = -inp.yaw * 0.75 * (1 - 0.45 * hsF);
+    let yawW = -inp.yaw * 0.55 * (1 - 0.45 * hsF);
     yawW += ((-G * Math.tan(clamp(this.roll, -1.1, 1.1))) / Math.max(hs, 12)) * hsF * (this.sas >= 1 ? 1 : 0.6);
     yawW += -clamp(vaBody.x / Math.max(hs, 8), -1, 1) * 0.7 * hsF;
     const worldUpB = _v3.copy(UP).applyQuaternion(_qi);
@@ -220,8 +220,8 @@ export class FlightModel {
     const hoverRatio = T / (m * G);
     const auth = this.rpm * this.rpm * clamp(0.18 + hoverRatio * 0.9, 0.18, 1.15);
     const iscale = Math.sqrt(m / 12500);
-    const aMax = [2.4 * auth / iscale, 1.5 * auth / iscale, 3.2 * auth / iscale];
-    const kR = 7;
+    const aMax = [1.5 * auth / iscale, 1.0 * auth / iscale, 2.0 * auth / iscale];
+    const kR = 4.5;
     const w = this.angVel;
     const alpha = new THREE.Vector3(
       clamp((wDes.x - w.x) * kR, -aMax[0], aMax[0]),
@@ -231,8 +231,8 @@ export class FlightModel {
     // Vortex-ring buffeting.
     if (this.vrs > 0.05) {
       this.buffetPhase += dt * 9;
-      alpha.x += Math.sin(this.buffetPhase * 1.7) * this.vrs * 1.4;
-      alpha.z += Math.sin(this.buffetPhase * 2.3 + 1) * this.vrs * 1.8;
+      alpha.x += Math.sin(this.buffetPhase * 1.7) * this.vrs * 0.7;
+      alpha.z += Math.sin(this.buffetPhase * 2.3 + 1) * this.vrs * 0.9;
     }
 
     // --- Ground contact -------------------------------------------------

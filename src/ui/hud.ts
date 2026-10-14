@@ -376,6 +376,38 @@ export class Hud {
         g.fillText(`LOAD ${st.h.toFixed(1)} m below`, ix, iy - R - 12);
       }
     }
+    this.drawStick(game, ix, iy, R);
     g.textAlign = 'start';
+  }
+
+  /** Small stick/pedal position display, like a control-position indicator. */
+  private drawStick(game: Game, ix: number, iy: number, R: number) {
+    const g = this.g;
+    const st = game.input.stick;
+    const S = 34;
+    const cx = ix - R - 70;
+    const cy = iy;
+    g.lineWidth = 1;
+    g.strokeStyle = 'rgba(157,255,157,0.45)';
+    g.strokeRect(cx - S, cy - S, S * 2, S * 2);
+    g.beginPath();
+    g.moveTo(cx - S, cy);
+    g.lineTo(cx + S, cy);
+    g.moveTo(cx, cy - S);
+    g.lineTo(cx, cy + S);
+    g.stroke();
+    // Stick forward = up on the display.
+    g.fillStyle = 'rgba(157,255,157,0.95)';
+    g.beginPath();
+    g.arc(cx + st.x * S, cy - st.y * S, 4.5, 0, Math.PI * 2);
+    g.fill();
+    // Pedals.
+    g.strokeStyle = 'rgba(157,255,157,0.45)';
+    g.strokeRect(cx - S, cy + S + 8, S * 2, 6);
+    g.fillRect(cx + st.pedal * S - 2, cy + S + 6, 4, 10);
+    g.font = '10px ui-monospace, monospace';
+    g.textAlign = 'center';
+    g.fillStyle = 'rgba(157,255,157,0.7)';
+    g.fillText(game.input.controlMode === 'virtual' ? 'STICK' : 'STICK (DIRECT)', cx, cy - S - 6);
   }
 }

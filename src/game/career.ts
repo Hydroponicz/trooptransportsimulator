@@ -66,6 +66,8 @@ export interface SaveData {
   upgrades: Record<UpgradeId, number>;
   stats: Stats;
   sas: number;
+  /** Keyboard control feel. */
+  controlMode?: 'virtual' | 'direct';
   /** The state of the war along the front. */
   campaign?: CampaignData;
 }
