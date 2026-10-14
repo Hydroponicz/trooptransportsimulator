@@ -13,6 +13,7 @@ import { Threats } from './game/threats';
 import { Traffic } from './game/traffic';
 import { Campaign } from './battle/campaign';
 import { Battle } from './battle/battle';
+import { AirOps } from './battle/air';
 import { Career, RANKS } from './game/career';
 import { Hud } from './ui/hud';
 import { MapRenderer } from './ui/map';
@@ -42,6 +43,7 @@ export class Game {
   threats: Threats;
   traffic: Traffic;
   battle: Battle;
+  air: AirOps;
   hud: Hud;
   map: MapRenderer;
   terminal: Terminal;
@@ -128,6 +130,13 @@ export class Game {
       },
     });
     this.scene.add(this.battle.group);
+    this.air = new AirOps(this.world, this.battle, this.effects, this.audio, this.rng.fork(), {
+      radio: (from, msg) => {
+        this.hud.radio(from, msg);
+        this.audio.radio();
+      },
+    });
+    this.scene.add(this.air.group);
 
     this.missions = new MissionSystem(this.world.sites, this.rng.fork(), this.cargo, this.sling, this.effects, this.world.terrain, {
       toast: (m, k) => this.toast(m, k),
@@ -440,6 +449,7 @@ export class Game {
     });
     this.threats.update(dt, h, this.cam.camera.position);
     this.battle.update(dt, h, this.cam.camera.position);
+    this.air.update(dt, h, this.cam.camera.position);
     this.traffic.update(dt, this.cam.camera.position);
     this.updateEffects(dt);
     this.effects.update(dt, this.cam.camera.position);

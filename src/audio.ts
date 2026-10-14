@@ -253,6 +253,70 @@ export class AudioEngine {
     this.burst({ delay: 0.12, dur: 0.5, gain: 0.05, type: 'bandpass', f0: 1800, q: 2 });
   }
 
+  /** Jet engine loop with distance attenuation and doppler. */
+  jet(): { update(dist: number, closing: number): void; stop(): void } | null {
+    const ctx = this.ctx;
+    if (!ctx) return null;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuf;
+    src.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'lowpass';
+    bp.frequency.value = 900;
+    const roar = ctx.createBiquadFilter();
+    roar.type = 'peaking';
+    roar.frequency.value = 180;
+    roar.gain.value = 9;
+    const g = ctx.createGain();
+    g.gain.value = 0;
+    src.connect(bp).connect(roar).connect(g).connect(this.master);
+    src.start(0, Math.random());
+    return {
+      update: (dist, closing) => {
+        const t = ctx.currentTime;
+        const doppler = clamp(343 / (343 - clamp(closing, -250, 250)), 0.55, 2.2);
+        src.playbackRate.setTargetAtTime(doppler, t, 0.1);
+        bp.frequency.setTargetAtTime(500 + 1500 / (1 + dist / 600), t, 0.1);
+        g.gain.setTargetAtTime(clamp(0.55 / (1 + dist / 280), 0, 0.5), t, 0.1);
+      },
+      stop: () => {
+        g.gain.setTargetAtTime(0, ctx.currentTime, 0.3);
+        src.stop(ctx.currentTime + 1.5);
+      },
+    };
+  }
+
+  /** The GAU-8: a deep, tearing buzz. Arrives after the impacts (sound is slow). */
+  brrrt(distance: number, duration: number) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t0 = ctx.currentTime + Math.min(distance / 343, 8);
+    const g = clamp(0.9 / (1 + distance / 400), 0.02, 0.6);
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.value = 64;
+    const lfo = ctx.createOscillator();
+    lfo.type = 'square';
+    lfo.frequency.value = 64;
+    const lg = ctx.createGain();
+    lg.gain.value = g * 0.4;
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = distance > 1500 ? 380 : 900;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, t0);
+    gain.gain.linearRampToValueAtTime(g, t0 + 0.05);
+    gain.gain.setValueAtTime(g, t0 + duration);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + duration + 0.5);
+    lfo.connect(lg).connect(gain.gain);
+    osc.connect(f).connect(gain).connect(this.master);
+    osc.start(t0);
+    lfo.start(t0);
+    osc.stop(t0 + duration + 0.6);
+    lfo.stop(t0 + duration + 0.6);
+    this.burst({ delay: t0 - ctx.currentTime, dur: duration + 0.3, gain: g * 0.5, type: 'bandpass', f0: 300, q: 0.6 });
+  }
+
   click() {
     this.beep(700, 0.04, 0.06, 'sine');
   }

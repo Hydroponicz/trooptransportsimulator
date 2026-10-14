@@ -6,6 +6,7 @@ import type { Effects } from '../fx/effects';
 
 interface Vehicle {
   mesh: THREE.Mesh;
+  pathIndex: number;
   path: THREE.Vector2[];
   s: number;
   dir: number;
@@ -27,15 +28,15 @@ export class Traffic {
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
     const truck = buildProto('truck');
     const hmmwv = buildProto('hmmwv');
-    for (const path of world.roads.paths) {
+    world.roads.paths.forEach((path, pathIndex) => {
       const n = path.length > 200 ? 2 : 1;
       for (let i = 0; i < n; i++) {
         const mesh = new THREE.Mesh(rng.chance(0.6) ? truck : hmmwv, mat);
         mesh.castShadow = true;
         this.group.add(mesh);
-        this.vehicles.push({ mesh, path, s: rng.range(0, path.length - 1), dir: rng.chance(0.5) ? 1 : -1, speed: rng.range(7, 11), pause: 0 });
+        this.vehicles.push({ mesh, pathIndex, path, s: rng.range(0, path.length - 1), dir: rng.chance(0.5) ? 1 : -1, speed: rng.range(7, 11), pause: 0 });
       }
-    }
+    });
   }
 
   update(dt: number, camPos: THREE.Vector3) {
@@ -61,7 +62,8 @@ export class Traffic {
       const b = v.path[Math.min(i + 1, v.path.length - 1)];
       const x = a.x + (b.x - a.x) * f;
       const z = a.y + (b.y - a.y) * f;
-      const y = t.heightAt(x, z) + 0.15;
+      const y = this.world.roads.heightOn(v.pathIndex, v.s) + 0.15;
+      void t;
       v.mesh.position.set(x, y, z);
       const dx = (b.x - a.x) * v.dir;
       const dz = (b.y - a.y) * v.dir;

@@ -14,6 +14,13 @@ export interface SectorMarker {
   active: boolean;
 }
 
+export interface AirMarker {
+  x: number;
+  z: number;
+  heading: number;
+  friendly: boolean;
+}
+
 export interface MapMarker {
   x: number;
   z: number;
@@ -135,7 +142,7 @@ export class MapRenderer {
   }
 
   /** North-up local map centered on the helicopter. */
-  drawMini(g: CanvasRenderingContext2D, size: number, hx: number, hz: number, heading: number, range: number, markers: MapMarker[]) {
+  drawMini(g: CanvasRenderingContext2D, size: number, hx: number, hz: number, heading: number, range: number, markers: MapMarker[], air: AirMarker[] = []) {
     const px = WORLD_SIZE / IMG;
     const srcSize = (range * 2) / px;
     const sx = (hx + HALF) / px - srcSize / 2;
@@ -144,10 +151,32 @@ export class MapRenderer {
     g.fillRect(0, 0, size, size);
     g.drawImage(this.img, sx, sy, srcSize, srcSize, 0, 0, size, size);
     const toS = (x: number, z: number): [number, number] => [((x - hx) / (range * 2) + 0.5) * size, ((z - hz) / (range * 2) + 0.5) * size];
+    for (const t of this.world.towns) {
+      const [x, y] = toS(t.x, t.z);
+      const r = (t.r / (range * 2)) * size;
+      g.fillStyle = t.contested ? 'rgba(90,80,70,0.75)' : 'rgba(200,190,170,0.6)';
+      g.fillRect(x - r * 0.7, y - r * 0.7, r * 1.4, r * 1.4);
+    }
     for (const s of this.world.sites) {
       const [x, y] = toS(s.x, s.z);
       if (x < -20 || y < -20 || x > size + 20 || y > size + 20) continue;
       this.siteDot(g, s, x, y, 0.8, false);
+    }
+    for (const a of air) {
+      const [x, y] = toS(a.x, a.z);
+      if (x < 0 || y < 0 || x > size || y > size) continue;
+      g.save();
+      g.translate(x, y);
+      g.rotate(a.heading);
+      g.fillStyle = a.friendly ? '#7fb6ff' : '#ff6a5a';
+      g.beginPath();
+      g.moveTo(0, -6);
+      g.lineTo(5, 5);
+      g.lineTo(0, 2);
+      g.lineTo(-5, 5);
+      g.closePath();
+      g.fill();
+      g.restore();
     }
     for (const m of markers) {
       let [x, y] = toS(m.x, m.z);
@@ -220,6 +249,18 @@ export class MapRenderer {
         g.arc(x, y, 18, 0, Math.PI * 2);
         g.stroke();
       }
+    }
+    for (const t of this.world.towns) {
+      const [x, y] = toS(t.x, t.z);
+      const r = (t.r / WORLD_SIZE) * size;
+      g.fillStyle = t.contested ? 'rgba(70,62,55,0.85)' : 'rgba(215,205,185,0.75)';
+      g.fillRect(x - r * 0.75, y - r * 0.75, r * 1.5, r * 1.5);
+      g.font = 'italic 11px ui-monospace, monospace';
+      g.fillStyle = t.contested ? '#ffb39a' : '#f0e8d0';
+      g.strokeStyle = 'rgba(0,0,0,0.8)';
+      g.lineWidth = 3;
+      g.strokeText(t.name, x - r, y + r + 12);
+      g.fillText(t.name, x - r, y + r + 12);
     }
     for (const s of this.world.sites) {
       const [x, y] = toS(s.x, s.z);

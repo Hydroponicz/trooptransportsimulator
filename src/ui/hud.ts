@@ -189,7 +189,7 @@ export class Hud {
     this.mini.beginPath();
     this.mini.arc(100, 100, 100, 0, Math.PI * 2);
     this.mini.clip();
-    game.map.drawMini(this.mini, 200, fm.pos.x, fm.pos.z, fm.heading, 1500, this.markers(game));
+    game.map.drawMini(this.mini, 200, fm.pos.x, fm.pos.z, fm.heading, 1500, this.markers(game), game.air.jets.filter((j) => j.mesh.visible).map((j) => ({ x: j.pos.x, z: j.pos.z, heading: Math.atan2(j.dir.x, -j.dir.z), friendly: j.side === 'blue' })));
     this.mini.restore();
 
     if (game.mapOpen) {

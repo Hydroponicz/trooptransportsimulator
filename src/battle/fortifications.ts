@@ -116,7 +116,8 @@ export class TrenchLine {
       const nxt = this.points[Math.min(n - 1, i + 1)];
       const prv = this.points[Math.max(0, i - 1)];
       const ang = Math.atan2(-(nxt.z - prv.z), nxt.x - prv.x);
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), ang + Math.PI / 2);
+      // Long axis of each bag runs along the trench.
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), ang);
       const x = p.x + this.facing.x * 1.6;
       const z = p.z + this.facing.z * 1.6;
       m.compose(new THREE.Vector3(x, terrain.heightAt(x, z) - 0.05, z), q, new THREE.Vector3(2.25, rng.range(1.0, 1.3), 1.15));

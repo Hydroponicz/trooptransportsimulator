@@ -97,15 +97,40 @@ Y = camera, LB = flares, RB = SAS, Start = terminal.
 
 ## The world
 
-Each career has a seed that generates an 8 × 8 km theater: hills, ridges, a
-river and mountains around the edges, plus a winding **front line**
-(friendly to the west, enemy to the east) scarred with craters, burning
-wrecks, artillery and tracer fire. Sites include:
+Each career has a seed that generates an 8 × 8 km theater: rolling hills, a
+river crossed by bridges, mountains around the edges, and a winding **front
+line** (friendly to the west, enemy to the east) scarred with craters,
+burning wrecks, artillery and tracer fire. The ground flattens out near the
+front so battles happen on sensible terrain. Places include:
 
 - **Main operating base**: hangars, fuel farm, upgrades.
 - **FOBs**: fuel, repair and flares.
 - **Combat outposts** near the front.
 - **Landing zones**: open fields, some behind enemy lines.
+- **Towns**:
+  - Contested towns straddle the front, ruined and fought over.
+  - Intact villages sit behind each line, with streets, apartment blocks, a
+    church, and farmland, barns and silos around them.
+
+Roads link everything (with power lines along the main supply routes), and
+supply convoys drive them.
+
+### The war
+
+The front is split into 10 sectors (A–J) that track both sides' infantry,
+armor, fortifications, ammo and artillery. Sectors far from you fight on as
+numbers. Near you they become real battles: trench lines dug by engineers,
+squads assaulting across no-man's land, APCs bringing reinforcements, tank
+duels and artillery. A sector with a contested town fights around it. Every
+casualty is written back to the campaign, and your deliveries change it:
+troops reinforce, ammo boosts firepower, supplies fortify, howitzers add
+artillery, vehicles add armor. The **Front** tab and the theater map show
+the state of each sector.
+
+Close air support flies its own missions. A-10s strafe enemy positions with
+their 30 mm cannon (you hear the BRRRT after the impacts), and Su-25s make
+rocket and bomb runs on friendly lines. Both pop flares as they leave, and
+sometimes one gets shot down.
 
 Enemy machine guns, AA guns and MANPADS hold the far side of the line. Low
 and fast is harder to hit, and terrain blocks line of sight. Missiles can be
@@ -126,8 +151,9 @@ src/
   game/cargo.ts      troops / litters / pallets walking on and off the ramp
   game/sling.ts      hook, rope constraint, slung-load physics
   game/threats.ts    enemy fire, missiles, flares, mortars, ambient battle
+  battle/            campaign sectors, materialized battles, trenches, AI aircraft
   game/career.ts     ranks, upgrades, save data
-  world/             terrain, front line, sites, props, roads, forests, sky
+  world/             terrain, front line, sites, towns, props, roads/bridges, forests, sky
   fx/                particles (dust, smoke, fire), tracers, explosions
   audio.ts           synthesized rotor, turbine, wind and effects audio
   ui/                HUD, minimap and theater map, terminal and dialogs

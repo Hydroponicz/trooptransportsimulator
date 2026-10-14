@@ -11,6 +11,8 @@ export const WATER_LEVEL = 0;
 /** Edge of the flyable area; beyond this the mountains wall things in. */
 export const PLAY_HALF = HALF - 900;
 
+const FIELDS = [0xa69a5e, 0x768c45, 0x7d6a4a, 0x8c9150, 0x9a8c55].map((c) => new THREE.Color(c));
+
 export interface FlattenZone {
   x: number;
   z: number;
@@ -31,6 +33,8 @@ const CRATER_CELL = 100;
 export class Terrain {
   readonly heights = new Float32Array((SEGS + 1) * (SEGS + 1));
   flattens: FlattenZone[] = [];
+  /** Settlements with farmland around them (for ground colouring). */
+  farms: { x: number; z: number; rot: number; r: number }[] = [];
   craters: Crater[] = [];
   private craterGrid = new Map<number, Crater[]>();
   mesh!: THREE.Mesh;
@@ -44,19 +48,21 @@ export class Terrain {
 
   /** Natural terrain before any sites or craters are carved in. */
   baseHeight(x: number, z: number): number {
-    const c = this.n1.fbm(x * 0.00022, z * 0.00022, 4) * 0.5 + 0.5;
-    let h = 18 + Math.pow(Math.max(0, c), 1.6) * 230;
-    const r = this.n2.ridged(x * 0.0008 + 31.7, z * 0.0008 - 17.3, 4);
-    h += r * r * 120 * smoothstep(0.35, 0.7, c);
-    h += this.n3.fbm(x * 0.0035, z * 0.0035, 3) * 6;
-    // A meandering river valley.
+    // Rolling country: broad, low hills; ridges only well away from the front.
+    const near = smoothstep(950, 250, Math.abs(this.front.side(x, z)));
+    const c = this.n1.fbm(x * 0.00018, z * 0.00018, 4) * 0.5 + 0.5;
+    let h = 14 + Math.pow(Math.max(0, c), 1.35) * 125 * (1 - 0.5 * near);
+    const r = this.n2.ridged(x * 0.0007 + 31.7, z * 0.0007 - 17.3, 3);
+    h += r * r * 45 * smoothstep(0.45, 0.8, c) * (1 - 0.85 * near);
+    h += this.n3.fbm(x * 0.003, z * 0.003, 3) * 3.5 * (1 - 0.4 * near);
+    // A meandering river valley with gentle banks.
     const rv = Math.abs(this.n2.fbm(x * 0.00018 + 91.1, z * 0.00018 - 44.2, 3));
-    const cut = 1 - smoothstep(0.012, 0.07, rv);
-    h = lerp(h, -6, cut * cut * 0.95);
+    const cut = 1 - smoothstep(0.01, 0.06, rv);
+    h = lerp(h, -4, Math.pow(cut, 1.4) * 0.95);
     // Mountains walling in the map edges.
     const d = Math.max(Math.abs(x), Math.abs(z));
     const e = smoothstep(HALF - 1100, HALF - 100, d);
-    h += e * e * (450 + 250 * this.n1.fbm(x * 0.0015 + 5, z * 0.0015, 3));
+    h += e * e * (420 + 220 * this.n1.fbm(x * 0.0015 + 5, z * 0.0015, 3));
     return h;
   }
 
@@ -187,6 +193,20 @@ export class Terrain {
       tmp.lerp(scorched, scorch * 0.75);
       const crater = this.craterOffset(x, z);
       if (crater < -0.3) tmp.lerp(scorched, Math.min(1, -crater / 3) * 0.8);
+      // Patchwork fields around villages.
+      for (const fm of this.farms) {
+        const dx = x - fm.x;
+        const dz = z - fm.z;
+        const d = Math.hypot(dx, dz);
+        if (d > fm.r + 750 || d < fm.r * 0.85 || h < 1.5 || ny < 0.93) continue;
+        const u = dx * Math.cos(fm.rot) - dz * Math.sin(fm.rot);
+        const v = dx * Math.sin(fm.rot) + dz * Math.cos(fm.rot);
+        const cx = Math.floor(u / 95);
+        const cz = Math.floor(v / 60);
+        const hsh = (((cx * 73856093) ^ (cz * 19349663)) >>> 0) % 5;
+        const fc = FIELDS[hsh];
+        tmp.lerp(fc, smoothstep(fm.r + 750, fm.r + 450, d) * smoothstep(fm.r * 0.85, fm.r * 1.1, d) * 0.55);
+      }
       tmp.lerp(siteDirt, this.siteInfluence(x, z) * 0.85);
       col[i * 3] = tmp.r;
       col[i * 3 + 1] = tmp.g;

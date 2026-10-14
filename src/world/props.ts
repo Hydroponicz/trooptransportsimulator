@@ -93,7 +93,106 @@ export type ProtoName =
   | 'antenna'
   | 'aagun'
   | 'barrel'
-  | 'wreck';
+  | 'wreck'
+  | 'house_a'
+  | 'house_b'
+  | 'house_c'
+  | 'apartment'
+  | 'church'
+  | 'ruin_house'
+  | 'ruin_apartment'
+  | 'rubble'
+  | 'slab'
+  | 'barn'
+  | 'silo'
+  | 'pylon'
+  | 'rock'
+  | 'haybale'
+  | 'bridge_pier';
+
+/** Gable roof prism: ridge along Z. */
+function gable(w: number, h: number, d: number): THREE.BufferGeometry {
+  const sh = new THREE.Shape();
+  sh.moveTo(-w / 2, 0);
+  sh.lineTo(w / 2, 0);
+  sh.lineTo(0, h);
+  sh.closePath();
+  const g = new THREE.ExtrudeGeometry(sh, { depth: d, bevelEnabled: false });
+  g.translate(0, 0, -d / 2);
+  return g;
+}
+
+/** A house: walls, pitched roof, windows and a door. */
+function house(w: number, d: number, wallH: number, wall: number, roof: number): THREE.BufferGeometry {
+  const p: THREE.BufferGeometry[] = [part(box(w, wallH, d), wall, 0, wallH / 2, 0), part(gable(w + 0.8, w * 0.42, d + 0.8), roof, 0, wallH, 0)];
+  const win = 0x2a3036;
+  const floors = Math.max(1, Math.round(wallH / 3));
+  for (let f = 0; f < floors; f++) {
+    const y = 1.6 + f * 2.9;
+    for (let i = -1; i <= 1; i += 2) {
+      p.push(part(box(1.1, 1.2, 0.08), win, i * w * 0.25, y, d / 2 + 0.03));
+      p.push(part(box(1.1, 1.2, 0.08), win, i * w * 0.25, y, -d / 2 - 0.03));
+      p.push(part(box(0.08, 1.2, 1.1), win, w / 2 + 0.03, y, i * d * 0.25));
+    }
+  }
+  p.push(part(box(1.1, 2.1, 0.08), 0x4a3a2a, 0, 1.05, d / 2 + 0.04));
+  p.push(part(box(0.7, 1.6, 0.7), 0x6a5a4a, w * 0.25, wallH + w * 0.32, 0));
+  return merge(p);
+}
+
+/** Ruined walls: jagged shell, scorched, no roof, rubble inside. */
+function ruin(w: number, d: number, h: number, seed: number): THREE.BufferGeometry {
+  const rnd = (k: number) => {
+    const x = Math.sin(seed * 12.9898 + k * 78.233) * 43758.5453;
+    return x - Math.floor(x);
+  };
+  const p: THREE.BufferGeometry[] = [];
+  const wall = 0x7d766b;
+  const burnt = 0x3d3a35;
+  const seg = 4;
+  for (let side = 0; side < 4; side++) {
+    const along = side % 2 === 0 ? w : d;
+    for (let i = 0; i < seg; i++) {
+      if (rnd(side * 10 + i) < 0.18) continue;
+      const hh = h * (0.25 + 0.75 * rnd(side * 10 + i + 5));
+      const t = -along / 2 + (i + 0.5) * (along / seg);
+      const col = rnd(side * 3 + i) < 0.5 ? wall : burnt;
+      if (side === 0) p.push(part(box(along / seg, hh, 0.4), col, t, hh / 2, d / 2));
+      if (side === 2) p.push(part(box(along / seg, hh, 0.4), col, t, hh / 2, -d / 2));
+      if (side === 1) p.push(part(box(0.4, hh, along / seg), col, w / 2, hh / 2, t));
+      if (side === 3) p.push(part(box(0.4, hh, along / seg), col, -w / 2, hh / 2, t));
+    }
+  }
+  p.push(part(new THREE.IcosahedronGeometry(1, 0), 0x6b645a, 0, 0.4, 0, 0, 0, 0, w * 0.45, 1.3, d * 0.45));
+  return merge(p);
+}
+
+function apartment(): THREE.BufferGeometry {
+  const W = 24;
+  const D = 12;
+  const H = 15;
+  const p: THREE.BufferGeometry[] = [part(box(W, H, D), 0xb8b0a0, 0, H / 2, 0), part(box(W + 0.4, 0.4, D + 0.4), 0x77736a, 0, H + 0.2, 0)];
+  for (let f = 0; f < 5; f++) {
+    const y = 1.7 + f * 2.9;
+    p.push(part(box(W - 2, 1.2, 0.1), 0x2a3036, 0, y, D / 2 + 0.05));
+    p.push(part(box(W - 2, 1.2, 0.1), 0x2a3036, 0, y, -D / 2 - 0.05));
+    p.push(part(box(W - 1.5, 0.12, 1.2), 0x8a857a, 0, y - 0.85, D / 2 + 0.6));
+  }
+  p.push(part(box(3, 2, 3), 0x8a857a, -6, H + 1.2, 0));
+  return merge(p);
+}
+
+function ruinedApartment(): THREE.BufferGeometry {
+  const p: THREE.BufferGeometry[] = [
+    part(box(10, 15, 12), 0x8f887b, -7, 7.5, 0),
+    part(box(8, 9, 12), 0x6f695f, 2, 4.5, 0),
+    part(box(6, 4, 12), 0x3d3a35, 9, 2, 0),
+  ];
+  for (let f = 0; f < 5; f++) p.push(part(box(9.6, 1.2, 0.1), 0x17191b, -7, 1.7 + f * 2.9, 6.05));
+  for (let f = 0; f < 3; f++) p.push(part(box(7.6, 1.2, 0.1), 0x17191b, 2, 1.7 + f * 2.9, 6.05));
+  p.push(part(new THREE.IcosahedronGeometry(1, 0), 0x6b645a, 7, 0.5, 2, 0, 0, 0, 6, 2.2, 5));
+  return merge(p);
+}
 
 export function buildProto(name: ProtoName): THREE.BufferGeometry {
   switch (name) {
@@ -175,6 +274,53 @@ export function buildProto(name: ProtoName): THREE.BufferGeometry {
     }
     case 'barrel':
       return merge([part(cyl(0.3, 0.3, 0.9, 8), 0x4a5030, 0, 0.45, 0)]);
+    case 'house_a':
+      return house(8, 9, 3.2, 0xe2d9c2, 0x8e3b2a);
+    case 'house_b':
+      return house(9, 11, 5.8, 0xd8d6d0, 0x5d6066);
+    case 'house_c':
+      return house(7, 8, 3.0, 0xc9a86a, 0x6b4a32);
+    case 'apartment':
+      return apartment();
+    case 'church':
+      return merge([
+        part(box(9, 8, 18), 0xeeeae0, 0, 4, 0),
+        part(gable(9.8, 4.5, 18.8), 0x3f6b4f, 0, 8, 0),
+        part(box(5, 16, 5), 0xeeeae0, 0, 8, -11),
+        part(new THREE.SphereGeometry(2.6, 12, 8), 0xc9a43a, 0, 17.6, -11, 0, 0, 0, 1, 1.35, 1),
+        part(box(0.25, 2.6, 0.25), 0xc9a43a, 0, 21, -11),
+        part(box(1.4, 0.25, 0.25), 0xc9a43a, 0, 21.3, -11),
+        part(box(1.6, 3, 0.1), 0x4a3a2a, 0, 1.5, 9.05),
+      ]);
+    case 'ruin_house':
+      return ruin(8.5, 9.5, 4.5, 3.1);
+    case 'ruin_apartment':
+      return ruinedApartment();
+    case 'rubble':
+      return merge([
+        part(new THREE.IcosahedronGeometry(1, 0), 0x6b645a, 0, 0.5, 0, 0, 0, 0, 3.5, 1.4, 2.8),
+        part(new THREE.IcosahedronGeometry(1, 0), 0x57524a, 2.2, 0.3, 1, 0.5, 0.3, 0, 1.6, 0.8, 1.4),
+        part(box(3, 0.3, 0.3), 0x3a3a38, -1, 0.9, 0.5, 0.3, 0.6, 0.2),
+      ]);
+    case 'slab':
+      return merge([part(box(1, 0.06, 1), 0x474643, 0, 0.03, 0)]);
+    case 'barn':
+      return merge([part(box(12, 6, 18), 0x7a3328, 0, 3, 0), part(gable(13, 5, 19), 0x3d3d3a, 0, 6, 0), part(box(4, 4.5, 0.1), 0x3a2620, 0, 2.25, 9.05)]);
+    case 'silo':
+      return merge([part(cyl(2.4, 2.4, 13, 14), 0xb4b4ae, 0, 6.5, 0), part(new THREE.ConeGeometry(2.6, 2.2, 14), 0x8a8a84, 0, 14.1, 0)]);
+    case 'pylon': {
+      const p: THREE.BufferGeometry[] = [];
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(part(box(0.25, 22, 0.25), 0x6d6f70, sx * 1.1, 11, sz * 1.1, sz * 0.05, 0, -sx * 0.05));
+      p.push(part(box(8, 0.3, 0.3), 0x6d6f70, 0, 19, 0), part(box(6, 0.3, 0.3), 0x6d6f70, 0, 15.5, 0));
+      for (let y = 3; y < 19; y += 4) p.push(part(box(2.4, 0.15, 0.15), 0x6d6f70, 0, y, 1.1, 0, 0, 0.6), part(box(2.4, 0.15, 0.15), 0x6d6f70, 0, y, -1.1, 0, 0, -0.6));
+      return merge(p);
+    }
+    case 'rock':
+      return merge([part(new THREE.DodecahedronGeometry(1, 0), 0x8a8478, 0, 0.3, 0, 0, 0, 0, 1.3, 0.8, 1)]);
+    case 'haybale':
+      return merge([part(cyl(0.75, 0.75, 1.3, 12), 0xc9b265, 0, 0.75, 0, 0, 0, Math.PI / 2)]);
+    case 'bridge_pier':
+      return merge([part(box(1.6, 1, 6.5), 0x8d8b84, 0, 0.5, 0)]);
     case 'wreck':
       return merge([
         part(box(3.0, 1.4, 6.5), 0x26231e, 0, 0.9, 0, 0.05, 0, 0.12),
@@ -203,6 +349,21 @@ const COLLIDE: Record<ProtoName, boolean> = {
   aagun: false,
   barrel: false,
   wreck: false,
+  house_a: true,
+  house_b: true,
+  house_c: true,
+  apartment: true,
+  church: true,
+  ruin_house: true,
+  ruin_apartment: true,
+  rubble: false,
+  slab: false,
+  barn: true,
+  silo: true,
+  pylon: true,
+  rock: false,
+  haybale: false,
+  bridge_pier: true,
 };
 
 interface Batch {
@@ -219,7 +380,8 @@ export class Props {
 
   constructor(private colliders: ColliderSet) {}
 
-  add(name: ProtoName, x: number, y: number, z: number, rotY = 0, scale = 1, color?: number) {
+  add(name: ProtoName, x: number, y: number, z: number, rotY = 0, scale: number | [number, number, number] = 1, color?: number) {
+    const sc = typeof scale === 'number' ? [scale, scale, scale] : scale;
     let b = this.batches.get(name);
     if (!b) {
       b = { geo: buildProto(name), mats: [], colors: [] };
@@ -228,7 +390,7 @@ export class Props {
     const m = new THREE.Matrix4().compose(
       new THREE.Vector3(x, y, z),
       new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rotY),
-      new THREE.Vector3(scale, scale, scale),
+      new THREE.Vector3(sc[0], sc[1], sc[2]),
     );
     b.mats.push(m);
     b.colors.push(color !== undefined ? new THREE.Color(color) : null);

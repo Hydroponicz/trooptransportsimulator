@@ -10,6 +10,7 @@ import { Campaign, enemyOf, SIDES, type SectorState, type Side } from './campaig
 import { SoldierRenderer, type Pose, type SoldierView } from './soldierRenderer';
 import { Vehicle } from './vehicles';
 import { TrenchLine, hedgehogs } from './fortifications';
+import type { Town } from '../world/towns';
 
 type Role = 'rifle' | 'mg' | 'at' | 'engineer';
 type SoldierState = 'hold' | 'advance' | 'retreat' | 'move' | 'dig' | 'dead';
@@ -99,16 +100,75 @@ export class Battle {
     private hooks: BattleHooks,
   ) {
     this.group.add(this.renderer.group);
+    for (const s of campaign.sectors) this.chooseCenter(s);
+  }
+
+  /** Battle site per sector: centred on a contested town if there is one, else the best open ground. */
+  private centers = new Map<number, number>();
+  private sectorTown = new Map<number, Town>();
+
+  private chooseCenter(s: SectorState) {
+    const [z0, z1] = this.campaign.span(s);
+    const town = this.world.towns.find((t) => t.contested && t.z > z0 + 60 && t.z < z1 - 60);
+    if (town) {
+      this.sectorTown.set(s.id, town);
+      this.centers.set(s.id, town.z);
+      return;
+    }
+    let best = s.zc;
+    let bestScore = Infinity;
+    for (let z = z0 + LINE_LEN / 2; z <= z1 - LINE_LEN / 2; z += 15) {
+      let score = Math.abs(z - s.zc) * 0.02;
+      for (const side of SIDES) {
+        let lo = Infinity;
+        let hi = -Infinity;
+        for (let t = 0; t <= 1.001; t += 0.1) {
+          for (const extra of [0, 160]) {
+            const p = this.rawLinePoint(z, side, t, extra);
+            const h = this.ground(p.x, p.y);
+            if (h < 1.2) score += 120;
+            if (this.world.sites.some((st) => Math.hypot(st.x - p.x, st.z - p.y) < st.radius + 15)) score += 60;
+            if (extra === 0) {
+              lo = Math.min(lo, h);
+              hi = Math.max(hi, h);
+            }
+          }
+        }
+        score += (hi - lo) * 2;
+      }
+      if (score < bestScore) {
+        bestScore = score;
+        best = z;
+      }
+    }
+    this.centers.set(s.id, best);
+  }
+
+  private rawLinePoint(zc: number, side: Side, t: number, extra: number): THREE.Vector2 {
+    const z = zc + (t - 0.5) * LINE_LEN;
+    const dir = side === 'blue' ? -1 : 1;
+    const zig = 3.5 * Math.sin(z * 0.19) + 1.5 * Math.sin(z * 0.05);
+    return new THREE.Vector2(this.world.front.x(z) + dir * (LINE_OFFSET + extra) + zig, z);
   }
 
   // ---------------------------------------------------------------------------
   // Geometry helpers
 
   private linePoint(s: SectorState, side: Side, t: number, extra = 0): THREE.Vector2 {
-    const z = s.zc + (t - 0.5) * LINE_LEN;
+    const p = this.rawLinePoint(this.centers.get(s.id) ?? s.zc, side, t, 0);
     const dir = side === 'blue' ? -1 : 1;
-    const zig = 3.5 * Math.sin(z * 0.19) + 1.5 * Math.sin(z * 0.05 + s.id);
-    return new THREE.Vector2(this.world.front.x(z) + dir * (LINE_OFFSET + extra) + zig, z);
+    // Trenches curve around a contested town: the town is the ground being fought over.
+    const town = this.sectorTown.get(s.id);
+    if (town) {
+      const R = town.r + 35;
+      const dz = p.y - town.z;
+      if (Math.abs(dz) < R) {
+        const edge = Math.sqrt(R * R - dz * dz);
+        p.x = side === 'blue' ? Math.min(p.x, town.x - edge) : Math.max(p.x, town.x + edge);
+      }
+    }
+    p.x += dir * extra;
+    return p;
   }
 
   private ground(x: number, z: number) {
@@ -116,7 +176,8 @@ export class Battle {
   }
 
   sectorCenter(s: SectorState, out: THREE.Vector3) {
-    return out.set(this.world.front.x(s.zc), 0, s.zc);
+    const z = this.centers.get(s.id) ?? s.zc;
+    return out.set(this.world.front.x(z), 0, z);
   }
 
   // ---------------------------------------------------------------------------
@@ -175,7 +236,13 @@ export class Battle {
     group.add(
       hedgehogs(
         this.world.terrain,
-        (t, off) => new THREE.Vector2(this.world.front.x(s.zc + (t - 0.5) * LINE_LEN) + off, s.zc + (t - 0.5) * LINE_LEN),
+        (t, off) => {
+          const z = (this.centers.get(s.id) ?? s.zc) + (t - 0.5) * LINE_LEN;
+          const town = this.sectorTown.get(s.id);
+          // Keep tank traps out of the town streets.
+          const x = this.world.front.x(z) + off + (town && Math.abs(z - town.z) < town.r ? (off < 0 ? -1 : 1) * town.r : 0);
+          return new THREE.Vector2(x, z);
+        },
         rng,
         14,
       ),
@@ -881,12 +948,55 @@ export class Battle {
     else this.audio.gunshot(d, kind === 'mg');
   }
 
+  // ---------------------------------------------------------------------------
+  // Air support hooks
+
+  /** Something worth bombing for an aircraft of `side`, in a live sector near the player. */
+  strikeTarget(side: Side, near: THREE.Vector3): THREE.Vector3 | null {
+    const enemy = enemyOf(side);
+    let best: THREE.Vector3 | null = null;
+    let bd = Infinity;
+    for (const f of this.fronts.values()) {
+      const vehicles = f.vehicles.filter((v) => !v.dead && v.side === enemy);
+      const troops = f.soldiers.filter((x) => x.alive && x.side === enemy);
+      const pick = vehicles.length && this.rng.chance(0.55) ? this.rng.pick(vehicles).pos : troops.length ? this.rng.pick(troops).pos : null;
+      if (!pick) continue;
+      const d = pick.distanceTo(near);
+      if (d < bd) {
+        bd = d;
+        best = pick.clone();
+      }
+    }
+    return best;
+  }
+
+  /** An explosion that hurts whatever is around it (bombs, rockets). */
+  addImpact(at: THREE.Vector3, scale: number, from: Side, delay = 0) {
+    this.shells.push({ t: delay, at: at.clone(), from, hitVehicle: null, scale });
+  }
+
+  /** One cannon round landing: small, but lethal close by and hard on vehicles. */
+  gunImpact(at: THREE.Vector3, camPos: THREE.Vector3) {
+    if (at.distanceToSquared(camPos) < 2500 * 2500) {
+      this.effects.sparks(at, 3);
+      this.effects.impactPuff(at);
+    }
+    for (const f of this.fronts.values()) {
+      for (const s of f.soldiers) if (s.alive && s.pos.distanceToSquared(at) < 9 && this.rng.chance(s.inTrench ? 0.25 : 0.6)) this.kill(f, s);
+      for (const v of f.vehicles)
+        if (!v.dead && v.pos.distanceToSquared(at) < 16 && this.rng.chance(0.05)) {
+          v.hp--;
+          if (v.hp <= 0) this.destroyVehicle(f, v);
+        }
+    }
+  }
+
   /** Summary for UI: per-sector numbers. */
   sectorInfo() {
     return this.campaign.sectors.map((s) => ({
       s,
-      x: this.world.front.x(s.zc),
-      z: s.zc,
+      x: this.sectorCenter(s, new THREE.Vector3()).x,
+      z: this.centers.get(s.id) ?? s.zc,
       control: this.campaign.control(s),
       active: this.fronts.has(s.id),
     }));
