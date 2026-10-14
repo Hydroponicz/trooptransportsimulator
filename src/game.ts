@@ -194,6 +194,7 @@ export class Game {
 
   start() {
     this.running = true;
+    this.input.active = true;
     this.hud.show(true);
     this.audio.init();
     this.last = performance.now();
@@ -209,6 +210,7 @@ export class Game {
 
   stop() {
     this.running = false;
+    this.input.active = false;
     this.audio.setMissileWarning(false);
     void this.audio.ctx?.suspend();
   }

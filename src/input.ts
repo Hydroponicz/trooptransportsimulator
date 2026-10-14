@@ -48,9 +48,19 @@ export class Input {
   usingPad = false;
   /** When false, flight keys are ignored (menus open). */
   enabled = true;
+  /**
+   * While a game is running, keys are caught in the capture phase and not
+   * passed on, so page overlays (e.g. the Vercel preview toolbar, which opens
+   * on Ctrl) never see the flight controls.
+   */
+  active = false;
 
   constructor(el: HTMLElement) {
+    const swallow = (e: KeyboardEvent) => {
+      if (this.active) e.stopPropagation();
+    };
     window.addEventListener('keydown', (e) => {
+      swallow(e);
       if (e.code === 'Tab' || e.code === 'F1' || e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
       // Ctrl is collective-down, so stop Ctrl+<flight key> browser shortcuts (save, bookmark, select all…).
       // Ctrl+W can only be captured in fullscreen with keyboard lock; see fullscreen.ts.
@@ -58,8 +68,15 @@ export class Input {
       if (!e.repeat && KEYMAP[e.code]) this.pressed.add(KEYMAP[e.code]);
       this.keys.add(e.code);
       this.usingPad = false;
-    });
-    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+    }, { capture: true });
+    window.addEventListener(
+      'keyup',
+      (e) => {
+        swallow(e);
+        this.keys.delete(e.code);
+      },
+      { capture: true },
+    );
     window.addEventListener('blur', () => this.keys.clear());
     el.addEventListener('mousedown', (e) => {
       if (e.button === 0 || e.button === 2) this.dragging = true;
