@@ -17,4 +17,6 @@ export interface PlayerTarget {
   readonly hitHalfLength: number;
   readonly hitRadius: number;
   damage(amount: number, source: string): void;
+  /** Crew-served guns that shoot back: muzzle and outward direction, in the body frame. */
+  readonly doorGuns?: readonly { muzzle: THREE.Vector3; out: THREE.Vector3 }[];
 }

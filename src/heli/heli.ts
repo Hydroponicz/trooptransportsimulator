@@ -239,6 +239,11 @@ export class Heli implements PlayerTarget {
   }
   readonly hitHalfLength = 7;
   readonly hitRadius = 2.3;
+  /** Right door gun and left window gun, pointing out through their openings. */
+  readonly doorGuns = CABIN.gunners.map((g) => {
+    const sx = Math.sign(g.pos.x);
+    return { muzzle: new THREE.Vector3(sx * 2.7, g.pos.y + 1.0, g.pos.z), out: new THREE.Vector3(sx, 0, 0) };
+  });
   get onGround() {
     return this.fm.contacts >= 3;
   }

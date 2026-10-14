@@ -55,6 +55,11 @@ can look back over your shoulder into the cabin. The windshield, chin
 windows, side windows and cabin windows are real glass, so you can see in
 and out. A door gunner sits at the right forward door and a window gunner at
 the left escape window, each on an M240, and the co-pilot flies beside you.
+The gunners engage enemy infantry inside their arc (about 70° either side
+of their opening, out to 550 m) with short bursts. They are support, not a
+weapon system: kills are occasional, get rarer with range, speed and
+altitude, and they call them out on the radio. Every kill counts against
+the enemy in that sector's battle.
 
 ## The Humvee
 

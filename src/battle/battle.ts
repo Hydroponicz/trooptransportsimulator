@@ -91,6 +91,9 @@ export class Battle {
   private tmp2 = new THREE.Vector3();
   private time = 0;
   private lastArmorWarn = -999;
+  private lastGunnerCall = -999;
+  /** Per door gun: current target, burst state and cooldowns. */
+  private guns: { target: Soldier | null; acquireT: number; cd: number; burst: number; burstT: number }[] = [];
   private lastRadio = -999;
 
   constructor(
@@ -342,6 +345,7 @@ export class Battle {
 
     this.views.length = 0;
     for (const f of this.fronts.values()) for (const s of f.soldiers) this.views.push(s);
+    if (player.doorGuns && !player.destroyed) this.updateDoorGuns(dt, player, camPos);
     this.renderer.render(this.views);
   }
 
@@ -962,6 +966,101 @@ export class Battle {
         this.hooks.onHeliHit(dmg);
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // The player's door gunners
+
+  /**
+   * The helicopter's gunners engage enemy infantry inside their arc. They are
+   * deliberately modest: short bursts, long pauses, and a low chance of a kill
+   * that drops with range and the aircraft's speed.
+   */
+  private updateDoorGuns(dt: number, player: PlayerTarget, camPos: THREE.Vector3) {
+    const terrain = this.world.terrain;
+    const ports = player.doorGuns!;
+    while (this.guns.length < ports.length) this.guns.push({ target: null, acquireT: this.rng.range(0, 1), cd: 0, burst: 0, burstT: 0 });
+    const RANGE = 550;
+    const ARC = Math.cos((70 * Math.PI) / 180);
+    const muzzle = new THREE.Vector3();
+    const out = new THREE.Vector3();
+    const to = new THREE.Vector3();
+    // Fast, high or rolling hard: the gunners struggle to stay on target.
+    const steadiness = clamp(1 - player.groundSpeed / 70, 0.3, 1) * (player.agl > 300 ? 0.5 : 1);
+    ports.forEach((port, i) => {
+      const gun = this.guns[i];
+      muzzle.copy(port.muzzle).applyQuaternion(player.quat).add(player.pos);
+      out.copy(port.out).applyQuaternion(player.quat);
+      const inArc = (p: THREE.Vector3) => {
+        to.copy(p).sub(muzzle);
+        const d = to.length();
+        return d < RANGE && to.dot(out) / d > ARC ? d : -1;
+      };
+      gun.acquireT -= dt;
+      if (gun.acquireT <= 0) {
+        gun.acquireT = this.rng.range(1.0, 2.0);
+        const keep = gun.target && gun.target.alive && inArc(gun.target.pos) > 0 ? gun.target : null;
+        gun.target = keep;
+        if (!keep) {
+          let best: Soldier | null = null;
+          let bd = Infinity;
+          for (const f of this.fronts.values())
+            for (const x of f.soldiers) {
+              if (!x.alive || x.side !== 'red') continue;
+              const d = inArc(x.pos);
+              if (d > 0 && d < bd && terrain.lineOfSight(muzzle.x, muzzle.y, muzzle.z, x.pos.x, x.pos.y + 1.0, x.pos.z, 16)) (bd = d), (best = x);
+            }
+          gun.target = best;
+        }
+      }
+      const t = gun.target;
+      if (!t || !t.alive) {
+        gun.burst = 0;
+        return;
+      }
+      const d = inArc(t.pos);
+      if (d < 0) {
+        gun.target = null;
+        return;
+      }
+      gun.cd -= dt;
+      if (gun.burst <= 0 && gun.cd <= 0) {
+        gun.burst = this.rng.int(7, 12);
+        gun.cd = this.rng.range(2.5, 5);
+        this.sound(muzzle, camPos, 'mg');
+      }
+      if (gun.burst <= 0) return;
+      gun.burstT -= dt;
+      while (gun.burstT <= 0 && gun.burst > 0) {
+        gun.burstT += 0.085;
+        gun.burst--;
+        const aim = this.tmp2.copy(t.pos).setY(t.pos.y + (t.inTrench ? 0.9 : t.pose === 'prone' ? 0.3 : 1.1));
+        const dir = aim.sub(muzzle).normalize();
+        const spread = 0.012 + (1 - steadiness) * 0.03;
+        dir.x += this.rng.gauss() * spread;
+        dir.y += this.rng.gauss() * spread;
+        dir.z += this.rng.gauss() * spread;
+        const v = dir.normalize().multiplyScalar(850);
+        // Every round from the muzzle, inheriting the aircraft's motion.
+        this.effects.tracer(muzzle.clone(), v.add(player.vel), Math.min(0.9, d / 850 + 0.1), 0xff5a3a);
+        if (muzzle.distanceToSquared(camPos) < 600 * 600)
+          this.effects.fire.emit({ x: muzzle.x, y: muzzle.y, z: muzzle.z, life: 0.04, size0: 0.9, size1: 0.4, r: 2, g: 1.6, b: 0.7, alpha: 1, fadeIn: 0.01 });
+        if (gun.burst > 0) continue;
+        // Resolve the burst against the target's cover.
+        const f = [...this.fronts.values()].find((fr) => fr.soldiers.includes(t));
+        if (!f) break;
+        const cover = t.inTrench ? 0.25 + (1 - f.s.fort.red) * 0.3 : t.pose === 'prone' ? 0.5 : 1;
+        const p = 0.07 * cover * steadiness * Math.max(0.15, 1 - d / RANGE);
+        if (this.rng.chance(p)) {
+          this.kill(f, t);
+          gun.target = null;
+          if (this.time - this.lastGunnerCall > 25 && this.rng.chance(0.6)) {
+            this.lastGunnerCall = this.time;
+            this.hooks.radio(i === 0 ? 'Right gunner' : 'Left gunner', this.rng.pick(['Enemy down!', 'Got him!', 'Target down, scanning.', 'One down, right side clear.'].map((m) => (i === 0 ? m : m.replace('right', 'left')))));
+          }
+        } else if (this.rng.chance(0.5)) this.effects.impactPuff(t.pos.clone().add(new THREE.Vector3(this.rng.gauss() * 2, 0.2, this.rng.gauss() * 2)));
+      }
+    });
   }
 
   private sound(at: THREE.Vector3, camPos: THREE.Vector3, kind: 'rifle' | 'mg' | 'cannon' | 'rocket') {
