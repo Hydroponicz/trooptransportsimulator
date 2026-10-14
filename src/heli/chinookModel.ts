@@ -280,7 +280,8 @@ export function buildChinook(): ChinookParts {
   const lightGeo = new THREE.SphereGeometry(0.12, 8, 6);
   add(lightGeo, new THREE.MeshBasicMaterial({ color: 0xff2020 }), -1.95, 0.4, -5.6);
   add(lightGeo, new THREE.MeshBasicMaterial({ color: 0x20ff40 }), 1.95, 0.4, -5.6);
-  add(lightGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }), 0, 0.6, 7.1);
+  // Tail position light, on the closure panel above the ramp opening.
+  add(new THREE.SphereGeometry(0.08, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffffff }), 0, 1.62, 7.04);
   const strobeMat = new THREE.MeshBasicMaterial({ color: 0xff1a1a });
   const strobe = add(new THREE.SphereGeometry(0.16, 8, 6), strobeMat, 0, 4.35, 3.2);
 
