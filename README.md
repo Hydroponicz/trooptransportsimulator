@@ -86,9 +86,10 @@ The flight model is a rigid body simulated at 120 Hz:
 | `M` | Theater map |
 | `Esc` / `P` | Pause |
 
-Ctrl+W normally closes a browser tab. Use **Fullscreen** (title screen or
-pause menu) in Chrome or Edge and the game captures it, so descending while
-pitching forward is safe. Outside fullscreen the browser asks before closing.
+The game goes fullscreen with keyboard lock when you start or continue a
+career, so in Chrome and Edge Ctrl+W / Ctrl+Q go to the game instead of
+closing the browser. Hold Esc to leave fullscreen; the game pauses and offers
+a one-click way back. Firefox and Safari don't support keyboard lock.
 
 Gamepad: the left stick is collective and yaw, the right stick is cyclic, and
 the triggers also move the collective. A = ramp, B = hook, X = engine,

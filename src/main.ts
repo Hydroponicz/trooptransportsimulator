@@ -1,6 +1,6 @@
 import { Game } from './game';
 import { Career } from './game/career';
-import { toggleFullscreen } from './fullscreen';
+import { enterFullscreen, toggleFullscreen } from './fullscreen';
 
 const menu = document.getElementById('menu')!;
 const buttons = document.getElementById('menu-buttons')!;
@@ -16,7 +16,9 @@ window.addEventListener('beforeunload', (e) => {
   if (!game || !menu.classList.contains('hidden')) return;
   game.career.save();
   e.preventDefault();
-  e.returnValue = '';
+  // A non-empty value is required by some browsers to actually show the prompt.
+  e.returnValue = 'Leave the game? Unsaved flight progress will be lost.';
+  return e.returnValue;
 });
 
 function webglOk(): boolean {
@@ -63,6 +65,9 @@ function showMenu() {
 }
 
 function launch(career: Career) {
+  // Fullscreen + keyboard lock so Ctrl+W / Ctrl+Q (descend + pitch/yaw) reach
+  // the game instead of closing the browser. Called synchronously from the click.
+  void enterFullscreen();
   career.save();
   menu.classList.add('hidden');
   loading.classList.remove('hidden');

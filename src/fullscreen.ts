@@ -9,6 +9,17 @@ const kb = (): KeyboardLock | undefined => (navigator as unknown as { keyboard?:
 
 export const keyboardLockSupported = () => typeof kb()?.lock === 'function';
 
+/** Enter fullscreen and lock the keyboard. Must be called from a user gesture (click/key). */
+export async function enterFullscreen(): Promise<void> {
+  if (document.fullscreenElement) return;
+  try {
+    await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+    await kb()?.lock?.();
+  } catch {
+    /* refused (e.g. embedded without permission) — the game still runs windowed */
+  }
+}
+
 export async function toggleFullscreen(): Promise<void> {
   if (document.fullscreenElement) {
     kb()?.unlock?.();

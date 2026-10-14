@@ -20,7 +20,7 @@ import { clamp, fmtMoney, smoothstep } from './util/math';
 import { SAS_NAMES, type FlightEnv } from './heli/flight';
 import type { Site } from './world/sites';
 import { WATER_LEVEL } from './world/terrain';
-import { toggleFullscreen } from './fullscreen';
+import { enterFullscreen, toggleFullscreen } from './fullscreen';
 
 const STEP = 1 / 120;
 
@@ -150,6 +150,11 @@ export class Game {
     this.respawn(true);
     window.addEventListener('resize', () => this.resize());
     this.resize();
+    // Leaving fullscreen mid-flight drops the keyboard lock, so Ctrl+W could
+    // close the tab again. Pause and offer a one-click way back.
+    document.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement && this.running && !this.paused && !this.terminal.dialogOpen) this.togglePause();
+    });
   }
 
   resize() {
@@ -320,10 +325,12 @@ export class Game {
     if (this.paused) {
       this.terminal.dialog(
         `<h2>Paused</h2><div class="sub">${this.world.base.name} theater · seed ${this.career.data.seed}</div>
+        ${document.fullscreenElement ? '' : '<p style="color:#ffcf4a">You are not in fullscreen. Outside fullscreen the browser may treat Ctrl+W / Ctrl+Q as close-tab / quit.</p>'}
         <div class="actions" style="justify-content:flex-start;flex-wrap:wrap">
-          <button class="primary" data-act="resume">Resume</button>
+          ${document.fullscreenElement ? '' : '<button class="primary" data-act="fsresume">Back to fullscreen</button>'}
+          <button class="${document.fullscreenElement ? 'primary' : ''}" data-act="resume">Resume</button>
           <button data-act="vol">Volume: ${Math.round(this.audio.volume * 100)}%</button>
-          <button data-act="fs">${document.fullscreenElement ? 'Exit fullscreen' : 'Fullscreen (lets Ctrl+W work)'}</button>
+          ${document.fullscreenElement ? '<button data-act="fs">Exit fullscreen</button>' : ''}
           <button data-act="quit">Save &amp; quit to menu</button>
         </div>`,
         {
@@ -336,6 +343,11 @@ export class Game {
             this.audio.setVolume(v);
             this.paused = false;
             this.togglePause();
+          },
+          fsresume: () => {
+            void enterFullscreen();
+            this.terminal.closeDialog();
+            this.paused = false;
           },
           fs: () => {
             void toggleFullscreen().then(() => {
