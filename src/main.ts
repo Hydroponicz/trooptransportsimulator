@@ -1,0 +1,84 @@
+import { Game } from './game';
+import { Career } from './game/career';
+
+const menu = document.getElementById('menu')!;
+const buttons = document.getElementById('menu-buttons')!;
+const status = document.getElementById('menu-status')!;
+const loading = document.getElementById('loading')!;
+const loadingMsg = document.getElementById('loading-msg')!;
+const app = document.getElementById('app')!;
+
+let game: Game | null = null;
+
+function webglOk(): boolean {
+  try {
+    const c = document.createElement('canvas');
+    return !!(c.getContext('webgl2') || c.getContext('webgl'));
+  } catch {
+    return false;
+  }
+}
+
+function showMenu() {
+  menu.classList.remove('hidden');
+  const saved = Career.load();
+  buttons.innerHTML = '';
+  const mk = (label: string, primary: boolean, fn: () => void) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    if (primary) b.className = 'primary';
+    b.onclick = fn;
+    buttons.appendChild(b);
+  };
+  if (!webglOk()) {
+    status.textContent = 'WebGL is not available in this browser — the game cannot run.';
+    return;
+  }
+  if (saved) {
+    mk(`Continue career — ${saved.rankName}, $${saved.data.money.toLocaleString()}`, true, () => launch(saved));
+    mk('New career (new theater)', false, () => {
+      if (confirm('Start over? Your current career will be replaced.')) launch(Career.fresh());
+    });
+  } else {
+    mk('Start career', true, () => launch(Career.fresh()));
+  }
+  const seedBtn = document.createElement('button');
+  seedBtn.textContent = 'Play a specific seed…';
+  seedBtn.onclick = () => {
+    const s = prompt('World seed (number):');
+    if (s && /^\d+$/.test(s.trim())) launch(Career.fresh(Number(s.trim())));
+  };
+  buttons.appendChild(seedBtn);
+  status.textContent = saved ? `Theater seed ${saved.data.seed}` : 'Every career generates a new procedural theater of operations.';
+}
+
+function launch(career: Career) {
+  career.save();
+  menu.classList.add('hidden');
+  loading.classList.remove('hidden');
+  loadingMsg.textContent = 'Generating theater…';
+  // Let the loading screen paint before the heavy generation work.
+  setTimeout(() => {
+    try {
+      if (game) {
+        game.stop();
+        game.renderer.dispose();
+        game.renderer.domElement.remove();
+      }
+      game = new Game(career, app, (m) => (loadingMsg.textContent = m));
+      game.onQuit = () => {
+        game?.stop();
+        game?.hud.show(false);
+        showMenu();
+      };
+      loading.classList.add('hidden');
+      game.start();
+      (window as unknown as { game: Game }).game = game;
+    } catch (e) {
+      console.error(e);
+      loadingMsg.textContent = `Failed to start: ${(e as Error).message}`;
+    }
+  }, 50);
+}
+
+showMenu();

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Troop Transport Simulator</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="hud"></canvas>
+      <div id="hud-dom" class="hidden">
+        <div class="panel tl" id="career-panel">
+          <div class="money" id="hud-money">$0</div>
+          <div class="rank" id="hud-rank">WO1</div>
+          <div class="bar"><div id="hud-xp"></div></div>
+        </div>
+        <div class="panel left" id="flight-panel">
+          <div class="row"><span>IAS</span><b id="h-ias">0</b><i>kt</i></div>
+          <div class="row"><span>RALT</span><b id="h-ralt">0</b><i>m</i></div>
+          <div class="row"><span>V/S</span><b id="h-vs">0</b><i>m/s</i></div>
+          <div class="row"><span>GS</span><b id="h-gs">0</b><i>kt</i></div>
+          <div class="row"><span>HDG</span><b id="h-hdg">000</b><i>°</i></div>
+          <div class="vbar"><div id="h-coll"></div><label>COLL</label></div>
+        </div>
+        <div class="panel right" id="sys-panel">
+          <div class="row"><span>NR</span><b id="h-nr">0</b><i>%</i></div>
+          <div class="row"><span>TRQ</span><b id="h-trq">0</b><i>%</i></div>
+          <div class="row"><span>FUEL</span><b id="h-fuel">0</b><i>kg</i></div>
+          <div class="row"><span>GW</span><b id="h-gw">0</b><i>kg</i></div>
+          <div class="row"><span>HULL</span><b id="h-hull">100</b><i>%</i></div>
+          <div class="row"><span>FLR</span><b id="h-flr">0</b><i></i></div>
+          <div class="row"><span>LOAD</span><b id="h-load">—</b><i></i></div>
+        </div>
+        <div class="panel bl" id="mission-panel">
+          <div class="m-title" id="m-title">No active contract</div>
+          <div class="m-obj" id="m-obj">Land at a base and open the terminal [Tab] to find work.</div>
+          <div class="m-stats" id="m-stats"></div>
+        </div>
+        <div class="minimap"><canvas id="minimap" width="200" height="200"></canvas></div>
+        <div id="warnings"></div>
+        <div id="status-line"></div>
+        <div id="prompt"></div>
+        <div id="bigtext"></div>
+        <div id="toasts"></div>
+      </div>
+      <div id="mapview" class="modal hidden">
+        <div class="map-wrap">
+          <canvas id="bigmap" width="900" height="900"></canvas>
+          <div class="map-legend">
+            <b>THEATER MAP</b>
+            <div><span class="sw base"></span> Main base</div>
+            <div><span class="sw fob"></span> FOB</div>
+            <div><span class="sw cop"></span> Combat outpost</div>
+            <div><span class="sw lz"></span> Landing zone</div>
+            <div><span class="sw red"></span> Enemy territory</div>
+            <div><span class="sw obj"></span> Objective</div>
+            <p>[M] close</p>
+          </div>
+        </div>
+      </div>
+      <div id="terminal" class="modal hidden"></div>
+      <div id="dialog" class="modal hidden"></div>
+      <div id="menu" class="modal">
+        <div class="menu-card">
+          <h1>TROOP TRANSPORT<br /><span>SIMULATOR</span></h1>
+          <p class="tag">Heavy-lift logistics on the front line. CH-47 tandem rotor.</p>
+          <div id="menu-buttons"></div>
+          <div id="menu-status"></div>
+          <div class="controls">
+            <h3>Controls</h3>
+            <div class="grid">
+              <span>W / S</span><span>Collective up / down (Shift = fine)</span>
+              <span>Arrows</span><span>Cyclic: pitch &amp; roll (also I J K L)</span>
+              <span>A / D</span><span>Pedals: yaw</span>
+              <span>E</span><span>Start / stop engines</span>
+              <span>R</span><span>Raise / lower cargo ramp</span>
+              <span>H</span><span>Hook / release sling load</span>
+              <span>F</span><span>Flares</span>
+              <span>T</span><span>Stability assist mode</span>
+              <span>C</span><span>Camera (chase / cockpit / hook / cinematic)</span>
+              <span>Mouse drag</span><span>Look around · wheel = zoom</span>
+              <span>Tab</span><span>Base terminal: contracts, services, hangar</span>
+              <span>M</span><span>Theater map</span>
+              <span>B</span><span>Look back</span>
+              <span>Esc / P</span><span>Pause</span>
+            </div>
+            <p class="pad">Gamepad: left stick = collective/yaw, right stick = cyclic, triggers = collective, A ramp, B hook, X engine, Y camera, LB flares, RB SAS, Start terminal.</p>
+          </div>
+        </div>
+      </div>
+      <div id="loading" class="modal hidden"><div class="spinner"></div><div id="loading-msg">Generating theater…</div></div>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
