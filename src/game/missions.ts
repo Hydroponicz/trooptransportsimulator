@@ -513,6 +513,8 @@ export class MissionSystem {
           // Rough ETA: fast cruise by air, convoy speed by road.
           this.sourceFor(c, m.pickupPos, dPickup / (c.mode === 'ground' ? 14 : 55)),
         );
+        // A hot pickup: the troops wait in a kneeling perimeter, weapons up.
+        m.group.hostile = siteRisk(c.from) >= 2 || c.from.enemySide;
       } else {
         const load = new SlingLoad(c.type.sling!, c.mass);
         load.placeAt(pad, this.terrain, this.rng.range(0, Math.PI * 2));
@@ -573,6 +575,8 @@ export class MissionSystem {
       if (m.internal && m.group) {
         if (rightVehicle && carrier.loadable && carrier.rampDown && dDrop < (c.mode === 'ground' ? 30 : 70)) {
           m.phase = 'dropoff';
+          // Unloading into a hot zone: troops push out into a security perimeter.
+          m.group.hostile = siteRisk(c.to) >= 2 || c.to.enemySide;
           if (!m.destSet) {
             m.destSet = true;
             const dest = this.destinationFor(c, m.dropPos);

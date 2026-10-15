@@ -346,7 +346,7 @@ export class Battle {
     this.views.length = 0;
     for (const f of this.fronts.values()) for (const s of f.soldiers) this.views.push(s);
     if (player.doorGuns && !player.destroyed) this.updateDoorGuns(dt, player, camPos);
-    this.renderer.render(this.views);
+    this.renderer.render(this.views, dt, camPos);
   }
 
   private updateFront(f: Front, dt: number, player: PlayerTarget, camPos: THREE.Vector3) {

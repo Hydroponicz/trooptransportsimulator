@@ -15,6 +15,7 @@ import { Campaign, CAMPAIGN_VERSION, SECTOR_COUNT } from './battle/campaign';
 import { Battle } from './battle/battle';
 import { AirOps } from './battle/air';
 import { CABIN } from './heli/chinookModel';
+import * as soldierKit from './game/soldiers';
 import type { PlayerTarget } from './game/target';
 import { Humvee, type GroundEnv } from './vehicles/humvee';
 import type { Carrier } from './game/missions';
@@ -48,6 +49,8 @@ export class Game {
   traffic: Traffic;
   battle: Battle;
   air: AirOps;
+  /** Soldier poses and renderer, for tools and tests poking at the running game. */
+  readonly soldierKit = soldierKit;
   humvee: Humvee;
   /** Flying the helicopter or driving the Humvee. */
   mode: 'fly' | 'drive' = 'fly';
@@ -625,6 +628,7 @@ export class Game {
       rotorsTurning: fm.rpm > 0.3,
       frame: carrier.cabinFrame,
       layout: carrier.cabinLayout,
+      camPos: this.cam.camera.position,
       crew: {
         frame: h.parts.exterior,
         chiefSeat: CABIN.crewChief,

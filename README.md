@@ -72,6 +72,27 @@ weapon system: kills are occasional, get rarer with range, speed and
 altitude, and they call them out on the radio. Every kill counts against
 the enemy in that sector's battle.
 
+## Soldiers
+
+Every soldier, from your passengers to base helpers to frontline infantry,
+uses the same articulated model: helmet with NVG mount, plate carrier with
+pouches and radio, pack, knee pads, gloves and a rifle with optic and sling.
+Their hands are placed on the rifle by IK, so the weapon is really held.
+How they carry it depends on what they are doing:
+
+- slung across the chest when relaxed on base
+- on the back while working (digging, carrying litters, strapping cargo)
+- at the low ready while moving to and from the aircraft
+- shouldered with a cheek weld when aiming
+
+Idle soldiers breathe, shift their weight and look around, each on their own
+rhythm, and walking uses heel-to-toe steps with hip sway. In a hostile LZ
+(high-risk sites and enemy-side drops) the waiting squad kneels in a
+perimeter facing outward, weapons up. Troops you drop there bound off the
+ramp in a crouched combat walk and set up a kneeling security perimeter
+facing away from the aircraft. Soldiers close to the camera get full detail;
+distant ones switch to a simpler model.
+
 ## The Humvee
 
 A Humvee waits at the main base motor pool. Land within 140 m of it and press
@@ -286,7 +307,7 @@ src/
   game/traffic.ts    AI supply traffic: routing, steering, following, braking
   game/missions.ts   contracts, pay, mission phases, payouts
   game/cargo.ts      boarding: troops, litter teams and pallet crews loading, securing and riding in the cabin
-  game/soldiers.ts   instanced articulated soldier models and their poses (walk, carry, push, strap, sit)
+  game/soldiers.ts   instanced articulated soldier models and their poses (gait, idle, rifle carries with arm IK, kneel/prone/aim, tasks), with LOD
   game/sling.ts      hook, rope constraint, slung-load physics
   game/threats.ts    enemy fire, missiles, flares, mortars, ambient battle
   battle/            campaign sectors, materialized battles, trenches, AI aircraft

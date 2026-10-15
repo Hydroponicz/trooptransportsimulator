@@ -8,6 +8,9 @@ import {
   crouch,
   fly,
   gait,
+  hold,
+  idle,
+  kneel,
   gunner,
   litterCarry,
   litterLift,
@@ -76,6 +79,8 @@ export interface LoadContext {
   frame: THREE.Object3D;
   layout: CabinLayout;
   crew?: CrewContext;
+  /** Camera position: soldiers near it get the detailed model. */
+  camPos?: THREE.Vector3;
 }
 
 type Space = 'world' | 'cabin';
@@ -136,6 +141,8 @@ class Person {
   pos = new THREE.Vector3();
   heading = 0;
   phase = Math.random() * 10;
+  /** Personal timing offset for idle motion, so a group doesn't move in lockstep. */
+  seed = Math.random() * 10;
   /** Reached the aisle beside its seat and is now sitting down. */
   sitting = false;
   constructor(outfit: Outfit, rifle: RifleCarry, rnd: () => number) {
@@ -316,6 +323,8 @@ export class CargoGroup {
   frame: THREE.Object3D | null = null;
   layout: CabinLayout | null = null;
   dest: Destination | null = null;
+  /** Hot zone: troops move with weapons up and set a security perimeter. */
+  hostile = false;
   /** Delivered: remove once everyone is indoors (or after a while). */
   retiring = false;
   retireT = 0;
@@ -462,6 +471,13 @@ export class CargoManager {
       else if (d.helpers === 'porter' && a.kind === 'pallet') (add('porter', 0), add('porter', 1));
       else if (d.helpers === 'orderly' && a.kind === 'soldier' && i === 0) add('orderly', 0);
     });
+  }
+
+  /** Middle of a group's waiting formation. */
+  private centre(g: CargoGroup) {
+    const c = new THREE.Vector3();
+    for (const a of g.actors) c.add(a.home);
+    return c.divideScalar(Math.max(1, g.actors.length));
   }
 
   /** The mission is over: keep animating until everyone has gone indoors, then clean up. */
@@ -781,7 +797,9 @@ export class CargoManager {
           break;
       }
       if (p.inst.visible) {
-        blendJoints(p.joints, p.target, dt);
+        hold(p.target, p.inst.rifle);
+        hold(p.target, p.inst.rifle);
+      blendJoints(p.joints, p.target, dt);
         rootMatrix(p.inst.matrix, p.pos, p.heading);
         out.push(p.inst);
       }
@@ -940,13 +958,13 @@ export class CargoManager {
       }
       if (g.retiring) {
         g.retireT += dt;
-        const done = g.actors.every((a) => a.state === 'inside' || (a.state === 'arrived' && a.timer > 12));
+        const done = g.actors.every((a) => a.state === 'inside' || (a.state === 'arrived' && a.timer > (g.hostile ? 60 : 12)));
         const helpersDone = g.actors.every((a) => a.helpers.every((h) => h.state === 'gone' || h.state === 'wait'));
         if ((done && helpersDone) || g.retireT > 300) this.remove(g);
       }
     }
     if (ctx.crew) this.updateCrew(dt, ctx.crew, instances);
-    this.renderer.render(instances);
+    this.renderer.render(instances, ctx.camPos);
   }
 
   private rearZ(g: CargoGroup, a: Actor) {
@@ -1017,13 +1035,19 @@ export class CargoManager {
     const near = ctx.rotorsTurning && a.space === 'world' && a.pos.distanceTo(ctx.heliPos) < 60;
     switch (a.state) {
       case 'waiting': {
-        a.heading = turnTo(a.heading, Math.atan2(ctx.heliPos.x - a.pos.x, ctx.heliPos.z - a.pos.z) + Math.PI, dt * 3);
-        if (near) crouch(p.target);
-        else {
-          Object.assign(p.target, standJoints());
-          p.target.headYaw = Math.sin(this.time * 0.3 + p.phase) * 0.4;
+        if (g.hostile) {
+          // Security halt: a knee down, facing out from the group, weapon up, scanning a sector.
+          const c = this.centre(g);
+          const out = Math.atan2(a.home.x - c.x, a.home.z - c.z) + Math.PI;
+          a.heading = turnTo(a.heading, out + 0.45 * Math.sin(this.time * 0.25 + p.seed), dt * 2);
+          kneel(p.target);
+          p.inst.rifle = 'aim';
+        } else {
+          a.heading = turnTo(a.heading, Math.atan2(ctx.heliPos.x - a.pos.x, ctx.heliPos.z - a.pos.z) + Math.PI, dt * 3);
+          if (near) crouch(p.target);
+          else idle(p.target, this.time, p.seed);
+          p.inst.rifle = near ? 'hands' : 'sling';
         }
-        p.inst.rifle = near ? 'hands' : 'sling';
         break;
       }
       case 'toRamp': {
@@ -1034,7 +1058,8 @@ export class CargoManager {
           break;
         }
         p.phase += dt * 3.6 * 2.6;
-        rifleArms(gait(p.target, p.phase, 3.6));
+        gait(p.target, p.phase, 3.6, 0.5);
+        p.inst.rifle = 'hands';
         if (this.follow(a, dt, 3.6)) {
           this.toCabin(a, frame);
           // Up the ramp, along the aisle, to just in front of the seat.
@@ -1045,14 +1070,15 @@ export class CargoManager {
       }
       case 'returning': {
         p.phase += dt * 3.6 * 2.6;
-        rifleArms(gait(p.target, p.phase, 3.6));
+        gait(p.target, p.phase, 3.6, 0.5);
         if (this.follow(a, dt, 3.6)) a.state = 'waiting';
         if (ctx.canLoad) a.state = 'waiting';
         break;
       }
       case 'inCabin': {
         p.phase += dt * 2.2 * 2.6;
-        rifleArms(gait(p.target, p.phase, 2.2));
+        gait(p.target, p.phase, 2.2, 0.3);
+        p.inst.rifle = 'hands';
         if (this.follow(a, dt, 2.2)) {
           a.state = 'settle';
           a.timer = 0;
@@ -1092,6 +1118,7 @@ export class CargoManager {
       case 'standUp': {
         a.timer += dt;
         Object.assign(p.target, standJoints());
+        p.inst.rifle = 'hands';
         if (a.timer > 0.6) {
           a.path = [new THREE.Vector3(seat.pos.x * 0.45, L.floor, seat.pos.z), new THREE.Vector3(0, L.floor, seat.pos.z), L.hinge.clone(), this.rampLocal(ctx, frame)];
           a.state = 'exitCabin';
@@ -1101,7 +1128,7 @@ export class CargoManager {
       }
       case 'exitCabin': {
         p.phase += dt * 2.4 * 2.6;
-        rifleArms(gait(p.target, p.phase, 2.4));
+        gait(p.target, p.phase, 2.4, g.hostile ? 0.7 : 0.3);
         if (this.follow(a, dt, 2.4)) {
           this.toWorld(a, frame);
           this.offloaded(g, a);
@@ -1111,8 +1138,10 @@ export class CargoManager {
         break;
       }
       case 'toRally': {
+        // Off the ramp at low ready; in a hot zone, bounding out hunched with weapons up.
         p.phase += dt * 3.4 * 2.6;
-        rifleArms(gait(p.target, p.phase, 3.4));
+        gait(p.target, p.phase, 3.4, g.hostile ? 0.8 : 0.35);
+        p.inst.rifle = g.hostile || near ? 'hands' : 'sling';
         if (this.follow(a, dt, 3.4)) this.arrive(g, a);
         break;
       }
@@ -1130,8 +1159,18 @@ export class CargoManager {
         break;
       case 'arrived': {
         a.timer += dt;
-        crouch(p.target);
-        if (a.timer > 10) p.inst.visible = false;
+        if (g.hostile) {
+          // Security perimeter: a knee down facing out from the aircraft, scanning, weapon shouldered.
+          const out = Math.atan2(a.pos.x - ctx.heliPos.x, a.pos.z - ctx.heliPos.z) + Math.PI;
+          a.heading = turnTo(a.heading, out + 0.5 * Math.sin(this.time * 0.22 + p.seed), dt * 2.5);
+          kneel(p.target);
+          p.inst.rifle = 'aim';
+        } else {
+          if (near) crouch(p.target);
+          else idle(p.target, this.time, p.seed);
+          p.inst.rifle = near ? 'hands' : 'sling';
+          if (a.timer > 10) p.inst.visible = false;
+        }
         break;
       }
     }
@@ -1726,6 +1765,7 @@ export class CargoManager {
       crewList.push(pl);
     });
     for (const p of crewList) {
+      hold(p.target, p.inst.rifle);
       blendJoints(p.joints, p.target, dt);
       rootMatrix(_m, p.pos, p.heading);
       p.inst.matrix.multiplyMatrices(crew.frame.matrixWorld, _m);
@@ -1741,6 +1781,7 @@ export class CargoManager {
     const space = a.space === 'cabin' ? frame.matrixWorld : null;
     const world = (m: THREE.Matrix4) => (space ? m.premultiply(space) : m);
     for (const p of a.people) {
+      hold(p.target, p.inst.rifle);
       blendJoints(p.joints, p.target, dt);
       rootMatrix(p.inst.matrix, p.pos, p.heading);
       world(p.inst.matrix);
