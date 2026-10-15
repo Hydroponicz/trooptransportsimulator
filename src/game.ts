@@ -1,6 +1,8 @@
 import * as THREE from 'three';
+import './world/look';
 import { generateWorld, type World } from './world/worldgen';
 import { Environment } from './world/environment';
+import { Grass } from './world/grass';
 import { Heli, type LandingRating } from './heli/heli';
 import { CameraRig } from './camera';
 import { Input } from './input';
@@ -37,6 +39,7 @@ export class Game {
   scene = new THREE.Scene();
   world: World;
   env: Environment;
+  grass: Grass;
   heli: Heli;
   cam: CameraRig;
   input: Input;
@@ -89,13 +92,16 @@ export class Game {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    // ACES plus the grade in world/look.ts.
+    this.renderer.toneMapping = THREE.CustomToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.domElement.className = 'gl';
     container.prepend(this.renderer.domElement);
 
     this.world = generateWorld(career.data.seed, progress);
     this.scene.add(this.world.group);
+    this.grass = new Grass(this.world.terrain, this.world.roads, this.world.colliders);
+    this.scene.add(this.grass.mesh);
     this.env = new Environment(this.scene);
     progress('Fueling aircraft');
 
@@ -389,6 +395,13 @@ export class Game {
     this.env.follow(this.playerPos, this.cam.camera.position);
     this.world.terrain.updateLod(this.cam.camera.position);
     this.world.rivers.update(dt);
+    {
+      // Rotor downwash flattens the grass when the helicopter is low with the rotors turning.
+      const fm = this.heli.fm;
+      const wash = this.mode === 'fly' && fm.rpm > 0.3 && !this.heli.crashed ? fm.rpm * (0.55 + 0.45 * fm.input.collective) : 0;
+      this.grass.update(dt, this.cam.camera.position, wash > 0 ? fm.pos : null, Math.min(1, wash));
+    }
+    this.env.update(dt);
     this.world.culler.update(this.cam.camera.position);
     this.vehicleSound ??= this.audio.vehicle();
     {

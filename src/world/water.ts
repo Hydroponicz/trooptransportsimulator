@@ -191,4 +191,6 @@ void main() {
   alpha = max(alpha, foam * edge * 0.8 * step(-0.05, depth));
   gl_FragColor = vec4(col, alpha);
   #include <fog_fragment>
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
 }`;

@@ -23,7 +23,6 @@ const LOD_STRIDE = [1, 2, 4, 8, 16];
 /** Skirts hang below tile edges to hide cracks between LOD levels. */
 const SKIRT = 40;
 
-const FIELDS = [0xa69a5e, 0x768c45, 0x7d6a4a, 0x8c9150, 0x9a8c55].map((c) => new THREE.Color(c));
 
 export interface FlattenZone {
   x: number;
@@ -308,31 +307,21 @@ export class Terrain {
     for (let iz = 0; iz < N; iz++)
       for (let ix = 0; ix < N; ix++) this.heights[iz * N + ix] = this.finalHeight(-HALF + ix * CELL, -HALF + iz * CELL);
 
-    // Farms bucketed so each vertex only looks at the few nearby.
-    const FG = 400;
-    const farmGrid = new Map<number, typeof this.farms>();
-    for (const fm of this.farms) {
-      const R = fm.r + 750;
-      for (let cx = Math.floor((fm.x - R + HALF) / FG); cx <= Math.floor((fm.x + R + HALF) / FG); cx++)
-        for (let cz = Math.floor((fm.z - R + HALF) / FG); cz <= Math.floor((fm.z + R + HALF) / FG); cz++) {
-          const k = cx + cz * 1000;
-          let arr = farmGrid.get(k);
-          if (!arr) farmGrid.set(k, (arr = []));
-          arr.push(fm);
-        }
-    }
-
     const col = (this.colors = new Float32Array(N * N * 3));
     const C = (hex: number) => new THREE.Color(hex);
-    const grass = C(0x6a7a40);
-    const grass2 = C(0x87894f);
-    const forest = C(0x4f6233);
-    const rock = C(0x7c776c);
-    const sand = C(0x9d9070);
+    // Summer in eastern Europe: fresh meadow greens, drier yellow-green on the
+    // rises, dark forest floor, grey limestone on the steeps.
+    const grass = C(0x58793a);
+    const grass2 = C(0x878f4a);
+    const forest = C(0x3d5528);
+    const rock = C(0x837f76);
+    const alpine = C(0x6d7a48);
+    const sand = C(0xb0a27a);
     const mud = C(0x5a5442);
     const lush = C(0x58773a);
     const scorched = C(0x4a4436);
-    const siteDirt = C(0x9a8a66);
+    const siteDirt = C(0x948a68);
+    const wornGrass = C(0x6c8540);
     const tmp = new THREE.Color();
     const nrm = new THREE.Vector3();
     for (let iz = 0; iz < N; iz++)
@@ -351,29 +340,21 @@ export class Terrain {
         tmp.lerp(lush, smoothstep(7, 3, h) * 0.55);
         tmp.lerp(sand, smoothstep(2.2, 0.6, h) * 0.85);
         tmp.lerp(mud, smoothstep(0.3, -2.5, h));
-        tmp.lerp(rock, smoothstep(0.86, 0.72, ny) * 0.85 + smoothstep(260, 420, h) * 0.5);
+        // High ground: alpine meadow, then rock on the steep faces and the tops.
+        tmp.lerp(alpine, smoothstep(180, 320, h) * 0.6);
+        tmp.lerp(rock, Math.min(1, smoothstep(0.86, 0.7, ny) * 0.85 + smoothstep(380, 560, h) * 0.6));
         const sd = Math.abs(this.front.side(x, z));
         const scorch = (1 - smoothstep(60, 520, sd)) * (0.45 + 0.55 * smoothstep(0.3, 0.6, n));
         tmp.lerp(scorched, scorch * 0.75);
         const crater = this.craterOffset(x, z);
         if (crater < -0.3) tmp.lerp(scorched, Math.min(1, -crater / 3) * 0.8);
-        // Patchwork fields around villages.
-        const farms = farmGrid.get(Math.floor((x + HALF) / FG) + Math.floor((z + HALF) / FG) * 1000);
-        if (farms)
-          for (const fm of farms) {
-            const dx = x - fm.x;
-            const dz = z - fm.z;
-            const d = Math.hypot(dx, dz);
-            if (d > fm.r + 750 || d < fm.r * 0.85 || h < 1.5 || ny < 0.93) continue;
-            const u = dx * Math.cos(fm.rot) - dz * Math.sin(fm.rot);
-            const v = dx * Math.sin(fm.rot) + dz * Math.cos(fm.rot);
-            const cx = Math.floor(u / 95);
-            const cz = Math.floor(v / 60);
-            const hsh = (((cx * 73856093) ^ (cz * 19349663)) >>> 0) % 5;
-            const fc = FIELDS[hsh];
-            tmp.lerp(fc, smoothstep(fm.r + 750, fm.r + 450, d) * smoothstep(fm.r * 0.85, fm.r * 1.1, d) * 0.55);
-          }
-        tmp.lerp(siteDirt, this.siteInfluence(x, z) * 0.85);
+        // Bases and outposts: packed earth and gravel, worn grass in patches.
+        const site = this.siteInfluence(x, z);
+        if (site > 0) {
+          // Tracks and bare patches every few tens of metres where vehicles and boots wear the grass away.
+          const wear = this.n3.fbm(x * 0.018 + 7, z * 0.018 - 3, 2) * 0.5 + 0.5;
+          tmp.lerp(tmp.clone().lerp(wornGrass, 0.5), site * 0.6).lerp(siteDirt, site * smoothstep(0.42, 0.62, wear) * 0.8);
+        }
         col[i * 3] = tmp.r;
         col[i * 3 + 1] = tmp.g;
         col[i * 3 + 2] = tmp.b;
@@ -406,7 +387,7 @@ export class Terrain {
       this.lodIndex.push(new THREE.BufferAttribute(new Uint32Array(idx), 1));
     }
 
-    const mat = new THREE.MeshLambertMaterial({ vertexColors: true, map: detailTex });
+    const mat = this.material(detailTex);
     this.mesh = new THREE.Group();
     for (let cz = 0; cz < TILES; cz++)
       for (let cx = 0; cx < TILES; cx++) {
@@ -426,6 +407,43 @@ export class Terrain {
       }
     this.mesh.matrixAutoUpdate = false;
     return this.mesh;
+  }
+
+  /** Up to this many farms (nearest the camera) get their fields drawn. */
+  static readonly FIELD_FARMS = 12;
+  private farmUniform = { value: Array.from({ length: Terrain.FIELD_FARMS }, () => new THREE.Vector4(0, 0, 0, -1)) };
+
+  /**
+   * Terrain material: vertex colours for the land cover, plus in the shader
+   * a large-scale tint so meadows aren't uniform, a detail texture sampled at
+   * two scales so it doesn't visibly tile, and the patchwork of fields around
+   * villages, with crop rows and hedgerow margins, drawn crisply per pixel.
+   */
+  private material(detailTex: THREE.Texture) {
+    const mat = new THREE.MeshLambertMaterial({ vertexColors: true, map: detailTex });
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.farms = this.farmUniform;
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = position;\nvWNrm = normal;');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\n' + TERRAIN_FRAG_PARS)
+        .replace('#include <map_fragment>', TERRAIN_MAP_FRAGMENT);
+    };
+    return mat;
+  }
+
+  /** Pick the farms nearest the camera for the field shader. */
+  private updateFields(cam: THREE.Vector3) {
+    const list = this.farms
+      .map((f) => ({ f, d: Math.hypot(f.x - cam.x, f.z - cam.z) - f.r }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, Terrain.FIELD_FARMS);
+    this.farmUniform.value.forEach((v, i) => {
+      const e = list[i];
+      if (e) v.set(e.f.x, e.f.z, e.f.rot, e.f.r);
+      else v.set(0, 0, 0, -1);
+    });
   }
 
   /** Smooth normal at a grid vertex from its neighbours' heights. */
@@ -485,6 +503,7 @@ export class Terrain {
 
   /** Pick each tile's level of detail from its distance to the camera. */
   updateLod(cam: THREE.Vector3) {
+    this.updateFields(cam);
     const size = TILE_CELLS * CELL;
     for (const t of this.tiles) {
       const x0 = -HALF + t.cx * size;
@@ -526,6 +545,15 @@ export class Terrain {
     return hc + (hb - hc) * (1 - fx) + (hd - hc) * (1 - fz);
   }
 
+  /** Land-cover colour (linear RGB) at the nearest grid vertex. */
+  groundColor(x: number, z: number, out: THREE.Color): THREE.Color {
+    const N = SEGS + 1;
+    const ix = Math.min(SEGS, Math.max(0, Math.round((x + HALF) / CELL)));
+    const iz = Math.min(SEGS, Math.max(0, Math.round((z + HALF) / CELL)));
+    const i = (iz * N + ix) * 3;
+    return out.setRGB(this.colors[i], this.colors[i + 1], this.colors[i + 2]);
+  }
+
   /** Surface the gear rests on: ground or water. */
   surfaceAt(x: number, z: number): number {
     return Math.max(this.heightAt(x, z), WATER_LEVEL);
@@ -558,3 +586,72 @@ export class Terrain {
     return true;
   }
 }
+
+const TERRAIN_FRAG_PARS = /* glsl */ `
+varying vec3 vWPos;
+varying vec3 vWNrm;
+uniform vec4 farms[${Terrain.FIELD_FARMS}];
+float tHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float tNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(tHash(i), tHash(i + vec2(1.0, 0.0)), u.x), mix(tHash(i + vec2(0.0, 1.0)), tHash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+// Field colours: ripe wheat, barley, young green crop, ploughed earth, rapeseed, sunflowers, hay meadow.
+const vec3 FIELD_C[7] = vec3[7](
+  vec3(0.5, 0.39, 0.16), vec3(0.45, 0.41, 0.2), vec3(0.17, 0.27, 0.08),
+  vec3(0.25, 0.18, 0.11), vec3(0.6, 0.52, 0.08), vec3(0.17, 0.23, 0.07), vec3(0.27, 0.33, 0.13));
+`;
+
+const TERRAIN_MAP_FRAGMENT = /* glsl */ `
+#ifdef USE_MAP
+  // Detail texture at two scales (the second rotated) so it doesn't tile visibly.
+  vec2 duv = vMapUv;
+  vec4 d1 = texture2D(map, duv);
+  vec4 d2 = texture2D(map, mat2(0.8, -0.6, 0.6, 0.8) * duv * 0.29 + vec2(0.37, 0.11));
+  float camDist = length(vWPos - cameraPosition);
+  vec4 texelColor = mix(d1, d2, 0.45);
+  // Up close the grain is crisp; far off it fades so the land doesn't shimmer.
+  texelColor.rgb = mix(texelColor.rgb, vec3(0.86), smoothstep(400.0, 2500.0, camDist));
+  diffuseColor *= texelColor;
+#endif
+  {
+    vec2 wp = vWPos.xz;
+    // Large-scale variation: lusher hollows, sun-dried patches.
+    float m = tNoise(wp * 0.0032) * 0.6 + tNoise(wp * 0.011) * 0.4;
+    diffuseColor.rgb *= mix(vec3(0.9, 0.96, 0.86), vec3(1.08, 1.04, 0.94), m);
+    // Fields around villages.
+    float flat_ = smoothstep(0.93, 0.97, normalize(vWNrm).y) * smoothstep(1.5, 3.0, vWPos.y);
+    for (int k = 0; k < ${Terrain.FIELD_FARMS}; k++) {
+      vec4 f = farms[k];
+      if (f.w < 0.0) continue;
+      vec2 dlt = wp - f.xy;
+      float d = length(dlt);
+      if (d > f.w + 750.0 || d < f.w + 30.0) continue;
+      float c = cos(f.z);
+      float s = sin(f.z);
+      float u = dlt.x * c - dlt.y * s;
+      float v = dlt.x * s + dlt.y * c;
+      vec2 cell = floor(vec2(u / 95.0, v / 60.0));
+      vec2 inCell = vec2(u - cell.x * 95.0, v - cell.y * 60.0);
+      float h = tHash(cell + f.xy * 0.001);
+      int kind = int(floor(h * 7.0));
+      if (h > 0.93) kind = 6;
+      vec3 fc = FIELD_C[kind];
+      // Crop rows along the field (faded with distance so they don't alias).
+      float rowFade = 1.0 - smoothstep(60.0, 260.0, camDist);
+      float rows = 0.5 + 0.5 * sin(inCell.y * 6.2832 / 1.4);
+      fc *= 1.0 - rowFade * (kind == 3 ? 0.22 : 0.12) * rows;
+      fc *= 0.92 + 0.16 * tNoise(wp * 0.05 + cell * 3.1);
+      // Grassy margins and hedgerows between fields.
+      float edge = min(min(inCell.x, 95.0 - inCell.x), min(inCell.y, 60.0 - inCell.y));
+      float margin = 1.0 - smoothstep(1.2, 2.6, edge);
+      fc = mix(fc, vec3(0.16, 0.27, 0.08), margin * 0.85);
+      float w = smoothstep(f.w + 750.0, f.w + 450.0, d) * smoothstep(f.w + 30.0, f.w + 90.0, d) * flat_;
+      // Some cells stay meadow.
+      if (h < 0.1) w = 0.0;
+      diffuseColor.rgb = mix(diffuseColor.rgb, fc, w * 0.92);
+    }
+  }
+`;

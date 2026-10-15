@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Noise2D, RNG } from '../util/noise';
 import { smoothstep } from '../util/math';
 import { merge, part } from './props';
+import { surf, withSurfaces } from './surfaces';
 import { HALF, WORLD_SIZE, type Terrain } from './terrain';
 import type { DistanceCuller } from './lod';
 
@@ -17,36 +18,55 @@ const GRID = 40;
 /** 1.8 km chunks, for culling. */
 const CHUNKS = Math.round(WORLD_SIZE / 1800);
 /** Full trees inside this distance (from the chunk's bounds), simple stand-ins out to the fog. */
-const HI_DIST = 1600;
+const HI_DIST = 1000;
 const LO_DIST = 7000;
 
+const leaf = (g: THREE.BufferGeometry) => surf(g, 'foliage');
+const wood = (g: THREE.BufferGeometry) => surf(g, 'bark');
+
+/** Spruce: a tall trunk under four tiers of needles, narrowing to a spire. */
 function pineGeo() {
-  return merge([
-    part(new THREE.CylinderGeometry(0.22, 0.32, 2.6, 5, 1, true), 0x4a3a28, 0, 1.3, 0),
-    part(new THREE.ConeGeometry(2.3, 5, 6), 0x34502c, 0, 4.4, 0),
-    part(new THREE.ConeGeometry(1.6, 3.6, 6), 0x3b5a30, 0, 6.8, 0),
-  ]);
+  const p = [wood(part(new THREE.CylinderGeometry(0.14, 0.34, 8.6, 5, 1, true), 0x4a3a2a, 0, 4.3, 0))];
+  const tiers = 4;
+  for (let i = 0; i < tiers; i++) {
+    const t = i / (tiers - 1);
+    const r = 2.5 * (1 - t * 0.75);
+    const h = 3.0 - t * 0.9;
+    const y = 2.0 + t * 6.0;
+    // Closed cones (with a base), so a tier isn't hollow seen from below.
+    p.push(leaf(part(new THREE.ConeGeometry(r, h, 7), i % 2 ? 0x2c4a2a : 0x325230, 0, y + h / 2, 0, 0, i * 0.7, 0)));
+  }
+  return merge(p);
 }
+/** Broadleaf (oak, lime, poplar): a short trunk and a lumpy crown of overlapping leaf masses. */
 function broadGeo() {
-  return merge([
-    part(new THREE.CylinderGeometry(0.25, 0.38, 3.2, 5, 1, true), 0x4d3c29, 0, 1.6, 0),
-    part(new THREE.IcosahedronGeometry(2.7, 0), 0x56682f, 0, 4.8, 0, 0, 0, 0, 1, 0.8, 1),
-  ]);
+  const p = [wood(part(new THREE.CylinderGeometry(0.22, 0.4, 3.6, 5, 1, true), 0x4d3c29, 0, 1.8, 0))];
+  p.push(wood(part(new THREE.CylinderGeometry(0.08, 0.16, 2.2, 5, 1, true), 0x4d3c29, 0.6, 3.6, 0, 0, 0, -0.5)));
+  const blobs: [number, number, number, number][] = [[0, 5.0, 0, 2.5], [1.4, 4.4, 0.6, 1.8], [-1.3, 4.6, -0.5, 1.9], [0.3, 4.3, -1.4, 1.7], [-0.4, 6.1, 0.4, 1.7], [0.9, 5.7, 1.2, 1.5]];
+  blobs.forEach(([x, y, z, r], i) => p.push(leaf(part(new THREE.IcosahedronGeometry(r, 0), i % 2 ? 0x4c6a2a : 0x557530, x, y, z, 0, i * 0.9, i * 0.4, 1, 0.85, 1))));
+  return merge(p);
+}
+/** Birch: slender white trunk, light airy crown. */
+function birchGeo() {
+  const p = [wood(part(new THREE.CylinderGeometry(0.1, 0.2, 7.5, 5, 1, true), 0xe4e0d4, 0, 3.75, 0))];
+  const blobs: [number, number, number, number][] = [[0, 6.2, 0, 1.5], [0.6, 5.0, 0.3, 1.2], [-0.5, 5.3, -0.4, 1.25], [0.1, 7.3, 0.1, 1.0]];
+  blobs.forEach(([x, y, z, r], i) => p.push(leaf(part(new THREE.IcosahedronGeometry(r, 0), 0x6e8c34, x, y, z, 0, i * 1.1, 0, 0.9, 1.25, 0.9))));
+  return merge(p);
 }
 function deadGeo() {
   return merge([
-    part(new THREE.CylinderGeometry(0.12, 0.3, 6, 5, 1, true), 0x2e2a24, 0, 3, 0),
-    part(new THREE.CylinderGeometry(0.05, 0.1, 2.2, 4, 1, true), 0x2e2a24, 0.6, 4.2, 0, 0, 0, -0.8),
-    part(new THREE.CylinderGeometry(0.05, 0.1, 1.8, 4, 1, true), 0x2e2a24, -0.5, 3.4, 0.2, 0.3, 0, 0.9),
+    wood(part(new THREE.CylinderGeometry(0.12, 0.3, 6, 5, 1, true), 0x2e2a24, 0, 3, 0)),
+    wood(part(new THREE.CylinderGeometry(0.05, 0.1, 2.2, 4, 1, true), 0x2e2a24, 0.6, 4.2, 0, 0, 0, -0.8)),
+    wood(part(new THREE.CylinderGeometry(0.05, 0.1, 1.8, 4, 1, true), 0x2e2a24, -0.5, 3.4, 0.2, 0.3, 0, 0.9)),
   ]);
 }
 
 /** Far-away stand-in for any tree: a five-sided cone (white, tinted per instance). */
 function farTree() {
-  return merge([part(new THREE.ConeGeometry(2.3, 7.6, 5, 1, true), 0xffffff, 0, 4.8, 0)]);
+  return merge([leaf(part(new THREE.ConeGeometry(2.3, 7.6, 5, 1, true), 0xffffff, 0, 4.8, 0))]);
 }
-/** Stand-in colours: pine, broadleaf, dead. */
-const LO_TINT = [new THREE.Color(0x37552e), new THREE.Color(0x56682f), new THREE.Color(0x3a352c)];
+/** Stand-in colours: spruce, broadleaf, dead, birch. */
+const LO_TINT = [new THREE.Color(0x2f4c2c), new THREE.Color(0x52702e), new THREE.Color(0x3a352c), new THREE.Color(0x6a8634)];
 
 /** Instanced forests, chunked for culling, with a point-vs-tree hit test for rotor strikes. */
 export class Vegetation {
@@ -55,14 +75,15 @@ export class Vegetation {
   count = 0;
 
   constructor(terrain: Terrain, noise: Noise2D, rng: RNG, blocked: (x: number, z: number) => boolean, culler: DistanceCuller) {
-    const kinds = [pineGeo(), broadGeo(), deadGeo()];
+    const kinds = [pineGeo(), broadGeo(), deadGeo(), birchGeo()];
     const loGeo = farTree();
-    const material = new THREE.MeshLambertMaterial({ vertexColors: true });
+    const material = withSurfaces(new THREE.MeshLambertMaterial({ vertexColors: true }));
     const buckets: THREE.Matrix4[][][] = [];
+    // Per chunk, per kind (spruce, broadleaf, dead, birch).
     const colors: THREE.Color[][][] = [];
     for (let c = 0; c < CHUNKS * CHUNKS; c++) {
-      buckets.push([[], [], []]);
-      colors.push([[], [], []]);
+      buckets.push([[], [], [], []]);
+      colors.push([[], [], [], []]);
     }
     const spacing = 19;
     const q = new THREE.Quaternion();
@@ -84,7 +105,8 @@ export class Vegetation {
         if (nrm.y < 0.78) continue;
         if (blocked(x, z)) continue;
         const dead = rng.chance(nearFront * 0.85);
-        const kind = dead ? 2 : forest > 0.62 || y > 150 ? (rng.chance(0.8) ? 0 : 1) : rng.chance(0.35) ? 0 : 1;
+        // Spruce in the deep forest and up the hills; oak, lime and birch in the open country.
+        const kind = dead ? 2 : forest > 0.62 || y > 150 ? (rng.chance(0.8) ? 0 : rng.chance(0.5) ? 1 : 3) : rng.chance(0.3) ? 0 : rng.chance(0.3) ? 3 : 1;
         const s = rng.range(0.8, 1.55) * (kind === 2 ? 0.9 : 1);
         q.setFromAxisAngle(up, rng.range(0, Math.PI * 2));
         const m = new THREE.Matrix4().compose(new THREE.Vector3(x, y - 0.2, z), q, new THREE.Vector3(s, s * rng.range(0.9, 1.15), s));
@@ -94,15 +116,15 @@ export class Vegetation {
         buckets[ci][kind].push(m);
         const v = rng.range(0.82, 1.12);
         colors[ci][kind].push(new THREE.Color(v, v * rng.range(0.96, 1.04), v * 0.95));
-        const h = (kind === 2 ? 6 : kind === 0 ? 8.5 : 7) * s;
-        const r = (kind === 2 ? 0.8 : kind === 0 ? 2.2 : 2.6) * s;
+        const h = (kind === 2 ? 6 : kind === 0 ? 10 : kind === 3 ? 8.2 : 7) * s;
+        const r = (kind === 2 ? 0.8 : kind === 0 ? 2.4 : kind === 3 ? 1.6 : 2.6) * s;
         this.insert({ x, z, y, h, r });
       }
     }
     for (let ci = 0; ci < CHUNKS * CHUNKS; ci++) {
       // Full trees: one mesh per kind.
       let sphere: THREE.Sphere | null = null;
-      for (let k = 0; k < 3; k++) {
+      for (let k = 0; k < 4; k++) {
         const list = buckets[ci][k];
         if (!list.length) continue;
         const mesh = new THREE.InstancedMesh(kinds[k], material, list.length);
@@ -119,7 +141,7 @@ export class Vegetation {
       }
       if (!sphere) continue;
       // Far away: every tree in the chunk is one simple stand-in, tinted by kind, in a single draw call.
-      const all = [0, 1, 2].flatMap((k) => buckets[ci][k].map((m, i) => ({ m, c: colors[ci][k][i].clone().multiply(LO_TINT[k]) })));
+      const all = [0, 1, 2, 3].flatMap((k) => buckets[ci][k].map((m, i) => ({ m, c: colors[ci][k][i].clone().multiply(LO_TINT[k]) })));
       const lo = new THREE.InstancedMesh(loGeo, material, all.length);
       all.forEach(({ m, c }, i) => {
         lo.setMatrixAt(i, m);

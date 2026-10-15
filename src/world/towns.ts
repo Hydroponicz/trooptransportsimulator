@@ -23,6 +23,11 @@ export const TOWN_NAMES = [
   'Stepove', 'Zolotarivka', 'Nikolske', 'Hrushivka',
 ];
 
+/** House paints: cream, butter, ochre, pale blue, mint, salmon, whitewash, lilac grey, pale green. */
+const WALL_PAINT = [0xf3e9cf, 0xf1dc9c, 0xdfb874, 0xbfd4e4, 0xcadfba, 0xeac0a6, 0xf6f4ee, 0xd8d2db, 0xdbe4b4, 0xf6f4ee];
+/** Panel blocks: bare concrete, or painted in faded pastels. */
+const BLOCK_PAINT = [0xffffff, 0xf2ead8, 0xdfe6ea, 0xf0e2cf, 0xe4ead8];
+
 const STREET = 42;
 const AVENUE = 38;
 
@@ -73,13 +78,15 @@ export function buildTown(t: Town, props: Props, terrain: Terrain, rng: RNG) {
       const central = d < R * 0.45;
       if (central && rng.chance(0.3) && !used.has(`${lx + LOT},${lz}`)) {
         used.add(`${lx + LOT},${lz}`);
-        put(ruined ? 'ruin_apartment' : 'apartment', lx + LOT / 2, lz, rot);
+        put(ruined ? 'ruin_apartment' : 'apartment', lx + LOT / 2, lz, rot, 1, ruined ? undefined : rng.pick(BLOCK_PAINT));
       } else if (ruined) {
         put(rng.chance(0.7) ? 'ruin_house' : 'rubble', lx, lz, rot + rng.range(-0.1, 0.1));
       } else {
-        const kind: ProtoName = rng.pick(['house_a', 'house_b', 'house_c', 'house_a'] as ProtoName[]);
-        const v = rng.range(0.9, 1.08);
-        put(kind, lx, lz, rot + rng.range(-0.05, 0.05), 1, new THREE.Color(v, v, v).getHex());
+        const kind: ProtoName = rng.pick(['house_a', 'house_b', 'house_c', 'house_a', 'house_d', 'house_c'] as ProtoName[]);
+        // Rendered walls in the region's pastels (the brick house ignores the tint).
+        const c = new THREE.Color(rng.pick(WALL_PAINT));
+        const v = rng.range(0.94, 1.03);
+        put(kind, lx, lz, rot + rng.range(-0.05, 0.05), 1, c.multiplyScalar(v).getHex());
       }
       used.add(key);
     }

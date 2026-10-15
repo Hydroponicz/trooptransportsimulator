@@ -273,6 +273,34 @@ and viaducts that run from bank to bank, and steep ramps climb to hilltop
 bases. Bridges are always paved: a dirt track gets an asphalt deck and short
 asphalt approaches where it crosses.
 
+### The look
+
+A sunny summer day in eastern Europe:
+
+- **Light and grade:** warm sun, a blue skylight, and ACES tone mapping with
+  a light grade on top (a little more saturation, an S-curve for contrast).
+- **Sky and haze:** fair-weather cumulus drift across a deep blue sky. The
+  haze is a height fog, thick in the valleys and thin over the peaks, and it
+  warms toward the sun. Distant ridges read as layers of blue rather than a
+  white wall. Two rings of far mountain ranges sit on the horizon beyond the
+  map.
+- **Land:** meadow greens, drier rises and dark forest floor, with rock and
+  alpine grass on the heights. Around each village is a patchwork of wheat,
+  barley, young crops, rapeseed, sunflowers and ploughed earth, drawn per
+  pixel with crop rows and hedgerow margins. Bases are packed earth and worn
+  grass.
+- **Grass:** tufts with the odd wildflower carpet the ground around the
+  camera. They take the colour of the land under them, sway in the wind, and
+  are blown flat by rotor downwash when you come in low.
+- **Buildings and props:** each part knows what it's made of, and a shader
+  draws the surface detail with a small bump and darkening toward the ground.
+  Surfaces include plaster, brick, clay tiles, corrugated sheet, boards,
+  concrete panels, canvas, sandbags, HESCO mesh, rock, foliage and bark.
+  Windows reflect the sky. Villages have pastel rendered cottages with framed
+  windows, shutters and porches, red-brick houses, five-storey panel blocks
+  with balconies, timber barns, and an onion-domed church.
+- **Trees:** tiered spruce, lumpy broadleaf crowns and white birches.
+
 ### The war
 
 The front is split into 10 sectors (A–J) that track both sides' infantry,
@@ -304,12 +332,15 @@ The theater is big, so most of it is drawn cheaply or not at all:
   detail by distance (full 12.5 m grid up close, 200 m far out), with skirts
   hiding the seams. Off-screen tiles are culled, including from the shadow
   pass.
-- **Forests** are in 1.8 km chunks: full trees within about 1.6 km, a single
+- **Forests** are in 1.8 km chunks: full trees within about 1 km, a single
   five-sided stand-in per tree (one draw call per chunk) out to the fog, and
   nothing beyond.
 - **Props** are instanced per prototype per 2.4 km cell and hidden by size
   class: fence posts and delineators go first, buildings and pylons stay to
-  the fog. Long roadside meshes (rails, fences, wires) are split per cell.
+  the fog. Buildings switch to a simplified version (plain window panes)
+  beyond 1.2 km.
+- **Grass** is one instanced mesh refilled from cached 16 m cells as the
+  camera moves, within 120 m, and hidden above 160 m. Long roadside meshes (rails, fences, wires) are split per cell.
 - **Traffic** swaps to a single merged mesh beyond 220 m and disappears past
   4 km. Static parts of the helicopter and Humvee are merged by material.
 - The camera's far plane stops just past the fog.
@@ -335,7 +366,7 @@ src/
   game/threats.ts    enemy fire, missiles, flares, mortars, ambient battle
   battle/            campaign sectors, materialized battles, trenches, AI aircraft
   game/career.ts     ranks, upgrades, save data
-  world/             terrain, front line, sites, towns, props, roads/bridges, roadside, forests, sky
+  world/             terrain, front line, sites, towns, props + surfaces, roads/bridges, roadside, forests, grass, rivers, sky + look (fog, grade)
   fx/                particles (dust, smoke, fire), tracers, explosions
   audio.ts           synthesized rotor, turbine, wind and effects audio
   ui/                HUD, minimap and theater map, terminal and dialogs

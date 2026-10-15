@@ -125,8 +125,9 @@ export class ParticleSystem {
   setView(viewportHeight: number, fovDeg: number, fog: THREE.Fog) {
     this.material.uniforms.scale.value = viewportHeight / (2 * Math.tan((fovDeg * Math.PI) / 360));
     this.material.uniforms.fogColor.value.copy(fog.color);
-    this.material.uniforms.fogNear.value = fog.near;
-    this.material.uniforms.fogFar.value = fog.far;
+    // The scene fog is a height fog (see world/look.ts); particles use a simple linear fade.
+    this.material.uniforms.fogNear.value = 900;
+    this.material.uniforms.fogFar.value = 9000;
   }
 
   emit(o: EmitOpts) {
