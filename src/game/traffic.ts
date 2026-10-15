@@ -194,16 +194,22 @@ export class Traffic {
   }
 
   /**
-   * Civilian network: every stretch of road well back from the front (split
-   * where it heads into danger, so cars turn round there), the street grids of
-   * peaceful towns and cities, and short links from the roads into the streets.
+   * Civilian network: the country roads between towns (cut short wherever one
+   * would lead toward the front or a military site, so cars turn round there),
+   * the street grids of peaceful towns and cities, and short links from the
+   * roads into the streets. Supply routes to the bases are left to the convoys.
    */
   private buildCivilianNetwork() {
-    const { roads, front, towns } = this.world;
+    const { roads, front, towns, sites } = this.world;
+    const military = sites.filter((s) => s.kind !== 'lz');
     const unsafe = (x: number, z: number) =>
-      Math.abs(front.side(x, z)) < SAFE_FROM_FRONT || towns.some((t) => t.contested && Math.hypot(t.x - x, t.z - z) < t.r + 150);
+      Math.abs(front.side(x, z)) < SAFE_FROM_FRONT ||
+      towns.some((t) => t.contested && Math.hypot(t.x - x, t.z - z) < t.r + 150) ||
+      military.some((s) => Math.hypot(s.x - x, s.z - z) < s.radius + 200);
     const ends: THREE.Vector2[] = [];
     roads.paths.forEach((path, pi) => {
+      // Civilians keep to the country roads between towns: supply routes lead to the bases.
+      if (!roads.civilian.has(pi)) return;
       const cls = roads.classes[pi];
       const off = ROAD_SPEC[cls].hw * 0.5;
       const cruise = cls === 'main' ? 16 : cls === 'secondary' ? 12.5 : 8.5;

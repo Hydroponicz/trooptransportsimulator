@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { Noise2D } from '../util/noise';
 import { lerp, smoothstep } from '../util/math';
 import type { Frontline } from './frontline';
-import { FIELD_GLSL } from './farms';
+import { CROP_COLOR, FIELD_GLSL } from './farms';
 
 /** Terrain tiles: 128 cells (1.6 km) square, so every LOD stride divides them. */
 export const TILE_CELLS = 128;
@@ -607,11 +607,8 @@ float tNoise(vec2 p) {
   vec2 u = f * f * (3.0 - 2.0 * f);
   return mix(mix(tHash(i), tHash(i + vec2(1.0, 0.0)), u.x), mix(tHash(i + vec2(0.0, 1.0)), tHash(i + vec2(1.0, 1.0)), u.x), u.y);
 }
-// Field colours: ripe wheat, barley, young green crop, ploughed earth, rapeseed, sunflowers, hay meadow, pasture, farmyard.
-const vec3 FIELD_C[9] = vec3[9](
-  vec3(0.5, 0.39, 0.16), vec3(0.45, 0.41, 0.2), vec3(0.17, 0.27, 0.08),
-  vec3(0.25, 0.18, 0.11), vec3(0.6, 0.52, 0.08), vec3(0.17, 0.23, 0.07), vec3(0.27, 0.33, 0.13),
-  vec3(0.2, 0.32, 0.1), vec3(0.3, 0.26, 0.18));
+// Field colours (shared with the 3D crops, see CROP_COLOR): wheat, barley, green crop, ploughed, rapeseed, sunflowers, hay, pasture, farmyard.
+const vec3 FIELD_C[9] = vec3[9](${CROP_COLOR.map((c) => `vec3(${c.map((v) => v.toFixed(3)).join(', ')})`).join(', ')});
 `;
 
 const TERRAIN_MAP_FRAGMENT = /* glsl */ `
@@ -668,6 +665,9 @@ const TERRAIN_MAP_FRAGMENT = /* glsl */ `
       float rowFade = 1.0 - smoothstep(60.0, 260.0, camDist);
       float rows = 0.5 + 0.5 * sin(inCell.y * 6.2832 / 1.4);
       if (rowed) fc *= 1.0 - rowFade * (kind == 3 ? 0.22 : 0.12) * rows;
+      // Under standing crops, close up the ground between the plants is soil in their shade;
+      // further out the plot takes the crop's own colour (the plants fade in over the same distance).
+      if (kind <= 5 && kind != 3) fc = mix(fc * vec3(0.55, 0.5, 0.45), fc, smoothstep(35.0, 105.0, camDist));
       // Pasture: trampled paths and darker tufts; farmyard: packed earth and gravel.
       if (kind == 7) fc *= 0.85 + 0.3 * tNoise(wp * 0.35);
       if (kind == 8) fc *= 0.8 + 0.35 * tNoise(wp * 0.6);

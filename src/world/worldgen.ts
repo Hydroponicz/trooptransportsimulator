@@ -258,7 +258,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
   for (const s of sites) buildSite(s, props, terrain, rng.fork(), decor);
   for (const t of towns) buildTown(t, props, terrain, rng.fork());
   // Farmland: crops per plot (for the ground shader, crops and machinery), farmyards, pastures, bales.
-  const farmland = new Farmland(terrain, front, rng.fork());
+  const farmland = new Farmland(terrain, front, rng.fork(), sites);
   terrain.fieldTex.value = farmland.texture;
 
   // Enemy positions on the far side of the line.
@@ -438,6 +438,68 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
       const from = new THREE.Vector2(o.x + ((t.x - o.x) / (dist(o, t) || 1)) * o.r * 0.85, o.z + ((t.z - o.z) / (dist(o, t) || 1)) * o.r * 0.85);
       const e = edge(o);
       roads.add(from.x, from.y, e.x, e.y, rng, 'track');
+    }
+  }
+  // Country roads between the towns and villages behind each line, for civilian
+  // traffic: each joins its nearest neighbours (cities a few more), never
+  // passing close to a military site and never running near the front.
+  {
+    const peaceful = towns.filter((t) => !t.contested && Math.abs(front.side(t.x, t.z)) > 1500);
+    const military = sites.filter((s) => s.kind !== 'lz');
+    const pairs = new Set<string>();
+    const clearOfSites = (a: THREE.Vector2, b: THREE.Vector2) => {
+      for (let k = 0; k <= 20; k++) {
+        const x = a.x + ((b.x - a.x) * k) / 20;
+        const z = a.y + ((b.y - a.y) * k) / 20;
+        if (military.some((s) => Math.hypot(s.x - x, s.z - z) < s.radius + 260)) return false;
+        if (Math.abs(front.side(x, z)) < 1300) return false;
+      }
+      return true;
+    };
+    for (const t of peaceful) {
+      const side = front.side(t.x, t.z) > 0;
+      const others = peaceful
+        .filter((o) => o !== t && front.side(o.x, o.z) > 0 === side)
+        .sort((a, b) => dist(a, t) - dist(b, t));
+      const want = t.kind === 'city' ? 4 : t.kind === 'town' ? 2 : 1;
+      let made = 0;
+      for (const o of others) {
+        if (made >= want || dist(o, t) > 4800) break;
+        const pair = [t.name, o.name].sort().join('|');
+        if (pairs.has(pair)) {
+          made++;
+          continue;
+        }
+        const d = dist(o, t) || 1;
+        const a = new THREE.Vector2(t.x + ((o.x - t.x) / d) * t.r * 0.95, t.z + ((o.z - t.z) / d) * t.r * 0.95);
+        const b = new THREE.Vector2(o.x + ((t.x - o.x) / d) * o.r * 0.95, o.z + ((t.z - o.z) / d) * o.r * 0.95);
+        if (!clearOfSites(a, b)) continue;
+        // Not straight through another settlement either.
+        if (peaceful.some((q) => q !== t && q !== o && segPointDist(a, b, q.x, q.z) < q.r + 40)) continue;
+        pairs.add(pair);
+        made++;
+        const big = t.kind === 'city' || o.kind === 'city';
+        layClear(a, undefined, b, undefined, big ? 'main' : t.kind === 'village' && o.kind === 'village' ? 'track' : 'secondary', false);
+        // Drop it if it would run alongside another road for a stretch (a crossing is fine):
+        // two roads that close on different levels can't both be graded cleanly.
+        const pi = roads.paths.length - 1;
+        const path = roads.paths[pi];
+        let alongside = 0;
+        for (let i = 4; i < path.length - 4; i++) {
+          // Probe across the road out to ~35 m each side (the lookup itself only reaches ~12 m).
+          const tx = path[i + 1].x - path[i - 1].x;
+          const tz = path[i + 1].y - path[i - 1].y;
+          const tl = Math.hypot(tx, tz) || 1;
+          if ([0, -12, 12, -24, 24].some((o) => roads.distanceExcept(path[i].x - (tz / tl) * o, path[i].y + (tx / tl) * o, pi) < 11)) alongside++;
+        }
+        if (alongside > 12) {
+          roads.removeLast();
+          pairs.delete(pair);
+          made--;
+          continue;
+        }
+        roads.civilian.add(pi);
+      }
     }
   }
   roads.grade();
@@ -646,4 +708,12 @@ function planNetwork(sites: Site[], towns: Town[], terrain: Terrain) {
   const townLinks = new Map<Town, Gate>();
   for (const [t, h] of townHub) townLinks.set(t, gateFor(h, t));
   return { gates: [...gates.values()], links, townLinks };
+}
+
+/** Distance from (x, z) to the segment a–b. */
+function segPointDist(a: THREE.Vector2, b: THREE.Vector2, x: number, z: number) {
+  const dx = b.x - a.x;
+  const dz = b.y - a.y;
+  const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.y) * dz) / (dx * dx + dz * dz || 1)));
+  return Math.hypot(x - a.x - dx * t, z - a.y - dz * t);
 }

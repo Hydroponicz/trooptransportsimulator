@@ -252,6 +252,11 @@ Around every town and village lies its farmland, a grid of 95 × 60 m plots:
 - **Crops:** wheat, barley, rapeseed, sunflowers, beet and potatoes, ploughed
   earth, and hay meadows with round bales. Close to the camera the crops
   stand in real rows that sway in the wind and flatten under the rotor wash.
+  Each plot's ground is painted the colour of its crop, and the plants grow
+  up out of it gradually over the last stretch of their 110 m range. Coming
+  in to land, a field keeps its colour while its crops rise, with no visible
+  pop. Grass fades out the same way as you climb.
+- **Clearance:** no plot reaches into a base, outpost or landing zone.
 - **Pastures:** fenced with post and rail, with cattle grazing.
 - **Farmsteads:** a farmhouse, barn, machinery shed, silos and haystacks.
 - **Field work:** tractors plough, spray and mow, and combines harvest. Each
@@ -266,10 +271,13 @@ other, sound their horns if you block them for too long, and turn around
 inside bases before heading out again. They are solid, so drive around them.
 
 Civilian traffic fills the roads and streets around you: saloons,
-hatchbacks, vans, buses, lorries and the odd tractor. Cars drive the city and
-village street grids and the roads between them. They never go within about
-1.5 km of the front or into contested towns, and turn round where a road
-heads into danger. About forty are kept around the camera at a time.
+hatchbacks, vans, buses, lorries and the odd tractor. Their roads are the
+country roads that link each town and village to its neighbours (cities to
+several), which keep well clear of the bases. Cars drive the street grids
+and those roads between the settlements, and never use the supply routes to
+the bases. They never go within about 1.5 km of the front or into contested
+towns, and turn round where a road heads into danger. About forty are kept
+around the camera at a time.
 
 The network is laid out like a real one:
 
@@ -374,8 +382,8 @@ The theater is big, so most of it is drawn cheaply or not at all:
   camera moves, within 120 m, and hidden above 160 m. Long roadside meshes (rails, fences, wires) are split per cell.
 - **Big buildings** draw their windows in the facade shader (a box, not
   hundreds of window parts).
-- **Crops** are instanced 4 m row segments within 80 m of the camera. Further
-  out, the ground shader draws the rows.
+- **Crops** are instanced 4 m row segments within 110 m of the camera, with a
+  sparser version beyond 50 m. Further out, the ground shader draws the rows.
 - **Traffic** checks only its neighbours (a 25 m grid), skips obstacle checks
   for cars kilometres away, swaps to a single merged mesh beyond 220 m and
   disappears past

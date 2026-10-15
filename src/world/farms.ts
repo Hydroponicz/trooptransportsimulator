@@ -26,6 +26,23 @@ export const enum Crop {
   None = 255,
 }
 
+/**
+ * Colour of each crop seen from a little way off (linear RGB): the ground
+ * shader paints plots with it and the 3D plants are coloured to match, so a
+ * field looks the same before and after its plants appear.
+ */
+export const CROP_COLOR: [number, number, number][] = [
+  [0.56, 0.43, 0.16], // wheat
+  [0.5, 0.46, 0.22], // barley
+  [0.18, 0.32, 0.08], // young green crop / beet
+  [0.25, 0.18, 0.11], // ploughed
+  [0.62, 0.56, 0.08], // rapeseed in flower
+  [0.24, 0.3, 0.07], // sunflowers (leaves with heads)
+  [0.27, 0.33, 0.13], // hay meadow
+  [0.2, 0.32, 0.1], // pasture
+  [0.3, 0.26, 0.18], // farmyard
+];
+
 /** Grid index range per farm (cells −10..9 across, −16..15 along), and the texture row layout. */
 const CX0 = -10;
 const CX1 = 9;
@@ -67,7 +84,8 @@ export class Farmland {
   texture: THREE.DataTexture;
   private grid = new Map<number, Farm[]>();
 
-  constructor(terrain: Terrain, front: Frontline, rng: RNG) {
+  /** `keepOut`: bases, outposts and landing zones; no plot may touch one. */
+  constructor(terrain: Terrain, front: Frontline, rng: RNG, keepOut: { x: number; z: number; radius: number }[] = []) {
     const data = new Uint8Array(NX * NZ * Math.max(1, terrain.farms.length));
     terrain.farms.forEach((f, id) => {
       const kinds = new Uint8Array(NX * NZ).fill(Crop.None);
@@ -76,6 +94,15 @@ export class Farmland {
         for (let cx = CX0; cx <= CX1; cx++) {
           const d = Math.hypot((cx + 0.5) * FIELD_U, (cz + 0.5) * FIELD_V);
           if (d < f.r + 60 || d > f.r + FIELD_REACH - 40) continue;
+          // Keep clear of military sites: test the plot's corners and middle against each perimeter.
+          const c = Math.cos(f.rot);
+          const s = Math.sin(f.rot);
+          const pts = [[0, 0], [1, 0], [0, 1], [1, 1], [0.5, 0.5]].map(([a, b]) => {
+            const U = (cx + a) * FIELD_U;
+            const V = (cz + b) * FIELD_V;
+            return [f.x + U * c + V * s, f.z - U * s + V * c];
+          });
+          if (keepOut.some((k) => pts.some(([x, z]) => Math.hypot(x - k.x, z - k.z) < k.radius + 60))) continue;
           const near = d < f.r + 320;
           const roll = rng.next();
           let k: Crop;

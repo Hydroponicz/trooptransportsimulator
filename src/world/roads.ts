@@ -48,6 +48,8 @@ interface Seg {
 export class Roads {
   readonly paths: THREE.Vector2[][] = [];
   readonly classes: RoadClass[] = [];
+  /** Roads built for civilian traffic between towns (indices into paths). */
+  readonly civilian = new Set<number>();
   /** Site gates (for the entry control points) with the junction outside each. */
   readonly gates: { x: number; z: number; dx: number; dz: number; junction: THREE.Vector2; site: string }[] = [];
   private grid = new Map<number, Seg[]>();
@@ -264,6 +266,24 @@ export class Roads {
   grade() {
     const MAX_GRADE = 0.085;
     const MIN_DECK = WATER_LEVEL + 3.6;
+    // Every road point, bucketed, so a raised road can tell where another passes beneath it.
+    const PG = 20;
+    const pts = new Map<number, number[]>();
+    this.paths.forEach((path, pi) =>
+      path.forEach((p) => {
+        const k = Math.floor(p.x / PG) * 100003 + Math.floor(p.y / PG);
+        let arr = pts.get(k);
+        if (!arr) pts.set(k, (arr = []));
+        arr.push(pi);
+      }),
+    );
+    const crossedBy = (pi: number, x: number, z: number) => {
+      for (let gx = Math.floor((x - 12) / PG); gx <= Math.floor((x + 12) / PG); gx++)
+        for (let gz = Math.floor((z - 12) / PG); gz <= Math.floor((z + 12) / PG); gz++)
+          for (const o of pts.get(gx * 100003 + gz) ?? [])
+            if (o !== pi && this.paths[o].some((q) => Math.hypot(q.x - x, q.y - z) < 12)) return true;
+      return false;
+    };
     for (const path of this.paths) {
       const n = path.length;
       const free = this.freeEnds.has(this.heights.length);
@@ -370,7 +390,9 @@ export class Roads {
       // viaduct on piers rather than a tall earth embankment.
       // (Not right at a junction: there it stays on an embankment so the
       // roads can meet on solid ground.)
-      const raised = (k: number) => ground[k] < 1.4 || (road[k] - ground[k] > 2.5 && cap[k] >= STEEP);
+      // Also where it is carried over another road: a bridge, not an earth bank across it.
+      const pi = this.heights.length;
+      const raised = (k: number) => ground[k] < 1.4 || (road[k] - ground[k] > 2.5 && (cap[k] >= STEEP || crossedBy(pi, path[k].x, path[k].y)));
       const bridges: { a: number; b: number }[] = [];
       for (let i = 0; i < n; i++) {
         if (!raised(i)) continue;
