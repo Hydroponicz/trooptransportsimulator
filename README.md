@@ -228,10 +228,35 @@ Places include:
 - **FOBs** (about six): fuel, repair and flares.
 - **Combat outposts** (about a dozen) near the front.
 - **Landing zones** (about twenty): open fields, some behind enemy lines.
-- **Towns**:
-  - Contested towns straddle the front, ruined and fought over.
-  - Intact villages sit behind each line, with streets, apartment blocks, a
-    church, and farmland, barns and silos around them.
+- **Cities** (three: two behind our lines, one behind theirs), each about a
+  kilometre across, on a street grid:
+  - a central square with a war memorial, a fountain and kiosks, ringed by
+    Stalin-era blocks, shops with awnings and offices, with a cathedral nearby
+  - panel-block estates (nine-storey slabs and sixteen-storey towers) with
+    playgrounds, garages, schools and parks
+  - five-storey blocks and petrol stations further out
+  - private houses behind board fences on the edges
+  - an industrial quarter of factories, warehouses, chimneys and water towers
+  - avenues lined with lime trees, and parked cars along the streets
+- **Towns**: the same plan on a smaller scale. Contested towns straddle the
+  front, ruined and fought over.
+- **Villages and farming communities** (about thirty, several on each city's
+  outskirts):
+  - houses along the street behind board fences, with gardens, fruit trees
+    and sheds
+  - a shop and a bus stop, and a chapel in the bigger ones
+  - farmyards at each end with a barn, a machinery shed and a tractor
+
+Around every town and village lies its farmland, a grid of 95 × 60 m plots:
+
+- **Crops:** wheat, barley, rapeseed, sunflowers, beet and potatoes, ploughed
+  earth, and hay meadows with round bales. Close to the camera the crops
+  stand in real rows that sway in the wind and flatten under the rotor wash.
+- **Pastures:** fenced with post and rail, with cattle grazing.
+- **Farmsteads:** a farmhouse, barn, machinery shed, silos and haystacks.
+- **Field work:** tractors plough, spray and mow, and combines harvest. Each
+  runs up and down its plot in passes the width of its implement, trailing
+  dust and chaff. Farms near the front lie idle.
 
 Roads link everything. Supply traffic of cargo trucks, fuel tankers, HMMWVs
 and MRAPs drives the whole network in convoys. They keep to the right-hand
@@ -239,6 +264,12 @@ lane, steer smoothly through bends and junctions, slow for curves and keep
 their distance. They brake for your Humvee, your landed helicopter and each
 other, sound their horns if you block them for too long, and turn around
 inside bases before heading out again. They are solid, so drive around them.
+
+Civilian traffic fills the roads and streets around you: saloons,
+hatchbacks, vans, buses, lorries and the odd tractor. Cars drive the city and
+village street grids and the roads between them. They never go within about
+1.5 km of the front or into contested towns, and turn round where a road
+heads into danger. About forty are kept around the camera at a time.
 
 The network is laid out like a real one:
 
@@ -341,7 +372,13 @@ The theater is big, so most of it is drawn cheaply or not at all:
   beyond 1.2 km.
 - **Grass** is one instanced mesh refilled from cached 16 m cells as the
   camera moves, within 120 m, and hidden above 160 m. Long roadside meshes (rails, fences, wires) are split per cell.
-- **Traffic** swaps to a single merged mesh beyond 220 m and disappears past
+- **Big buildings** draw their windows in the facade shader (a box, not
+  hundreds of window parts).
+- **Crops** are instanced 4 m row segments within 80 m of the camera. Further
+  out, the ground shader draws the rows.
+- **Traffic** checks only its neighbours (a 25 m grid), skips obstacle checks
+  for cars kilometres away, swaps to a single merged mesh beyond 220 m and
+  disappears past
   4 km. Static parts of the helicopter and Humvee are merged by material.
 - The camera's far plane stops just past the fog.
 
@@ -358,7 +395,8 @@ src/
   heli/chinookModel.ts  procedural CH-47: lofted hull with see-through glazing, cockpit, cabin, crew stations
   vehicles/humvee.ts drivable Humvee: suspension, tires, drivetrain, model
   vehicles/models.ts AI vehicle models (truck, tanker, HMMWV, MRAP) with animated wheels
-  game/traffic.ts    AI supply traffic: routing, steering, following, braking
+  game/traffic.ts    AI supply convoys and civilian traffic: routing, steering, following, braking
+  game/farmwork.ts   tractors and combines working the fields
   game/missions.ts   contracts, pay, mission phases, payouts
   game/cargo.ts      boarding: troops, litter teams and pallet crews loading, securing and riding in the cabin
   game/soldiers.ts   instanced articulated soldier models and their poses (gait, idle, rifle carries with arm IK, kneel/prone/aim, tasks), with LOD
@@ -366,7 +404,7 @@ src/
   game/threats.ts    enemy fire, missiles, flares, mortars, ambient battle
   battle/            campaign sectors, materialized battles, trenches, AI aircraft
   game/career.ts     ranks, upgrades, save data
-  world/             terrain, front line, sites, towns, props + surfaces, roads/bridges, roadside, forests, grass, rivers, sky + look (fog, grade)
+  world/             terrain, front line, sites, towns/cities/villages + buildings, farms, props + surfaces, roads/bridges, roadside, forests, grass + crops, rivers, sky + look (fog, grade)
   fx/                particles (dust, smoke, fire), tracers, explosions
   audio.ts           synthesized rotor, turbine, wind and effects audio
   ui/                HUD, minimap and theater map, terminal and dialogs

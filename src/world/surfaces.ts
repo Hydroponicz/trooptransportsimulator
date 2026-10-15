@@ -34,6 +34,11 @@ export const SURF = {
   hay: 14,
   sheet: 15,
   mesh: 16,
+  /** Facades with windows drawn in: precast panel blocks, plastered blocks, office curtain wall, industrial brick. */
+  facade_panel: 17,
+  facade_plaster: 18,
+  facade_glass: 19,
+  facade_brick: 20,
 } as const;
 export type SurfName = keyof typeof SURF;
 
@@ -50,7 +55,7 @@ attribute float surf;
 varying float vSurf;
 varying vec3 vObjPos;
 varying vec3 vObjNrm;
-varying vec3 vInstOff;
+flat varying vec3 vInstOff;
 `;
 
 const VERT_BEGIN = /* glsl */ `
@@ -80,7 +85,7 @@ const FRAG_PARS = /* glsl */ `
 varying float vSurf;
 varying vec3 vObjPos;
 varying vec3 vObjNrm;
-varying vec3 vInstOff;
+flat varying vec3 vInstOff;
 float sHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float sNoise(vec2 p) {
   vec2 i = floor(p);
@@ -249,6 +254,67 @@ vec3 sGlass = vec3(0.0);
     k = 0.86 + 0.1 * sFbm(uv * 1.6) + 0.06 * sNoise(uv * 18.0);
     k = mix(k, 1.3, wire * 0.6);
     sH = wire * 0.5 + (1.0 - f.x * (1.0 - f.x) * 4.0) * -0.3;
+  } else if (kind >= 17 && kind <= 20) {
+    // Facade with a grid of windows: storey height, window spacing and size per style.
+    float sx = kind == 17 ? 3.0 : kind == 18 ? 3.3 : kind == 19 ? 1.6 : 6.0;
+    float fh = kind == 17 ? 2.8 : kind == 18 ? 3.3 : kind == 19 ? 3.4 : 7.0;
+    vec2 wsz = kind == 17 ? vec2(1.45, 1.45) : kind == 18 ? vec2(1.35, 2.0) : kind == 19 ? vec2(1.5, 2.3) : vec2(4.6, 4.4);
+    float sill = kind == 17 ? 0.85 : kind == 18 ? 0.95 : kind == 19 ? 0.75 : 1.6;
+    vec2 cell = vec2(uv.x / sx, p.y / fh);
+    vec2 id = floor(cell);
+    vec2 f = fract(cell) * vec2(sx, fh);
+    float wx = abs(f.x - sx * 0.5) - wsz.x * 0.5;
+    float wy = abs(f.y - (sill + wsz.y * 0.5)) - wsz.y * 0.5;
+    float aa = max(length(fwidth(uv)), 1e-4);
+    float inWin = (1.0 - smoothstep(-aa, aa, wx)) * (1.0 - smoothstep(-aa, aa, wy));
+    float frameW = kind == 20 ? 0.12 : 0.08;
+    float pane = (1.0 - smoothstep(-aa, aa, wx + frameW)) * (1.0 - smoothstep(-aa, aa, wy + frameW));
+    // Glazing bars: a cross in house windows, a grid in factory lights.
+    if (kind == 20) pane *= step(0.06, abs(fract((f.x - sx * 0.5) / 1.15 + 0.5) - 0.5) * 1.15) * step(0.06, abs(fract((f.y - sill) / 1.1 + 0.5) - 0.5) * 1.1);
+    else if (kind != 19) pane *= step(0.04, abs(f.x - sx * 0.5)) * step(0.04, abs(f.y - (sill + wsz.y * 0.68)));
+    // Seen from afar, blend to the average coverage instead of shimmering.
+    float far = 1.0 - sRes(uv, sx * 0.6);
+    float cover = (wsz.x * wsz.y) / (sx * fh);
+    inWin = mix(inWin, cover, far);
+    pane = mix(pane, cover * 0.8, far);
+    // Wall between the windows.
+    if (kind == 17) {
+      vec2 jf = fract(cell);
+      float joint = 1.0 - step(0.008, jf.x) * step(0.012, jf.y) * step(jf.x, 0.992);
+      k = (0.88 + 0.12 * sFbm(uv * 0.7) + 0.06 * sHash(id + 3.0)) * (1.0 - joint * 0.3 * (1.0 - far));
+      k *= 1.0 - 0.12 * smoothstep(0.5, 0.9, sNoise(vec2(uv.x * 1.8, uv.y * 0.2)));
+    } else if (kind == 18) {
+      k = 0.92 + 0.1 * sFbm(uv * 0.8);
+      // String course between storeys.
+      k *= 1.0 - 0.12 * (1.0 - smoothstep(0.0, 0.18, f.y)) * (1.0 - far);
+    } else if (kind == 19) {
+      // Spandrel panels between the glazing bands.
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.2, 0.24, 0.27), 0.6);
+      k = 0.95 + 0.05 * sNoise(uv);
+    } else {
+      vec2 b = uv / vec2(0.5, 0.17);
+      b.x += 0.5 * mod(floor(b.y), 2.0);
+      vec2 bf = fract(b);
+      float mortar = 1.0 - step(0.07, bf.y) * step(0.04, bf.x);
+      float r2 = sRes(uv, 0.17);
+      k = mix(0.95, mix(0.85 + 0.25 * sHash(floor(b)), 1.2, mortar * 0.8), r2);
+    }
+    // Glass: each window its own: dark, curtained, or blinds half down; all reflect the sky.
+    float hsh = sHash(id + vInstOff.xz * 0.37 + vec2(kind));
+    vec3 glassCol = hsh < 0.35 ? vec3(0.05, 0.06, 0.07) : hsh < 0.7 ? vec3(0.09, 0.1, 0.11) : hsh < 0.88 ? vec3(0.42, 0.36, 0.26) : vec3(0.3, 0.33, 0.36);
+    if (kind == 19) glassCol = vec3(0.08, 0.12, 0.14);
+    vec3 V = normalize(vViewPosition);
+    vec3 R = reflect(-V, normalize(vNormal));
+    float ry = dot(viewMatrix[1].xyz, R);
+    vec3 sky = mix(vec3(0.16, 0.17, 0.15), vec3(0.42, 0.55, 0.72), smoothstep(-0.15, 0.5, ry));
+    float fres = 0.2 + 0.6 * pow(1.0 - abs(dot(V, normalize(vNormal))), 3.0);
+    vec3 frameCol = kind == 20 ? vec3(0.15, 0.2, 0.17) : kind == 19 ? vec3(0.3, 0.32, 0.33) : vec3(0.82, 0.8, 0.75);
+    vec3 wall = diffuseColor.rgb * k;
+    diffuseColor.rgb = mix(wall, frameCol, inWin);
+    diffuseColor.rgb = mix(diffuseColor.rgb, glassCol, pane);
+    sGlass = sky * fres * pane * (kind == 19 ? 1.0 : 0.75);
+    k = 1.0;
+    sH = (-inWin * 0.6 + (inWin - pane) * 0.4) * (1.0 - far);
   } else {
     k = 0.94 + 0.1 * sNoise(uv * 0.8);
   }

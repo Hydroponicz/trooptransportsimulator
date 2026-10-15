@@ -15,7 +15,9 @@ export interface VehicleModel {
   wheelbase: number;
 }
 
-export type VehicleKind = 'cargo' | 'tanker' | 'hmmwv' | 'mrap';
+export type VehicleKind = 'cargo' | 'tanker' | 'hmmwv' | 'mrap' | CivKind | 'tractor' | 'combine';
+/** Civilian traffic. */
+export type CivKind = 'sedan' | 'hatch' | 'van' | 'bus' | 'lorry';
 
 const box = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
 const cyl = (rt: number, rb: number, h: number, s = 10) => new THREE.CylinderGeometry(rt, rb, h, s);
@@ -36,7 +38,7 @@ function wheelGeo(r: number, w: number) {
 
 function assemble(
   bodyParts: THREE.BufferGeometry[],
-  axles: { z: number; front: boolean; dual?: boolean }[],
+  axles: { z: number; front: boolean; dual?: boolean; r?: number; w?: number }[],
   track: number,
   r: number,
   dims: { length: number; width: number; height: number },
@@ -47,24 +49,27 @@ function assemble(
   body.receiveShadow = true;
   group.add(body);
   const wheels: VehicleModel['wheels'] = [];
-  const { tire, hub } = wheelGeo(r, 0.42);
   for (const a of axles)
     for (const sx of [-1, 1]) {
+      const ar = a.r ?? r;
+      const { tire, hub } = wheelGeo(ar, a.w ?? 0.42);
       const pivot = new THREE.Group();
-      pivot.position.set((sx * track) / 2, r, a.z);
+      pivot.position.set((sx * track) / 2, ar, a.z);
       const spin = new THREE.Group();
       pivot.add(spin);
       const t = new THREE.Mesh(tire, tireMat);
       t.castShadow = true;
       spin.add(t, new THREE.Mesh(hub, hubMat));
       group.add(pivot);
-      wheels.push({ pivot, spin, front: a.front, r });
+      wheels.push({ pivot, spin, front: a.front, r: ar });
     }
   const farParts = [...bodyParts];
   for (const a of axles)
     for (const sx of [-1, 1]) {
-      farParts.push(part(tire, 0x1a1a18, (sx * track) / 2, r, a.z));
-      farParts.push(part(hub, 0x4a4d3a, (sx * track) / 2, r, a.z));
+      const ar = a.r ?? r;
+      const { tire, hub } = wheelGeo(ar, a.w ?? 0.42);
+      farParts.push(part(tire, 0x1a1a18, (sx * track) / 2, ar, a.z));
+      farParts.push(part(hub, 0x4a4d3a, (sx * track) / 2, ar, a.z));
     }
   const far = new THREE.Mesh(merge(farParts), bodyMat);
   far.castShadow = true;
@@ -192,8 +197,141 @@ function mrap(): VehicleModel {
   return assemble(p, [{ z: -1.9, front: true }, { z: 1.8, front: false }], 2.1, r, { length: 6.2, width: 2.5, height: 3.4 });
 }
 
-export function buildVehicle(kind: VehicleKind): VehicleModel {
+const CHROME = 0x9a9c9e;
+const BLACK = 0x1e1f20;
+
+/** Family saloon (the boxy kind that still fills these roads). */
+function sedan(c: number): VehicleModel {
+  const r = 0.31;
+  const p: THREE.BufferGeometry[] = [
+    part(box(1.66, 0.62, 4.2), c, 0, r + 0.32, 0),
+    part(box(1.5, 0.56, 2.1), c, 0, r + 0.9, 0.15),
+    part(box(1.44, 0.46, 0.05), GLASS, 0, r + 0.92, -0.9, -0.5, 0, 0),
+    part(box(1.44, 0.44, 0.05), GLASS, 0, r + 0.92, 1.2, 0.5, 0, 0),
+    part(box(0.05, 0.42, 1.8), GLASS, -0.76, r + 0.92, 0.15),
+    part(box(0.05, 0.42, 1.8), GLASS, 0.76, r + 0.92, 0.15),
+    part(box(1.7, 0.16, 0.12), CHROME, 0, r + 0.2, -2.1),
+    part(box(1.7, 0.16, 0.12), CHROME, 0, r + 0.2, 2.1),
+    part(box(1.3, 0.2, 0.05), BLACK, 0, r + 0.42, -2.1),
+    ...lights(-2.11, r + 0.42, 0.62),
+    ...tailLights(2.11, r + 0.45, 0.66),
+  ];
+  return assemble(p, [{ z: -1.3, front: true }, { z: 1.3, front: false }], 1.42, r, { length: 4.25, width: 1.7, height: 1.5 });
+}
+
+/** Small hatchback. */
+function hatch(c: number): VehicleModel {
+  const r = 0.29;
+  const p: THREE.BufferGeometry[] = [
+    part(box(1.6, 0.6, 3.7), c, 0, r + 0.3, 0),
+    part(box(1.48, 0.58, 2.1), c, 0, r + 0.88, 0.45),
+    part(box(1.4, 0.46, 0.05), GLASS, 0, r + 0.9, -0.62, -0.55, 0, 0),
+    part(box(1.4, 0.48, 0.05), GLASS, 0, r + 0.9, 1.5, 0.2, 0, 0),
+    part(box(0.05, 0.42, 1.8), GLASS, -0.75, r + 0.9, 0.45),
+    part(box(0.05, 0.42, 1.8), GLASS, 0.75, r + 0.9, 0.45),
+    part(box(1.64, 0.16, 0.1), BLACK, 0, r + 0.18, -1.86),
+    part(box(1.64, 0.16, 0.1), BLACK, 0, r + 0.18, 1.86),
+    ...lights(-1.86, r + 0.42, 0.58),
+    ...tailLights(1.86, r + 0.5, 0.64),
+  ];
+  return assemble(p, [{ z: -1.15, front: true }, { z: 1.2, front: false }], 1.38, r, { length: 3.75, width: 1.62, height: 1.48 });
+}
+
+/** Minibus / delivery van. */
+function van(c: number): VehicleModel {
+  const r = 0.36;
+  const p: THREE.BufferGeometry[] = [
+    part(box(1.95, 1.9, 4.9), c, 0, r + 1.15, 0.2),
+    part(box(1.9, 0.75, 0.9), c, 0, r + 0.55, -2.55),
+    part(box(1.8, 0.75, 0.05), GLASS, 0, r + 1.55, -2.2, -0.35, 0, 0),
+    part(box(0.05, 0.6, 3.8), GLASS, -0.98, r + 1.55, 0.3),
+    part(box(0.05, 0.6, 3.8), GLASS, 0.98, r + 1.55, 0.3),
+    part(box(1.98, 0.18, 0.12), BLACK, 0, r + 0.2, -3.0),
+    ...lights(-3.0, r + 0.6, 0.7),
+    ...tailLights(2.66, r + 0.7, 0.85),
+  ];
+  return assemble(p, [{ z: -1.9, front: true }, { z: 1.6, front: false }], 1.7, r, { length: 5.4, width: 2.0, height: 2.5 });
+}
+
+/** Town bus. */
+function bus(c: number): VehicleModel {
+  const r = 0.5;
+  const p: THREE.BufferGeometry[] = [
+    part(box(2.5, 2.5, 10.5), c, 0, r + 1.45, 0),
+    part(box(2.52, 0.9, 10.3), GLASS, 0, r + 1.95, 0.1),
+    part(box(2.3, 1.1, 0.05), GLASS, 0, r + 1.8, -5.26),
+    part(box(2.52, 0.4, 10.52), 0xf2f0ea, 0, r + 2.6, 0),
+    part(box(2.52, 0.3, 10.52), 0x3a3a3a, 0, r + 0.3, 0),
+    part(box(1.2, 2.0, 0.06), GLASS, 1.27, r + 1.2, -3.5, 0, Math.PI / 2, 0),
+    ...lights(-5.26, r + 0.6, 0.85),
+    ...tailLights(5.26, r + 0.7, 1.0),
+  ];
+  return assemble(p, [{ z: -3.4, front: true }, { z: 3.0, front: false }], 2.0, r, { length: 10.6, width: 2.55, height: 3.5 });
+}
+
+/** Civilian two-axle lorry with a box body. */
+function lorry(c: number): VehicleModel {
+  const r = 0.5;
+  const p: THREE.BufferGeometry[] = [
+    part(box(1.2, 0.3, 6.6), DARK, 0, r + 0.25, 0.3),
+    part(box(2.3, 1.6, 1.7), c, 0, r + 1.2, -2.6),
+    part(box(2.1, 0.75, 0.05), GLASS, 0, r + 1.55, -3.46),
+    part(box(2.42, 2.5, 4.6), 0xe8e6e0, 0, r + 1.75, 1.1),
+    ...lights(-3.46, r + 0.6, 0.85),
+    ...tailLights(3.42, r + 0.6, 1.0),
+  ];
+  return assemble(p, [{ z: -2.5, front: true }, { z: 2.2, front: false }], 1.95, r, { length: 7.0, width: 2.45, height: 3.4 });
+}
+
+/** Farm tractor: big rear wheels, small fronts, a cab, an exhaust. */
+function tractor(c: number): VehicleModel {
+  const p: THREE.BufferGeometry[] = [
+    part(box(1.0, 0.9, 2.3), c, 0, 1.2, -0.6),
+    part(box(1.1, 0.25, 1.6), c, 0, 0.85, 0.6),
+    part(box(1.35, 1.35, 1.35), GLASS, 0, 2.2, 0.7),
+    part(box(1.5, 0.12, 1.55), c, 0, 2.9, 0.7),
+    part(box(1.3, 0.3, 1.3), DARK, 0, 1.5, 0.7),
+    part(cyl(0.06, 0.06, 1.3, 5), DARK, 0.35, 2.4, -1.2),
+    part(box(0.9, 0.3, 0.2), DARK, 0, 0.9, -1.85),
+    ...lights(-1.76, 1.35, 0.35),
+  ];
+  for (const sx of [-1, 1]) p.push(part(box(0.55, 0.08, 1.4), c, sx * 1.0, 1.75, 0.8));
+  return assemble(p, [{ z: -1.25, front: true, r: 0.48, w: 0.32 }, { z: 0.8, front: false, r: 0.85, w: 0.5 }], 1.95, 0.6, { length: 4.0, width: 2.4, height: 3.0 });
+}
+
+/** Combine harvester with its header and unloading auger. */
+function combine(c: number): VehicleModel {
+  const p: THREE.BufferGeometry[] = [
+    part(box(3.0, 2.4, 6.5), c, 0, 2.2, 0.6),
+    part(box(1.8, 1.5, 1.6), GLASS, 0, 3.9, -1.9),
+    part(box(2.0, 0.12, 1.8), 0xf2f0ea, 0, 4.7, -1.9),
+    part(box(2.6, 1.2, 2.6), c, 0, 4.0, 1.4),
+    // Header: wide cutter bar and reel out front.
+    part(box(6.4, 0.6, 1.6), c, 0, 0.7, -3.6),
+    part(cyl(0.45, 0.45, 6.2, 10).rotateZ(Math.PI / 2), 0xd8b44a, 0, 1.35, -3.9),
+    part(box(1.4, 1.0, 1.4), DARK, 0, 1.4, -2.6),
+    // Unloading auger folded along the side.
+    part(cyl(0.18, 0.18, 4.5, 8).rotateX(Math.PI / 2), c, 1.7, 4.3, 0.8),
+  ];
+  return assemble(p, [{ z: -1.5, front: false, r: 0.9, w: 0.6 }, { z: 2.6, front: true, r: 0.6, w: 0.4 }], 2.8, 0.8, { length: 9.0, width: 6.4, height: 4.9 });
+}
+
+export function buildVehicle(kind: VehicleKind, color?: number): VehicleModel {
   switch (kind) {
+    case 'sedan':
+      return sedan(color ?? 0xf2f2ee);
+    case 'hatch':
+      return hatch(color ?? 0x9a2a24);
+    case 'van':
+      return van(color ?? 0xf2f2ee);
+    case 'bus':
+      return bus(color ?? 0xd8a02a);
+    case 'lorry':
+      return lorry(color ?? 0x2a4a7a);
+    case 'tractor':
+      return tractor(color ?? 0xb8352c);
+    case 'combine':
+      return combine(color ?? 0x3f7a3a);
     case 'cargo':
       return cargo();
     case 'tanker':

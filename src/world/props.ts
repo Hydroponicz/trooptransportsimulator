@@ -3,6 +3,7 @@ import type { DistanceCuller } from './lod';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { AABB, ColliderSet } from './colliders';
 import { surf, withSurfaces, type SurfName } from './surfaces';
+import { buildCityProto, CITY_COLLIDE, CITY_VIEW, type CityProto } from './buildings';
 
 /** Bake a primitive into a non-indexed, vertex-colored geometry part. */
 export function part(
@@ -45,10 +46,10 @@ export function merge(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
   return g;
 }
 
-const box = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
-const cyl = (rt: number, rb: number, h: number, s = 10) => new THREE.CylinderGeometry(rt, rb, h, s);
+export const box = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
+export const cyl = (rt: number, rb: number, h: number, s = 10) => new THREE.CylinderGeometry(rt, rb, h, s);
 /** part() made of a given surface; `tint` false keeps the colour under per-instance tints. */
-const sp = (kind: SurfName, tint: boolean, ...a: Parameters<typeof part>) => surf(part(...a), kind, tint);
+export const sp = (kind: SurfName, tint: boolean, ...a: Parameters<typeof part>) => surf(part(...a), kind, tint);
 
 function tentGeo(): THREE.BufferGeometry {
   const s = new THREE.Shape();
@@ -125,7 +126,8 @@ export type ProtoName =
   | 'hospital'
   | 'medtent'
   | 'ammo_dump'
-  | 'signboard';
+  | 'signboard'
+  | CityProto;
 
 /** Gable roof prism: ridge along Z. */
 function gable(w: number, h: number, d: number): THREE.BufferGeometry {
@@ -144,7 +146,7 @@ function gable(w: number, h: number, d: number): THREE.BufferGeometry {
  * wall finish (`gableSurf`, tinted with the walls), two roof planes with
  * eaves and verges overhanging, and a ridge cap. Ridge along Z.
  */
-function pitchedRoof(p: THREE.BufferGeometry[], w: number, d: number, y: number, rise: number, roofKind: SurfName, roofColor: number, gableSurf: SurfName, gableColor: number, gableTint: boolean) {
+export function pitchedRoof(p: THREE.BufferGeometry[], w: number, d: number, y: number, rise: number, roofKind: SurfName, roofColor: number, gableSurf: SurfName, gableColor: number, gableTint: boolean) {
   p.push(sp(gableSurf, gableTint, gable(w, rise, d), gableColor, 0, y, 0));
   const eave = 0.5;
   const a = Math.atan2(rise, w / 2);
@@ -185,7 +187,7 @@ function windowAt(p: THREE.BufferGeometry[], x: number, y: number, z: number, ry
     for (const sx of [-1, 1]) put(sp('wood', false, box(w * 0.48, h + 0.05, 0.05), shutter, 0, 0, 0), sx * (w * 0.5 + 0.38), 0, 0.04);
 }
 
-interface HouseSpec {
+export interface HouseSpec {
   w: number;
   d: number;
   floors: number;
@@ -197,7 +199,7 @@ interface HouseSpec {
 }
 
 /** A village house: rendered or brick walls, windows with frames and sills, a door under a little porch roof, a chimney. */
-function house(o: HouseSpec): THREE.BufferGeometry {
+export function house(o: HouseSpec): THREE.BufferGeometry {
   const { w, d } = o;
   const wallH = o.floors * 2.85 + 0.45;
   const brick = o.wall === 'brick';
@@ -279,35 +281,27 @@ function ruin(w: number, d: number, h: number, seed: number): THREE.BufferGeomet
 function apartment(): THREE.BufferGeometry {
   const W = 24;
   const D = 12;
-  const H = 14.6;
+  const H = 14;
   const p: THREE.BufferGeometry[] = [
-    sp('concrete', true, box(W, H, D), 0xe2ddd0, 0, H / 2, 0),
+    sp('facade_panel', true, box(W, H, D), 0xe2ddd0, 0, H / 2, 0),
     sp('concrete', false, box(W + 0.3, 0.5, D + 0.3), 0x9b978d, 0, H + 0.25, 0),
     sp('plain', false, box(W - 0.4, 0.05, D - 0.4), 0x3a3a38, 0, H + 0.48, 0),
   ];
-  const cols = 8;
   const balc = [0xc9c4b6, 0xa7b5a0, 0xd8cdb2, 0x9fb0bd, 0xc6c0b0];
-  for (let f = 0; f < 5; f++) {
-    const y = 1.6 + f * 2.85;
-    for (let i = 0; i < cols; i++) {
-      const x = -W / 2 + (W / cols) * (i + 0.5);
-      windowAt(p, x, y, -D / 2, Math.PI, 1.3, 1.4);
-      if (i % 2 === 1 && f > 0) {
-        // Balcony: slab, front panel (some glazed in), side panels.
-        const c = balc[(i * 7 + f * 3) % balc.length];
-        p.push(sp('concrete', false, box(2.6, 0.16, 1.15), 0x9b978d, x, y - 1.3, D / 2 + 0.57));
-        if ((i + f) % 3 === 0) {
-          p.push(sp('wood', false, box(2.6, 1.0, 0.06), c, x, y - 0.75, D / 2 + 1.12));
-          p.push(sp('glass', false, box(2.5, 1.0, 0.05), 0x1e262c, x, y + 0.3, D / 2 + 1.12));
-        } else p.push(sp('concrete', false, box(2.6, 1.0, 0.08), c, x, y - 0.75, D / 2 + 1.12));
-        windowAt(p, x, y, D / 2, 0, 1.0, 2.1);
-      } else windowAt(p, x, y, D / 2, 0, 1.3, 1.4);
+  for (let f = 1; f < 5; f++)
+    for (let i = 1; i < 8; i += 2) {
+      // Balcony: slab and front panel (some glazed in), in the window grid.
+      const x = -W / 2 + 3 * (i + 0.5);
+      const y = f * 2.8;
+      const c = balc[(i * 7 + f * 3) % balc.length];
+      p.push(sp('concrete', false, box(2.8, 0.16, 1.15), 0x9b978d, x, y + 0.02, D / 2 + 0.57));
+      if ((i + f) % 3 === 0) p.push(sp('glass', false, box(2.8, 1.0, 0.06), 0x1e262c, x, y + 0.6, D / 2 + 1.12));
+      else p.push(sp('concrete', false, box(2.8, 1.0, 0.08), c, x, y + 0.6, D / 2 + 1.12));
     }
-  }
-  // Stairwell windows and entrance canopies at the back.
-  for (const x of [-8, 0, 8]) {
+  // Entrance canopies and doors at the back.
+  for (const x of [-7.5, 1.5]) {
     p.push(sp('concrete', false, box(2.6, 0.18, 1.6), 0x9b978d, x, 2.65, -D / 2 - 0.8));
-    p.push(sp('wood', false, box(1.2, 2.2, 0.1), 0x4c4136, x, 1.1, -D / 2 - 0.04));
+    p.push(sp('wood', false, box(1.2, 2.2, 0.1), 0x4c4136, x, 1.1, -D / 2 - 0.06));
     p.push(sp('concrete', false, box(2.2, 0.3, 1.5), 0x8e8b84, x, 0.15, -D / 2 - 0.75));
   }
   for (const x of [-9, -2.5, 4, 10]) p.push(sp('brick', false, box(1.0, 1.3, 0.8), 0x8a5a45, x, H + 1.0, 0));
@@ -347,7 +341,7 @@ function onionDome(p: THREE.BufferGeometry[], x: number, y: number, z: number, r
 let LO = false;
 /** Prototypes with a simplified version for distant viewing, and the distance it takes over. */
 const LOD_NEAR = 1200;
-const HAS_LO = new Set<ProtoName>(['house_a', 'house_b', 'house_c', 'house_d', 'apartment', 'church', 'hospital', 'building']);
+const HAS_LO = new Set<ProtoName>(['house_a', 'house_b', 'house_c', 'house_d', 'church', 'hospital', 'building', 'farmhouse']);
 
 /** The far version of a building: same shape and colours, windows reduced to plain panes. */
 export function buildProtoLo(name: ProtoName): THREE.BufferGeometry {
@@ -685,10 +679,13 @@ export function buildProto(name: ProtoName): THREE.BufferGeometry {
         sp('paint', true, cyl(0.1, 0.1, 3.6, 5), 0x1a1a18, 0.2, 2.1, -1.8, Math.PI / 2.2, 0.3, 0),
         sp('paint', false, box(2.8, 0.2, 6.0), 0x4a2a18, 0, 0.3, 0),
       ]);
+    default:
+      return buildCityProto(name);
   }
 }
 
 const COLLIDE: Record<ProtoName, boolean> = {
+  ...CITY_COLLIDE,
   hesco: true,
   sandbag: false,
   container: true,
@@ -749,6 +746,7 @@ interface Batch {
 /** Collects structure placements and emits one InstancedMesh per prototype. */
 /** How far away each prototype stays drawn (metres from its chunk); unlisted ones use 4 km. */
 const VIEW: Partial<Record<ProtoName, number>> = {
+  ...CITY_VIEW,
   delineator: 900,
   fencepost: 1200,
   railpost: 1200,

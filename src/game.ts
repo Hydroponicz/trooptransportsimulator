@@ -13,6 +13,7 @@ import { SlingSystem } from './game/sling';
 import { MissionSystem, siteRisk, type Payout } from './game/missions';
 import { Threats } from './game/threats';
 import { Traffic } from './game/traffic';
+import { FarmWork } from './game/farmwork';
 import { Campaign, CAMPAIGN_VERSION, SECTOR_COUNT } from './battle/campaign';
 import { Battle } from './battle/battle';
 import { AirOps } from './battle/air';
@@ -50,6 +51,7 @@ export class Game {
   missions: MissionSystem;
   threats: Threats;
   traffic: Traffic;
+  farmWork: FarmWork;
   battle: Battle;
   air: AirOps;
   /** Soldier poses and renderer, for tools and tests poking at the running game. */
@@ -100,7 +102,7 @@ export class Game {
 
     this.world = generateWorld(career.data.seed, progress);
     this.scene.add(this.world.group);
-    this.grass = new Grass(this.world.terrain, this.world.roads, this.world.colliders);
+    this.grass = new Grass(this.world.terrain, this.world.roads, this.world.colliders, this.world.farmland, this.world.towns);
     this.scene.add(this.grass.mesh);
     this.env = new Environment(this.scene);
     progress('Fueling aircraft');
@@ -209,6 +211,8 @@ export class Game {
     this.traffic = new Traffic(this.world, this.rng.fork(), this.effects);
     this.traffic.onHonk = (at) => this.audio.horn(Math.max(0.05, 1 - at.distanceTo(this.cam.camera.position) / 250), true);
     this.scene.add(this.traffic.group);
+    this.farmWork = new FarmWork(this.world, this.effects);
+    this.scene.add(this.farmWork.group);
 
     const wa = this.rng.range(0, Math.PI * 2);
     const ws = this.rng.range(1.5, 5);
@@ -669,6 +673,7 @@ export class Game {
         humvee: this.humvee.pos,
         heli: !this.heli.crashed && h.pos.y - ground < 8 ? h.pos : undefined,
       });
+      this.farmWork.update(dt, this.cam.camera.position);
     }
     this.updateEffects(dt);
     this.effects.update(dt, this.cam.camera.position);

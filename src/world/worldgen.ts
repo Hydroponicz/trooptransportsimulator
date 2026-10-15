@@ -1,4 +1,5 @@
 import { Rivers } from './water';
+import { Crop, Farmland } from './farms';
 import * as THREE from 'three';
 import { Noise2D, RNG } from '../util/noise';
 import { ColliderSet } from './colliders';
@@ -10,7 +11,7 @@ import { buildSite, type Site, type SiteKind, type SiteDecor } from './sites';
 import { PLAY_HALF, Terrain, WORLD_SCALE } from './terrain';
 import { DistanceCuller, splitByCells } from './lod';
 import { Vegetation } from './vegetation';
-import { buildTown, TOWN_NAMES, type Town } from './towns';
+import { buildTown, CITY_NAMES, TOWN_NAMES, type SettlementKind, type Town } from './towns';
 import { groundDetailTexture } from '../util/textures';
 
 export type EnemyKind = 'aa' | 'mg' | 'manpads';
@@ -36,6 +37,7 @@ export interface World {
   /** Hides far-off chunks of forest, props and roadside furniture. */
   culler: DistanceCuller;
   rivers: Rivers;
+  farmland: Farmland;
 }
 
 const NAMES: Record<SiteKind, string[]> = {
@@ -70,6 +72,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
   const sites: Site[] = [];
   const towns: Town[] = [];
   const townNames = [...TOWN_NAMES];
+  const cityNames = [...CITY_NAMES];
   const names = Object.fromEntries(Object.entries(NAMES).map(([k, v]) => [k, [...v]])) as Record<SiteKind, string[]>;
   const takeName = (k: SiteKind) => {
     const arr = names[k];
@@ -145,17 +148,21 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
   for (const zr of bands(6, -2700 * K, 2700 * K)) place('fob', (z) => [-1800 * K, front.x(z) - 1000], zr, 50);
   for (const zr of bands(12, -2900 * K, 2900 * K)) place('cop', (z) => [front.x(z) - 650, front.x(z) - 280], zr, 40);
   // Towns: some straddle the front (contested), others sit safely behind either line.
-  const placeTown = (contested: boolean, xr: (z: number) => [number, number], zr: [number, number], rr: [number, number]) => {
+  const placeTown = (kind: SettlementKind, contested: boolean, xr: (z: number) => [number, number], zr: [number, number], rr: [number, number]) => {
     let best: { x: number; z: number; r: number; score: number } | null = null;
-    for (let i = 0; i < 40; i++) {
+    const gap = kind === 'village' ? 260 : 400;
+    for (let i = 0; i < (kind === 'city' ? 120 : 40); i++) {
       const z = rng.range(zr[0], zr[1]);
       const [xa, xb] = xr(z);
+      if (xb <= xa) continue;
       const x = rng.range(xa, xb);
       const r = rng.range(rr[0], rr[1]);
       if (Math.abs(x) > PLAY_HALF - r - 100 || Math.abs(z) > PLAY_HALF - r - 100) continue;
       if (terrain.baseHeight(x, z) < 6) continue;
       if (sites.some((s) => Math.hypot(s.x - x, s.z - z) < s.radius + r + 140)) continue;
-      if (towns.some((t) => Math.hypot(t.x - x, t.z - z) < t.r + r + 400)) continue;
+      if (towns.some((t) => Math.hypot(t.x - x, t.z - z) < t.r + r + gap)) continue;
+      // Away from rivers: a settlement needs dry, level ground.
+      if (terrain.river(x, z).dist < r + 60) continue;
       const score = roughness(x, z, r);
       if (!best || score < best.score) best = { x, z, r, score };
     }
@@ -167,23 +174,40 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
       h += terrain.baseHeight(best.x + Math.cos(a) * rr2, best.z + Math.sin(a) * rr2);
     }
     h = Math.max(5, h / 9);
+    const names = kind === 'city' && cityNames.length ? cityNames : townNames;
     const town: Town = {
-      name: townNames.splice(Math.floor(rng.next() * townNames.length), 1)[0] ?? 'Town',
+      name: names.splice(Math.floor(rng.next() * names.length), 1)[0] ?? 'Town',
       x: best.x,
       z: best.z,
       y: h,
       r: best.r,
       rot: rng.range(-0.6, 0.6),
+      kind,
       contested,
       enemySide: front.side(best.x, best.z) > 0,
+      streets: [],
     };
     towns.push(town);
-    terrain.flattens.push({ x: town.x, z: town.z, radius: town.r + 10, blend: 170, height: h });
-    if (!contested) terrain.farms.push({ x: town.x, z: town.z, rot: town.rot, r: town.r });
+    terrain.flattens.push({ x: town.x, z: town.z, radius: town.r + 10, blend: kind === 'city' ? 260 : 170, height: h });
+    // Farmland round towns and villages (cities are ringed by their suburbs).
+    if (!contested && kind !== 'city') terrain.farms.push({ x: town.x, z: town.z, rot: town.rot, r: town.r });
   };
-  for (const zr of bands(6, -2600 * K, 2600 * K)) placeTown(true, (z) => [front.x(z) - 90, front.x(z) + 90], zr, [150, 190]);
-  for (const zr of bands(14, -2700 * K, 2700 * K)) placeTown(false, (z) => [-2600 * K, front.x(z) - 1000], zr, [85, 120]);
-  for (const zr of bands(7, -2400 * K, 2400 * K)) placeTown(false, (z) => [front.x(z) + 900, 2800 * K], zr, [85, 115]);
+  // Cities first (they need the most room): two behind our lines, one behind theirs.
+  for (const zr of bands(2, -2600 * K, 2600 * K)) placeTown('city', false, (z) => [-2500 * K, front.x(z) - 1700], zr, [480, 600]);
+  placeTown('city', false, (z) => [front.x(z) + 1700, 2700 * K], [-2000 * K, 2000 * K], [420, 520]);
+  for (const zr of bands(6, -2600 * K, 2600 * K)) placeTown('town', true, (z) => [front.x(z) - 90, front.x(z) + 90], zr, [150, 190]);
+  for (const zr of bands(6, -2700 * K, 2700 * K)) placeTown('town', false, (z) => [-2600 * K, front.x(z) - 1000], zr, [170, 230]);
+  for (const zr of bands(3, -2400 * K, 2400 * K)) placeTown('town', false, (z) => [front.x(z) + 900, 2800 * K], zr, [160, 210]);
+  // Farming villages on the outskirts of each city, then more scattered through the countryside.
+  for (const c of towns.filter((q) => q.kind === 'city'))
+    for (let k = 0; k < 3; k++) {
+      const R = c.r + 1400;
+      const enemy = front.side(c.x, c.z) > 0;
+      placeTown('village', false, (z) => (enemy ? [Math.max(c.x - R, front.x(z) + 700), c.x + R] : [c.x - R, Math.min(c.x + R, front.x(z) - 700)]), [c.z - R, c.z + R], [60, 95]);
+    }
+  // Villages and farming communities scattered through the countryside.
+  for (const zr of bands(16, -2800 * K, 2800 * K)) placeTown('village', false, (z) => [-2700 * K, front.x(z) - 700], zr, [55, 100]);
+  for (const zr of bands(8, -2600 * K, 2600 * K)) placeTown('village', false, (z) => [front.x(z) + 700, 2800 * K], zr, [55, 95]);
 
   for (const zr of bands(14, -2900 * K, 2900 * K)) place('lz', (z) => [front.x(z) - 1500 * K, front.x(z) - 200], zr, 30);
   for (const zr of bands(8, -2600 * K, 2600 * K)) place('lz', (z) => [front.x(z) + 250, front.x(z) + 1100 * K], zr, 30);
@@ -233,6 +257,9 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
   const plan = planNetwork(sites, towns, terrain);
   for (const s of sites) buildSite(s, props, terrain, rng.fork(), decor);
   for (const t of towns) buildTown(t, props, terrain, rng.fork());
+  // Farmland: crops per plot (for the ground shader, crops and machinery), farmyards, pastures, bales.
+  const farmland = new Farmland(terrain, front, rng.fork());
+  terrain.fieldTex.value = farmland.texture;
 
   // Enemy positions on the far side of the line.
   const enemies: EnemyPos[] = [];
@@ -398,7 +425,8 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
       return new THREE.Vector2(t.x + ((o.x - t.x) / d) * t.r * 0.85, t.z + ((o.z - t.z) / d) * t.r * 0.85);
     };
     if (hub) {
-      connect(hub.junction, hub.dir, edge({ x: hub.junction.x, z: hub.junction.y }), undefined, 'track');
+      // Cities get a main road, towns a secondary one, villages a track.
+      connect(hub.junction, hub.dir, edge({ x: hub.junction.x, z: hub.junction.y }), undefined, t.kind === 'city' ? 'main' : t.kind === 'town' && !t.contested ? 'secondary' : 'track');
     } else if (t.enemySide && !t.contested) {
       const others = towns.filter((o) => o !== t && (o.contested || o.enemySide));
       if (!others.length) continue;
@@ -443,21 +471,14 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
       for (let k = 0; k < n; k++) props.add('rock', x + rng.range(-4, 4), y - 0.3, z + rng.range(-4, 4), rng.range(0, 6), rng.range(0.8, 2.6));
     }
   }
-  for (const fm of terrain.farms)
-    for (let i = 0; i < 30; i++) {
-      const a = rng.range(0, Math.PI * 2);
-      const r = rng.range(fm.r + 60, fm.r + 450);
-      const x = fm.x + Math.cos(a) * r;
-      const z = fm.z + Math.sin(a) * r;
-      const y = terrain.heightAt(x, z);
-      if (y < 2 || roads.distance(x, z) < 13 || roads.distance(x + 13, z) < 13 || nearSite(x, z, 10)) continue;
-      const bales = rng.int(2, 6);
-      for (let k = 0; k < bales; k++) props.add('haybale', x + k * 2.2, terrain.heightAt(x + k * 2.2, z), z, rng.range(-0.2, 0.2));
-    }
+  farmland.populate(props, terrain, rng.fork(), (x, z) => nearSite(x, z, 30) || roads.distance(x, z) < 12);
 
   onProgress?.('Planting forests');
-  const inFarmland = (x: number, z: number) =>
-    terrain.farms.some((f) => Math.hypot(f.x - x, f.z - z) < f.r + 600) && n3.noise(x * 0.02, z * 0.02) > -0.55;
+  // No trees on the plots themselves (hedgerow trees along pastures are fine, now and then).
+  const inFarmland = (x: number, z: number) => {
+    const f = farmland.fieldAt(x, z);
+    return !!f && (f.kind !== Crop.Pasture || n3.noise(x * 0.02, z * 0.02) > -0.7);
+  };
   const blocked = (x: number, z: number) =>
     nearSite(x, z, 28) ||
     roads.distance(x, z) < 14 ||
@@ -506,6 +527,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     group,
     culler,
     rivers,
+    farmland,
   };
 }
 

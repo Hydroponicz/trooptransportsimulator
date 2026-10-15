@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Noise2D } from '../util/noise';
 import { lerp, smoothstep } from '../util/math';
 import type { Frontline } from './frontline';
+import { FIELD_GLSL } from './farms';
 
 /** Terrain tiles: 128 cells (1.6 km) square, so every LOD stride divides them. */
 export const TILE_CELLS = 128;
@@ -412,6 +413,9 @@ export class Terrain {
   /** Up to this many farms (nearest the camera) get their fields drawn. */
   static readonly FIELD_FARMS = 12;
   private farmUniform = { value: Array.from({ length: Terrain.FIELD_FARMS }, () => new THREE.Vector4(0, 0, 0, -1)) };
+  private farmIdUniform = { value: new Array<number>(Terrain.FIELD_FARMS).fill(0) };
+  /** Crop per plot, one row per farm (set by worldgen once the farmland is laid out). */
+  readonly fieldTex = { value: new THREE.DataTexture(new Uint8Array([255]), 1, 1, THREE.RedFormat) as THREE.Texture };
 
   /**
    * Terrain material: vertex colours for the land cover, plus in the shader
@@ -423,6 +427,8 @@ export class Terrain {
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true, map: detailTex });
     mat.onBeforeCompile = (sh) => {
       sh.uniforms.farms = this.farmUniform;
+      sh.uniforms.farmIds = this.farmIdUniform;
+      sh.uniforms.fieldTex = this.fieldTex;
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = position;\nvWNrm = normal;');
@@ -436,13 +442,14 @@ export class Terrain {
   /** Pick the farms nearest the camera for the field shader. */
   private updateFields(cam: THREE.Vector3) {
     const list = this.farms
-      .map((f) => ({ f, d: Math.hypot(f.x - cam.x, f.z - cam.z) - f.r }))
+      .map((f, id) => ({ f, id, d: Math.hypot(f.x - cam.x, f.z - cam.z) - f.r }))
       .sort((a, b) => a.d - b.d)
       .slice(0, Terrain.FIELD_FARMS);
     this.farmUniform.value.forEach((v, i) => {
       const e = list[i];
       if (e) v.set(e.f.x, e.f.z, e.f.rot, e.f.r);
       else v.set(0, 0, 0, -1);
+      this.farmIdUniform.value[i] = e ? e.id : 0;
     });
   }
 
@@ -591,6 +598,8 @@ const TERRAIN_FRAG_PARS = /* glsl */ `
 varying vec3 vWPos;
 varying vec3 vWNrm;
 uniform vec4 farms[${Terrain.FIELD_FARMS}];
+uniform float farmIds[${Terrain.FIELD_FARMS}];
+${FIELD_GLSL}
 float tHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float tNoise(vec2 p) {
   vec2 i = floor(p);
@@ -598,10 +607,11 @@ float tNoise(vec2 p) {
   vec2 u = f * f * (3.0 - 2.0 * f);
   return mix(mix(tHash(i), tHash(i + vec2(1.0, 0.0)), u.x), mix(tHash(i + vec2(0.0, 1.0)), tHash(i + vec2(1.0, 1.0)), u.x), u.y);
 }
-// Field colours: ripe wheat, barley, young green crop, ploughed earth, rapeseed, sunflowers, hay meadow.
-const vec3 FIELD_C[7] = vec3[7](
+// Field colours: ripe wheat, barley, young green crop, ploughed earth, rapeseed, sunflowers, hay meadow, pasture, farmyard.
+const vec3 FIELD_C[9] = vec3[9](
   vec3(0.5, 0.39, 0.16), vec3(0.45, 0.41, 0.2), vec3(0.17, 0.27, 0.08),
-  vec3(0.25, 0.18, 0.11), vec3(0.6, 0.52, 0.08), vec3(0.17, 0.23, 0.07), vec3(0.27, 0.33, 0.13));
+  vec3(0.25, 0.18, 0.11), vec3(0.6, 0.52, 0.08), vec3(0.17, 0.23, 0.07), vec3(0.27, 0.33, 0.13),
+  vec3(0.2, 0.32, 0.1), vec3(0.3, 0.26, 0.18));
 `;
 
 const TERRAIN_MAP_FRAGMENT = /* glsl */ `
@@ -623,9 +633,15 @@ const TERRAIN_MAP_FRAGMENT = /* glsl */ `
     diffuseColor.rgb *= mix(vec3(0.9, 0.96, 0.86), vec3(1.08, 1.04, 0.94), m);
     // Fields around villages.
     float flat_ = smoothstep(0.93, 0.97, normalize(vWNrm).y) * smoothstep(1.5, 3.0, vWPos.y);
+    // Where two villages' fields overlap, the lower-numbered farm owns the plot (as on the CPU side).
+    int bestKind = -1;
+    float bestId = 1e9;
+    float bestD = 0.0;
+    vec2 bestIn = vec2(0.0);
+    vec2 bestCell = vec2(0.0);
     for (int k = 0; k < ${Terrain.FIELD_FARMS}; k++) {
       vec4 f = farms[k];
-      if (f.w < 0.0) continue;
+      if (f.w < 0.0 || farmIds[k] >= bestId) continue;
       vec2 dlt = wp - f.xy;
       float d = length(dlt);
       if (d > f.w + 750.0 || d < f.w + 30.0) continue;
@@ -634,23 +650,33 @@ const TERRAIN_MAP_FRAGMENT = /* glsl */ `
       float u = dlt.x * c - dlt.y * s;
       float v = dlt.x * s + dlt.y * c;
       vec2 cell = floor(vec2(u / 95.0, v / 60.0));
-      vec2 inCell = vec2(u - cell.x * 95.0, v - cell.y * 60.0);
-      float h = tHash(cell + f.xy * 0.001);
-      int kind = int(floor(h * 7.0));
-      if (h > 0.93) kind = 6;
+      int kind = fieldKind(int(farmIds[k] + 0.5), cell);
+      if (kind < 0) continue;
+      bestKind = kind;
+      bestId = farmIds[k];
+      bestD = d - f.w;
+      bestCell = cell;
+      bestIn = vec2(u - cell.x * 95.0, v - cell.y * 60.0);
+    }
+    if (bestKind >= 0) {
+      int kind = bestKind;
+      vec2 cell = bestCell;
+      vec2 inCell = bestIn;
       vec3 fc = FIELD_C[kind];
+      bool rowed = kind <= 5;
       // Crop rows along the field (faded with distance so they don't alias).
       float rowFade = 1.0 - smoothstep(60.0, 260.0, camDist);
       float rows = 0.5 + 0.5 * sin(inCell.y * 6.2832 / 1.4);
-      fc *= 1.0 - rowFade * (kind == 3 ? 0.22 : 0.12) * rows;
+      if (rowed) fc *= 1.0 - rowFade * (kind == 3 ? 0.22 : 0.12) * rows;
+      // Pasture: trampled paths and darker tufts; farmyard: packed earth and gravel.
+      if (kind == 7) fc *= 0.85 + 0.3 * tNoise(wp * 0.35);
+      if (kind == 8) fc *= 0.8 + 0.35 * tNoise(wp * 0.6);
       fc *= 0.92 + 0.16 * tNoise(wp * 0.05 + cell * 3.1);
       // Grassy margins and hedgerows between fields.
       float edge = min(min(inCell.x, 95.0 - inCell.x), min(inCell.y, 60.0 - inCell.y));
       float margin = 1.0 - smoothstep(1.2, 2.6, edge);
       fc = mix(fc, vec3(0.16, 0.27, 0.08), margin * 0.85);
-      float w = smoothstep(f.w + 750.0, f.w + 450.0, d) * smoothstep(f.w + 30.0, f.w + 90.0, d) * flat_;
-      // Some cells stay meadow.
-      if (h < 0.1) w = 0.0;
+      float w = smoothstep(750.0, 450.0, bestD) * smoothstep(30.0, 90.0, bestD) * flat_;
       diffuseColor.rgb = mix(diffuseColor.rgb, fc, w * 0.92);
     }
   }

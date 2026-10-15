@@ -4,6 +4,15 @@ import type { RNG } from '../util/noise';
 import type { Effects } from '../fx/effects';
 import { ROAD_SPEC } from '../world/roads';
 import { buildVehicle, type VehicleKind, type VehicleModel } from '../vehicles/models';
+import { CAR_PAINT } from '../world/towns';
+
+/** Civilian vehicles kept on the roads around the camera. */
+const CIV_MAX = 42;
+const CIV_SPAWN_MIN = 350;
+const CIV_SPAWN_MAX = 2200;
+const CIV_DROP = 3000;
+/** Civilians keep this far from the front line (and out of contested towns). */
+const SAFE_FROM_FRONT = 1500;
 
 /** One direction of travel along a road, offset into its right-hand lane. */
 interface Lane {
@@ -16,6 +25,10 @@ interface Lane {
   to: string;
   cruise: number;
   track: boolean;
+  /** Open to civilian traffic (far enough from the fighting). */
+  civ?: boolean;
+  /** A town street. */
+  town?: boolean;
 }
 
 interface Car {
@@ -45,6 +58,9 @@ interface Car {
   /** Backing up out of a stand-off. */
   reverseT: number;
   stuckT: number;
+  /** Civilian (spawned and retired around the camera, on the civilian network). */
+  civ: boolean;
+  poolKey: string;
 }
 
 export interface TrafficObstacles {
@@ -73,6 +89,24 @@ export class Traffic {
   group = new THREE.Group();
   private cars: Car[] = [];
   private lanesFrom = new Map<string, Lane[]>();
+  /** The civilian network: safe stretches of road, town streets and the links between them. */
+  private civFrom = new Map<string, Lane[]>();
+  private civLanes: Lane[] = [];
+  private pool = new Map<string, VehicleModel[]>();
+  private nextId = 100000;
+  private civT = 0;
+  /** Cars bucketed by 25 m cell, rebuilt each update, for neighbour checks. */
+  private grid = new Map<number, Car[]>();
+  private near(x: number, z: number, r: number): Car[] {
+    const out: Car[] = [];
+    const G = 25;
+    for (let gx = Math.floor((x - r) / G); gx <= Math.floor((x + r) / G); gx++)
+      for (let gz = Math.floor((z - r) / G); gz <= Math.floor((z + r) / G); gz++) {
+        const arr = this.grid.get(gx * 100003 + gz);
+        if (arr) for (const c of arr) out.push(c);
+      }
+    return out;
+  }
   /** Horn callback (position of the honking vehicle). */
   onHonk: ((at: THREE.Vector3) => void) | null = null;
 
@@ -128,10 +162,130 @@ export class Traffic {
         leader ??= car;
       });
     }
+    this.buildCivilianNetwork();
   }
 
-  private spawn(id: number, kind: VehicleKind, lane: Lane, seg: number, leader: Car | null): Car {
-    const m = buildVehicle(kind);
+  /** Lanes for one direction of travel along a polyline (centreline points), offset into the right-hand lane. */
+  private makeLane(src: THREE.Vector2[], off: number, pi: number, dir: 1 | -1, cruise: number, track: boolean): Lane {
+    const n = src.length;
+    const pts: THREE.Vector2[] = [];
+    for (let i = 0; i < n; i++) {
+      const a = src[Math.max(0, i - 1)];
+      const b = src[Math.min(n - 1, i + 1)];
+      const tx = b.x - a.x;
+      const tz = b.y - a.y;
+      const tl = Math.hypot(tx, tz) || 1;
+      pts.push(new THREE.Vector2(src[i].x - (tz / tl) * off, src[i].y + (tx / tl) * off));
+    }
+    const cum = [0];
+    for (let i = 1; i < n; i++) cum.push(cum[i - 1] + pts[i].distanceTo(pts[i - 1]));
+    return { pts, cum, pi, dir, from: key(src[0]), to: key(src[n - 1]), cruise, track, civ: true };
+  }
+
+  private addCiv(src: THREE.Vector2[], off: number, pi: number, cruise: number, track: boolean, town: boolean) {
+    for (const dir of [1, -1] as const) {
+      const pts = dir === 1 ? src : [...src].reverse();
+      const lane = this.makeLane(pts, off, pi, dir, cruise, track);
+      lane.town = town;
+      this.civLanes.push(lane);
+      if (!this.civFrom.has(lane.from)) this.civFrom.set(lane.from, []);
+      this.civFrom.get(lane.from)!.push(lane);
+    }
+  }
+
+  /**
+   * Civilian network: every stretch of road well back from the front (split
+   * where it heads into danger, so cars turn round there), the street grids of
+   * peaceful towns and cities, and short links from the roads into the streets.
+   */
+  private buildCivilianNetwork() {
+    const { roads, front, towns } = this.world;
+    const unsafe = (x: number, z: number) =>
+      Math.abs(front.side(x, z)) < SAFE_FROM_FRONT || towns.some((t) => t.contested && Math.hypot(t.x - x, t.z - z) < t.r + 150);
+    const ends: THREE.Vector2[] = [];
+    roads.paths.forEach((path, pi) => {
+      const cls = roads.classes[pi];
+      const off = ROAD_SPEC[cls].hw * 0.5;
+      const cruise = cls === 'main' ? 16 : cls === 'secondary' ? 12.5 : 8.5;
+      let run: THREE.Vector2[] = [];
+      let k = 0;
+      const flush = () => {
+        if (run.length >= 4) {
+          this.addCiv(run, off, 100000 + pi * 64 + k++, cruise, cls === 'track', false);
+          ends.push(run[0], run[run.length - 1]);
+        }
+        run = [];
+      };
+      for (const p of path) {
+        if (unsafe(p.x, p.y)) flush();
+        else run.push(p);
+      }
+      flush();
+    });
+    // Town and city streets, subdivided so cars can steer round the corners.
+    towns.forEach((t, ti) => {
+      if (t.contested || Math.abs(front.side(t.x, t.z)) < SAFE_FROM_FRONT) return;
+      const nodes: THREE.Vector2[] = [];
+      t.streets.forEach((st, si) => {
+        const a = new THREE.Vector2(st.ax, st.az);
+        const b = new THREE.Vector2(st.bx, st.bz);
+        const len = a.distanceTo(b);
+        if (len < 6) return;
+        const n = Math.max(2, Math.ceil(len / 8) + 1);
+        const pts = Array.from({ length: n }, (_, i) => a.clone().lerp(b, i / (n - 1)));
+        this.addCiv(pts, st.w * 0.25, 200000 + ti * 1000 + si, st.w > 12 ? 13 : t.kind === 'village' ? 8 : 10, false, true);
+        nodes.push(a, b);
+      });
+      // Link the roads that end in town to the nearest street junction.
+      for (const e of ends) {
+        if (Math.hypot(e.x - t.x, e.y - t.z) > t.r * 1.1 || !nodes.length) continue;
+        const nearest = nodes.reduce((p, q) => (q.distanceTo(e) < p.distanceTo(e) ? q : p));
+        const d = nearest.distanceTo(e);
+        if (d < 1 || d > 140) continue;
+        const n = Math.max(2, Math.ceil(d / 8) + 1);
+        this.addCiv(Array.from({ length: n }, (_, i) => e.clone().lerp(nearest, i / (n - 1))), 2, 300000 + this.civLanes.length, 8, false, true);
+      }
+    });
+  }
+
+  /** Keep the civilian population topped up around the camera, retiring cars left far behind. */
+  private manageCivilians(camPos: THREE.Vector3) {
+    for (let i = this.cars.length - 1; i >= 0; i--) {
+      const c = this.cars[i];
+      if (!c.civ) continue;
+      if (Math.hypot(c.pos.x - camPos.x, c.pos.y - camPos.z) < CIV_DROP) continue;
+      this.group.remove(c.m.group);
+      if (!this.pool.has(c.poolKey)) this.pool.set(c.poolKey, []);
+      this.pool.get(c.poolKey)!.push(c.m);
+      this.cars.splice(i, 1);
+    }
+    let civ = this.cars.filter((c) => c.civ).length;
+    for (let tries = 0; tries < 40 && civ < CIV_MAX && this.civLanes.length; tries++) {
+      const lane = this.rng.pick(this.civLanes);
+      if (lane.pts.length < 3) continue;
+      const seg = this.rng.int(0, lane.pts.length - 2);
+      const p = lane.pts[seg];
+      const d = Math.hypot(p.x - camPos.x, p.y - camPos.z);
+      if (d < CIV_SPAWN_MIN || d > CIV_SPAWN_MAX) continue;
+      if (this.cars.some((c) => c.pos.distanceTo(p) < 18)) continue;
+      const kind: VehicleKind = lane.town
+        ? this.rng.pick(['sedan', 'sedan', 'hatch', 'hatch', 'sedan', 'van', 'bus', 'lorry'] as VehicleKind[])
+        : lane.track
+          ? this.rng.pick(['hatch', 'van', 'tractor', 'sedan'] as VehicleKind[])
+          : this.rng.pick(['sedan', 'sedan', 'hatch', 'van', 'lorry', 'lorry', 'bus'] as VehicleKind[]);
+      const color = kind === 'bus' ? this.rng.pick([0xd8a02a, 0xf2f0ea, 0x3a7a9a]) : kind === 'tractor' ? this.rng.pick([0xb8352c, 0x2f5a9a, 0x3f7a3a]) : this.rng.pick(CAR_PAINT);
+      const car = this.spawn(this.nextId++, kind, lane, seg, null, color);
+      car.civ = true;
+      car.pause = 0;
+      if (kind === 'tractor') car.cruiseMul = 0.75;
+      else if (kind === 'bus' || kind === 'lorry') car.cruiseMul = this.rng.range(0.8, 0.92);
+      civ++;
+    }
+  }
+
+  private spawn(id: number, kind: VehicleKind, lane: Lane, seg: number, leader: Car | null, color?: number): Car {
+    const poolKey = `${kind}:${color ?? ''}`;
+    const m = this.pool.get(poolKey)?.pop() ?? buildVehicle(kind, color);
     this.group.add(m.group);
     const a = lane.pts[seg];
     const b = lane.pts[seg + 1];
@@ -160,6 +314,8 @@ export class Traffic {
       dustT: this.rng.range(0, 0.2),
       reverseT: 0,
       stuckT: 0,
+      civ: false,
+      poolKey,
     };
     car.y = this.surface(car.pos.x, car.pos.y, Infinity);
     this.cars.push(car);
@@ -174,7 +330,7 @@ export class Traffic {
 
   /** Pick the next lane at the end of `after` (convoys follow their leader's choices). */
   private nextLane(car: Car, after: Lane): Lane | null {
-    let options = (this.lanesFrom.get(after.to) ?? []).filter((l) => !(l.pi === after.pi && l.dir === -after.dir));
+    let options = ((car.civ ? this.civFrom : this.lanesFrom).get(after.to) ?? []).filter((l) => !(l.pi === after.pi && l.dir === -after.dir));
     if (!options.length) return null;
     // Avoid hairpins (branches doubling back) when there's another way on.
     const n = after.pts.length;
@@ -232,7 +388,19 @@ export class Traffic {
 
   update(dt: number, camPos: THREE.Vector3, obs: TrafficObstacles = {}) {
     if (dt <= 0) return;
+    this.civT -= dt;
+    if (this.civT <= 0) {
+      this.civT = 0.5;
+      this.manageCivilians(camPos);
+    }
     const colliders = this.world.colliders;
+    this.grid.clear();
+    for (const c of this.cars) {
+      const k = Math.floor(c.pos.x / 25) * 100003 + Math.floor(c.pos.y / 25);
+      let arr = this.grid.get(k);
+      if (!arr) this.grid.set(k, (arr = []));
+      arr.push(c);
+    }
     const tmp = new THREE.Vector2();
     const tmp2 = new THREE.Vector2();
     for (const car of this.cars) {
@@ -288,7 +456,7 @@ export class Traffic {
       if (atEnd && car.pause <= 0 && car.v < 0.5) {
         // Dead end (a motor pool or the edge of town): wait, then turn around.
         car.pause = this.rng.range(10, 30) * (car.leader ? 0.4 : 1);
-        const back = (this.lanesFrom.get(car.lane.to) ?? []).find((l) => l.pi === car.lane.pi && l.dir === -car.lane.dir);
+        const back = ((car.civ ? this.civFrom : this.lanesFrom).get(car.lane.to) ?? []).find((l) => l.pi === car.lane.pi && l.dir === -car.lane.dir);
         if (back) car.queue.push(back);
       }
 
@@ -318,15 +486,18 @@ export class Traffic {
         vt = 0;
       }
 
-      // Look ahead along the route for anything in the way.
+      // Look ahead along the route for anything in the way (cars kilometres from
+      // the camera skip the checks: nobody sees them, and it keeps big traffic cheap).
+      const skip = (car.pos.x - camPos.x) ** 2 + (car.pos.y - camPos.z) ** 2 > 2500 * 2500;
       const brake = 3.5;
       const range = Math.min(70, 10 + (car.v * car.v) / (2 * brake) + car.m.length);
       let gap = Infinity;
       let blocker: Car | null = null;
       let byPlayer = false;
-      for (let d = car.m.length / 2; d < range && gap === Infinity; d += 2.5) {
+      const around = skip ? [] : this.near(car.pos.x, car.pos.y, range + 12);
+      for (let d = car.m.length / 2; !skip && d < range && gap === Infinity; d += 2.5) {
         const q = this.ahead(car, d, tmp2);
-        for (const o of this.cars) {
+        for (const o of around) {
           if (o === car) continue;
           if (o.blockedBy === car && car.id < o.id) continue; // break deadlocks: lower id goes first
           if (Math.hypot(o.pos.x - q.x, o.pos.y - q.y) < 1.5 + o.m.width / 2) {
@@ -353,7 +524,7 @@ export class Traffic {
       }
       // Direct check on the bodies ahead (catches cars off the lane line,
       // mid U-turn or cutting a corner).
-      for (const o of this.cars) {
+      for (const o of around) {
         if (o === car) continue;
         const dx = o.pos.x - car.pos.x;
         const dz = o.pos.y - car.pos.y;
@@ -403,7 +574,7 @@ export class Traffic {
       car.pos.y += Math.cos(car.h) * car.v * dt;
 
       // Never overlap another vehicle: push apart and kill the closing speed.
-      for (const o of this.cars) {
+      for (const o of around) {
         if (o === car) continue;
         const dx = car.pos.x - o.pos.x;
         const dz = car.pos.y - o.pos.y;
@@ -422,11 +593,12 @@ export class Traffic {
       const hc = Math.cos(car.h);
       const half = wb / 2;
       const tw = car.m.width * 0.4;
+      // Far away, one sample will do (the body stays level).
       const yc = this.surface(car.pos.x, car.pos.y, car.y);
-      const yF = this.surface(car.pos.x + hf * half, car.pos.y + hc * half, car.y);
-      const yB = this.surface(car.pos.x - hf * half, car.pos.y - hc * half, car.y);
-      const yL = this.surface(car.pos.x - hc * tw, car.pos.y + hf * tw, car.y);
-      const yR = this.surface(car.pos.x + hc * tw, car.pos.y - hf * tw, car.y);
+      const yF = skip ? yc : this.surface(car.pos.x + hf * half, car.pos.y + hc * half, car.y);
+      const yB = skip ? yc : this.surface(car.pos.x - hf * half, car.pos.y - hc * half, car.y);
+      const yL = skip ? yc : this.surface(car.pos.x - hc * tw, car.pos.y + hf * tw, car.y);
+      const yR = skip ? yc : this.surface(car.pos.x + hc * tw, car.pos.y - hf * tw, car.y);
       const k = 1 - Math.exp(-dt * 10);
       car.y += ((yc + (yF + yB) / 2) / 2 - car.y) * k;
       const pitchT = Math.atan2(yF - yB, wb) + car.accel * 0.006;
