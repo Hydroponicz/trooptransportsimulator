@@ -7,6 +7,8 @@ export interface VehicleModel {
   /** Sprung body (pitches and rolls on its suspension). */
   body: THREE.Object3D;
   wheels: { pivot: THREE.Object3D; spin: THREE.Object3D; front: boolean; r: number }[];
+  /** Body and wheels as one static mesh, for when the vehicle is far away. */
+  far: THREE.Mesh;
   length: number;
   width: number;
   height: number;
@@ -58,8 +60,18 @@ function assemble(
       group.add(pivot);
       wheels.push({ pivot, spin, front: a.front, r });
     }
+  const farParts = [...bodyParts];
+  for (const a of axles)
+    for (const sx of [-1, 1]) {
+      farParts.push(part(tire, 0x1a1a18, (sx * track) / 2, r, a.z));
+      farParts.push(part(hub, 0x4a4d3a, (sx * track) / 2, r, a.z));
+    }
+  const far = new THREE.Mesh(merge(farParts), bodyMat);
+  far.castShadow = true;
+  far.visible = false;
+  group.add(far);
   const zs = axles.map((a) => a.z);
-  return { group, body, wheels, ...dims, wheelbase: Math.max(...zs) - Math.min(...zs) || 3 };
+  return { group, body, wheels, far, ...dims, wheelbase: Math.max(...zs) - Math.min(...zs) || 3 };
 }
 
 const OLIVE = 0x4d5434;

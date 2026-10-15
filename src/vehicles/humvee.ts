@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { clamp, smoothstep } from '../util/math';
+import { mergeStatic } from '../util/mergeStatic';
 import type { CabinLayout } from '../game/cargo';
 import type { PlayerTarget } from '../game/target';
 
@@ -161,7 +162,15 @@ function buildModel() {
     add(hubGeo, olive, 0, 0, 0, spin);
     wheels.push({ pivot, spin });
   }
-  return { group, door, wheels, exterior, interior };
+  // Exterior shell (hidden from the driver's seat) and the rest of the static body → a few merged meshes.
+  const shell = new THREE.Group();
+  body.add(shell);
+  for (const m of exterior) shell.add(m);
+  mergeStatic(shell, new Set());
+  mergeStatic(interior, new Set());
+  mergeStatic(body, new Set<THREE.Object3D>([shell, interior, door, ...wheels.map((w) => w.pivot)]));
+  mergeStatic(door, new Set());
+  return { group, door, wheels, shell, interior };
 }
 
 /** A drivable HMMWV with raycast-style suspension and a simple tire model. */
@@ -249,17 +258,17 @@ export class Humvee implements PlayerTarget {
     this.group = m.group;
     this.door = m.door;
     this.wheelMeshes = m.wheels;
-    this.exterior = m.exterior;
+    this.shell = m.shell;
     this.interior = m.interior;
   }
 
-  private exterior: THREE.Mesh[];
+  private shell: THREE.Group;
   private interior: THREE.Group;
   /** Driver's-seat view: hide the cab shell, show the dashboard and frame. */
   setInteriorView(on: boolean) {
     if (this.interior.visible === on) return;
     this.interior.visible = on;
-    for (const m of this.exterior) m.visible = !on;
+    this.shell.visible = !on;
   }
 
   get mass() {

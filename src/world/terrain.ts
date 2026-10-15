@@ -3,13 +3,25 @@ import type { Noise2D } from '../util/noise';
 import { lerp, smoothstep } from '../util/math';
 import type { Frontline } from './frontline';
 
-export const WORLD_SIZE = 8000;
+/** Terrain tiles: 128 cells (1.6 km) square, so every LOD stride divides them. */
+export const TILE_CELLS = 128;
+export const TILES = 9;
+export const SEGS = TILE_CELLS * TILES;
+/** 12.5 m grid. */
+export const CELL = 12.5;
+export const WORLD_SIZE = SEGS * CELL;
 export const HALF = WORLD_SIZE / 2;
-export const SEGS = 640;
-export const CELL = WORLD_SIZE / SEGS;
 export const WATER_LEVEL = 0;
 /** Edge of the flyable area; beyond this the mountains wall things in. */
 export const PLAY_HALF = HALF - 900;
+/** How much bigger (per side) the play area is than the original 6.2 km map; content ranges scale by this. */
+export const WORLD_SCALE = PLAY_HALF / 3100;
+
+/** LOD rings for terrain tiles (distance from the camera to the tile's nearest point). */
+const LOD_DIST = [1400, 2800, 5000, 7500];
+const LOD_STRIDE = [1, 2, 4, 8, 16];
+/** Skirts hang below tile edges to hide cracks between LOD levels. */
+const SKIRT = 40;
 
 const FIELDS = [0xa69a5e, 0x768c45, 0x7d6a4a, 0x8c9150, 0x9a8c55].map((c) => new THREE.Color(c));
 
@@ -29,6 +41,8 @@ export interface Crater {
 }
 
 const CRATER_CELL = 100;
+const FGRID = 200;
+const NONE: FlattenZone[] = [];
 
 export class Terrain {
   readonly heights = new Float32Array((SEGS + 1) * (SEGS + 1));
@@ -37,7 +51,14 @@ export class Terrain {
   farms: { x: number; z: number; rot: number; r: number }[] = [];
   craters: Crater[] = [];
   private craterGrid = new Map<number, Crater[]>();
-  mesh!: THREE.Mesh;
+  /** Flatten zones bucketed on a coarse grid (rebuilt when the list grows). */
+  private flattenGrid = new Map<number, FlattenZone[]>();
+  private flattenCount = -1;
+  /** All terrain tiles. */
+  mesh!: THREE.Group;
+  private tiles: { mesh: THREE.Mesh; cx: number; cz: number; lod: number }[] = [];
+  private lodIndex: THREE.BufferAttribute[] = [];
+  private colors!: Float32Array;
 
   constructor(
     private n1: Noise2D,
@@ -52,8 +73,12 @@ export class Terrain {
     const near = smoothstep(950, 250, Math.abs(this.front.side(x, z)));
     const c = this.n1.fbm(x * 0.00018, z * 0.00018, 4) * 0.5 + 0.5;
     let h = 14 + Math.pow(Math.max(0, c), 1.35) * 125 * (1 - 0.5 * near);
-    const r = this.n2.ridged(x * 0.0007 + 31.7, z * 0.0007 - 17.3, 3);
-    h += r * r * 45 * smoothstep(0.45, 0.8, c) * (1 - 0.85 * near);
+    // Ridges only on high ground (skip the noise where they'd be weighted to zero).
+    const rw = smoothstep(0.45, 0.8, c);
+    if (rw > 0) {
+      const r = this.n2.ridged(x * 0.0007 + 31.7, z * 0.0007 - 17.3, 3);
+      h += r * r * 45 * rw * (1 - 0.85 * near);
+    }
     h += this.n3.fbm(x * 0.003, z * 0.003, 3) * 3.5 * (1 - 0.4 * near);
     // A meandering river valley with gentle banks.
     const rv = Math.abs(this.n2.fbm(x * 0.00018 + 91.1, z * 0.00018 - 44.2, 3));
@@ -62,7 +87,7 @@ export class Terrain {
     // Mountains walling in the map edges.
     const d = Math.max(Math.abs(x), Math.abs(z));
     const e = smoothstep(HALF - 1100, HALF - 100, d);
-    h += e * e * (420 + 220 * this.n1.fbm(x * 0.0015 + 5, z * 0.0015, 3));
+    if (e > 0) h += e * e * (420 + 220 * this.n1.fbm(x * 0.0015 + 5, z * 0.0015, 3));
     return h;
   }
 
@@ -82,10 +107,29 @@ export class Terrain {
       }
   }
 
+  /** Flatten zones whose influence might reach (x, z). */
+  private flattensNear(x: number, z: number): FlattenZone[] {
+    if (this.flattenCount !== this.flattens.length) {
+      this.flattenCount = this.flattens.length;
+      this.flattenGrid.clear();
+      for (const f of this.flattens) {
+        const R = f.radius + f.blend;
+        for (let cx = Math.floor((f.x - R + HALF) / FGRID); cx <= Math.floor((f.x + R + HALF) / FGRID); cx++)
+          for (let cz = Math.floor((f.z - R + HALF) / FGRID); cz <= Math.floor((f.z + R + HALF) / FGRID); cz++) {
+            const k = cx + cz * 1000;
+            let arr = this.flattenGrid.get(k);
+            if (!arr) this.flattenGrid.set(k, (arr = []));
+            arr.push(f);
+          }
+      }
+    }
+    return this.flattenGrid.get(Math.floor((x + HALF) / FGRID) + Math.floor((z + HALF) / FGRID) * 1000) ?? NONE;
+  }
+
   /** How strongly a point is inside a flatten zone (0..1). */
   siteInfluence(x: number, z: number): number {
     let best = 0;
-    for (const f of this.flattens) {
+    for (const f of this.flattensNear(x, z)) {
       const R = f.radius + f.blend * 0.4;
       const dx = x - f.x;
       const dz = z - f.z;
@@ -113,7 +157,7 @@ export class Terrain {
 
   finalHeight(x: number, z: number): number {
     let h = this.baseHeight(x, z);
-    for (const f of this.flattens) {
+    for (const f of this.flattensNear(x, z)) {
       const R = f.radius + f.blend;
       const dx = x - f.x;
       const dz = z - f.z;
@@ -126,46 +170,24 @@ export class Terrain {
 
   build(detailTex: THREE.Texture) {
     const N = SEGS + 1;
-    const pos = new Float32Array(N * N * 3);
-    const uv = new Float32Array(N * N * 2);
-    for (let iz = 0; iz < N; iz++) {
-      for (let ix = 0; ix < N; ix++) {
-        const x = -HALF + ix * CELL;
-        const z = -HALF + iz * CELL;
-        const h = this.finalHeight(x, z);
-        const i = iz * N + ix;
-        this.heights[i] = h;
-        pos[i * 3] = x;
-        pos[i * 3 + 1] = h;
-        pos[i * 3 + 2] = z;
-        uv[i * 2] = x / 18;
-        uv[i * 2 + 1] = z / 18;
-      }
-    }
-    const index = new Uint32Array(SEGS * SEGS * 6);
-    let k = 0;
-    for (let iz = 0; iz < SEGS; iz++) {
-      for (let ix = 0; ix < SEGS; ix++) {
-        const a = iz * N + ix;
-        const b = (iz + 1) * N + ix;
-        const c = (iz + 1) * N + ix + 1;
-        const d = iz * N + ix + 1;
-        index[k++] = a;
-        index[k++] = b;
-        index[k++] = d;
-        index[k++] = b;
-        index[k++] = c;
-        index[k++] = d;
-      }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    geo.setIndex(new THREE.BufferAttribute(index, 1));
-    geo.computeVertexNormals();
+    for (let iz = 0; iz < N; iz++)
+      for (let ix = 0; ix < N; ix++) this.heights[iz * N + ix] = this.finalHeight(-HALF + ix * CELL, -HALF + iz * CELL);
 
-    const nrm = geo.getAttribute('normal') as THREE.BufferAttribute;
-    const col = new Float32Array(N * N * 3);
+    // Farms bucketed so each vertex only looks at the few nearby.
+    const FG = 400;
+    const farmGrid = new Map<number, typeof this.farms>();
+    for (const fm of this.farms) {
+      const R = fm.r + 750;
+      for (let cx = Math.floor((fm.x - R + HALF) / FG); cx <= Math.floor((fm.x + R + HALF) / FG); cx++)
+        for (let cz = Math.floor((fm.z - R + HALF) / FG); cz <= Math.floor((fm.z + R + HALF) / FG); cz++) {
+          const k = cx + cz * 1000;
+          let arr = farmGrid.get(k);
+          if (!arr) farmGrid.set(k, (arr = []));
+          arr.push(fm);
+        }
+    }
+
+    const col = (this.colors = new Float32Array(N * N * 3));
     const C = (hex: number) => new THREE.Color(hex);
     const grass = C(0x6a7a40);
     const grass2 = C(0x87894f);
@@ -176,60 +198,173 @@ export class Terrain {
     const scorched = C(0x4a4436);
     const siteDirt = C(0x9a8a66);
     const tmp = new THREE.Color();
-    for (let i = 0; i < N * N; i++) {
-      const x = pos[i * 3];
-      const h = pos[i * 3 + 1];
-      const z = pos[i * 3 + 2];
-      const ny = nrm.getY(i);
-      const n = this.n3.fbm(x * 0.002, z * 0.002, 3) * 0.5 + 0.5;
-      const f = this.n1.fbm(x * 0.0012 + 40, z * 0.0012, 2) * 0.5 + 0.5;
-      tmp.copy(grass).lerp(grass2, smoothstep(0.35, 0.75, n));
-      tmp.lerp(forest, smoothstep(0.55, 0.75, f) * 0.6);
-      tmp.lerp(sand, smoothstep(4, 0.5, h));
-      tmp.lerp(mud, smoothstep(0, -3, h));
-      tmp.lerp(rock, smoothstep(0.86, 0.72, ny) * 0.85 + smoothstep(260, 420, h) * 0.5);
-      const sd = Math.abs(this.front.side(x, z));
-      const scorch = (1 - smoothstep(60, 520, sd)) * (0.45 + 0.55 * smoothstep(0.3, 0.6, n));
-      tmp.lerp(scorched, scorch * 0.75);
-      const crater = this.craterOffset(x, z);
-      if (crater < -0.3) tmp.lerp(scorched, Math.min(1, -crater / 3) * 0.8);
-      // Patchwork fields around villages.
-      for (const fm of this.farms) {
-        const dx = x - fm.x;
-        const dz = z - fm.z;
-        const d = Math.hypot(dx, dz);
-        if (d > fm.r + 750 || d < fm.r * 0.85 || h < 1.5 || ny < 0.93) continue;
-        const u = dx * Math.cos(fm.rot) - dz * Math.sin(fm.rot);
-        const v = dx * Math.sin(fm.rot) + dz * Math.cos(fm.rot);
-        const cx = Math.floor(u / 95);
-        const cz = Math.floor(v / 60);
-        const hsh = (((cx * 73856093) ^ (cz * 19349663)) >>> 0) % 5;
-        const fc = FIELDS[hsh];
-        tmp.lerp(fc, smoothstep(fm.r + 750, fm.r + 450, d) * smoothstep(fm.r * 0.85, fm.r * 1.1, d) * 0.55);
+    const nrm = new THREE.Vector3();
+    for (let iz = 0; iz < N; iz++)
+      for (let ix = 0; ix < N; ix++) {
+        const i = iz * N + ix;
+        const x = -HALF + ix * CELL;
+        const z = -HALF + iz * CELL;
+        const h = this.heights[i];
+        const ny = this.gridNormal(ix, iz, nrm).y;
+        const n = this.n3.fbm(x * 0.002, z * 0.002, 3) * 0.5 + 0.5;
+        const f = this.n1.fbm(x * 0.0012 + 40, z * 0.0012, 2) * 0.5 + 0.5;
+        tmp.copy(grass).lerp(grass2, smoothstep(0.35, 0.75, n));
+        tmp.lerp(forest, smoothstep(0.55, 0.75, f) * 0.6);
+        tmp.lerp(sand, smoothstep(4, 0.5, h));
+        tmp.lerp(mud, smoothstep(0, -3, h));
+        tmp.lerp(rock, smoothstep(0.86, 0.72, ny) * 0.85 + smoothstep(260, 420, h) * 0.5);
+        const sd = Math.abs(this.front.side(x, z));
+        const scorch = (1 - smoothstep(60, 520, sd)) * (0.45 + 0.55 * smoothstep(0.3, 0.6, n));
+        tmp.lerp(scorched, scorch * 0.75);
+        const crater = this.craterOffset(x, z);
+        if (crater < -0.3) tmp.lerp(scorched, Math.min(1, -crater / 3) * 0.8);
+        // Patchwork fields around villages.
+        const farms = farmGrid.get(Math.floor((x + HALF) / FG) + Math.floor((z + HALF) / FG) * 1000);
+        if (farms)
+          for (const fm of farms) {
+            const dx = x - fm.x;
+            const dz = z - fm.z;
+            const d = Math.hypot(dx, dz);
+            if (d > fm.r + 750 || d < fm.r * 0.85 || h < 1.5 || ny < 0.93) continue;
+            const u = dx * Math.cos(fm.rot) - dz * Math.sin(fm.rot);
+            const v = dx * Math.sin(fm.rot) + dz * Math.cos(fm.rot);
+            const cx = Math.floor(u / 95);
+            const cz = Math.floor(v / 60);
+            const hsh = (((cx * 73856093) ^ (cz * 19349663)) >>> 0) % 5;
+            const fc = FIELDS[hsh];
+            tmp.lerp(fc, smoothstep(fm.r + 750, fm.r + 450, d) * smoothstep(fm.r * 0.85, fm.r * 1.1, d) * 0.55);
+          }
+        tmp.lerp(siteDirt, this.siteInfluence(x, z) * 0.85);
+        col[i * 3] = tmp.r;
+        col[i * 3 + 1] = tmp.g;
+        col[i * 3 + 2] = tmp.b;
       }
-      tmp.lerp(siteDirt, this.siteInfluence(x, z) * 0.85);
-      col[i * 3] = tmp.r;
-      col[i * 3 + 1] = tmp.g;
-      col[i * 3 + 2] = tmp.b;
+
+    // Shared index buffers: one per LOD stride, the grid plus skirts round the edge.
+    const T = TILE_CELLS + 1;
+    const skirtBase = T * T;
+    for (const st of LOD_STRIDE) {
+      const idx: number[] = [];
+      for (let z = 0; z < TILE_CELLS; z += st)
+        for (let x = 0; x < TILE_CELLS; x += st) {
+          const a = z * T + x;
+          const b = (z + st) * T + x;
+          const c = (z + st) * T + x + st;
+          const d = z * T + x + st;
+          idx.push(a, b, d, b, c, d);
+        }
+      // Skirt vertices: edge e (0 north z=0, 1 east x=max, 2 south z=max, 3 west x=0), position k along it.
+      const edge = (e: number, k: number) => (e === 0 ? k : e === 1 ? k * T + TILE_CELLS : e === 2 ? TILE_CELLS * T + k : k * T);
+      for (let e = 0; e < 4; e++)
+        for (let k = 0; k < TILE_CELLS; k += st) {
+          const a = edge(e, k);
+          const b = edge(e, k + st);
+          const sa = skirtBase + e * T + k;
+          const sb = skirtBase + e * T + k + st;
+          // Both windings, so the skirt shows from either side.
+          idx.push(a, sa, b, b, sa, sb, a, b, sa, b, sb, sa);
+        }
+      this.lodIndex.push(new THREE.BufferAttribute(new Uint32Array(idx), 1));
     }
-    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    geo.computeBoundingSphere();
 
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true, map: detailTex });
-    this.mesh = new THREE.Mesh(geo, mat);
-    this.mesh.receiveShadow = true;
+    this.mesh = new THREE.Group();
+    for (let cz = 0; cz < TILES; cz++)
+      for (let cx = 0; cx < TILES; cx++) {
+        const nv = T * T + 4 * T;
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+        geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+        geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(nv * 2), 2));
+        geo.setIndex(this.lodIndex[LOD_STRIDE.length - 1]);
+        const m = new THREE.Mesh(geo, mat);
+        m.receiveShadow = true;
+        m.matrixAutoUpdate = false;
+        this.mesh.add(m);
+        this.tiles.push({ mesh: m, cx, cz, lod: LOD_STRIDE.length - 1 });
+        this.fillTile(this.tiles[this.tiles.length - 1], true);
+      }
     this.mesh.matrixAutoUpdate = false;
     return this.mesh;
   }
 
+  /** Smooth normal at a grid vertex from its neighbours' heights. */
+  private gridNormal(ix: number, iz: number, out: THREE.Vector3) {
+    const N = SEGS + 1;
+    const H = this.heights;
+    const xl = Math.max(0, ix - 1);
+    const xr = Math.min(SEGS, ix + 1);
+    const zd = Math.max(0, iz - 1);
+    const zu = Math.min(SEGS, iz + 1);
+    const hx = (H[iz * N + xr] - H[iz * N + xl]) / ((xr - xl) * CELL);
+    const hz = (H[zu * N + ix] - H[zd * N + ix]) / ((zu - zd) * CELL);
+    return out.set(-hx, 1, -hz).normalize();
+  }
+
+  /** Copy heights (and colours, the first time) from the global grid into a tile's vertices. */
+  private fillTile(t: { mesh: THREE.Mesh; cx: number; cz: number }, colours: boolean) {
+    const N = SEGS + 1;
+    const T = TILE_CELLS + 1;
+    const geo = t.mesh.geometry;
+    const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+    const nrm = geo.getAttribute('normal') as THREE.BufferAttribute;
+    const col = geo.getAttribute('color') as THREE.BufferAttribute;
+    const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+    const n = new THREE.Vector3();
+    const ox = t.cx * TILE_CELLS;
+    const oz = t.cz * TILE_CELLS;
+    const put = (v: number, gx: number, gz: number, drop: number) => {
+      const gi = gz * N + gx;
+      const x = -HALF + gx * CELL;
+      const z = -HALF + gz * CELL;
+      pos.setXYZ(v, x, this.heights[gi] - drop, z);
+      this.gridNormal(gx, gz, n);
+      nrm.setXYZ(v, n.x, n.y, n.z);
+      if (colours) {
+        col.setXYZ(v, this.colors[gi * 3], this.colors[gi * 3 + 1], this.colors[gi * 3 + 2]);
+        uv.setXY(v, x / 18, z / 18);
+      }
+    };
+    for (let z = 0; z < T; z++) for (let x = 0; x < T; x++) put(z * T + x, ox + x, oz + z, 0);
+    const base = T * T;
+    for (let k = 0; k < T; k++) {
+      put(base + k, ox + k, oz, SKIRT);
+      put(base + T + k, ox + TILE_CELLS, oz + k, SKIRT);
+      put(base + 2 * T + k, ox + k, oz + TILE_CELLS, SKIRT);
+      put(base + 3 * T + k, ox, oz + k, SKIRT);
+    }
+    pos.needsUpdate = true;
+    nrm.needsUpdate = true;
+    if (colours) {
+      col.needsUpdate = true;
+      uv.needsUpdate = true;
+    }
+    geo.computeBoundingSphere();
+    geo.computeBoundingBox();
+  }
+
+  /** Pick each tile's level of detail from its distance to the camera. */
+  updateLod(cam: THREE.Vector3) {
+    const size = TILE_CELLS * CELL;
+    for (const t of this.tiles) {
+      const x0 = -HALF + t.cx * size;
+      const z0 = -HALF + t.cz * size;
+      const dx = Math.max(x0 - cam.x, 0, cam.x - (x0 + size));
+      const dz = Math.max(z0 - cam.z, 0, cam.z - (z0 + size));
+      const d = Math.hypot(dx, dz);
+      let lod = 0;
+      while (lod < LOD_DIST.length && d >= LOD_DIST[lod]) lod++;
+      if (lod !== t.lod) {
+        t.lod = lod;
+        t.mesh.geometry.setIndex(this.lodIndex[lod]);
+      }
+    }
+  }
+
   /** Push edited heights back into the mesh (after road grading, etc). */
   refreshMesh() {
-    const geo = this.mesh.geometry;
-    const pos = geo.getAttribute('position') as THREE.BufferAttribute;
-    for (let i = 0; i < this.heights.length; i++) pos.setY(i, this.heights[i]);
-    pos.needsUpdate = true;
-    geo.computeVertexNormals();
-    geo.computeBoundingSphere();
+    for (const t of this.tiles) this.fillTile(t, false);
   }
 
   /** Height exactly matching the rendered triangle mesh. */

@@ -175,16 +175,16 @@ Y = camera, LB = flares, RB = SAS, Start = terminal.
 
 ## The world
 
-Each career has a seed that generates an 8 × 8 km theater: rolling hills, a
-river crossed by bridges, mountains around the edges, and a winding **front
+Each career has a seed that generates a 14.4 × 14.4 km theater (about 12.6 km
+across inside the mountains): rolling hills, a river crossed by bridges, mountains around the edges, and a winding **front
 line** (friendly to the west, enemy to the east) scarred with craters,
 burning wrecks, artillery and tracer fire. The ground flattens out near the
 front so battles happen on sensible terrain. Places include:
 
 - **Main operating base**: hangars, fuel farm, upgrades.
-- **FOBs**: fuel, repair and flares.
-- **Combat outposts** near the front.
-- **Landing zones**: open fields, some behind enemy lines.
+- **FOBs** (about six): fuel, repair and flares.
+- **Combat outposts** (about a dozen) near the front.
+- **Landing zones** (about twenty): open fields, some behind enemy lines.
 - **Towns**:
   - Contested towns straddle the front, ruined and fought over.
   - Intact villages sit behind each line, with streets, apartment blocks, a
@@ -252,6 +252,26 @@ decoyed with flares. Hot LZs bring extra gun positions and mortar fire.
 
 Progress (money, rank, upgrades, stats, seed) is saved in `localStorage`.
 
+## Performance
+
+The theater is big, so most of it is drawn cheaply or not at all:
+
+- **Terrain** is 81 tiles of 1.6 km, each picking one of five levels of
+  detail by distance (full 12.5 m grid up close, 200 m far out), with skirts
+  hiding the seams. Off-screen tiles are culled, including from the shadow
+  pass.
+- **Forests** are in 1.8 km chunks: full trees within about 1.6 km, a single
+  five-sided stand-in per tree (one draw call per chunk) out to the fog, and
+  nothing beyond.
+- **Props** are instanced per prototype per 2.4 km cell and hidden by size
+  class: fence posts and delineators go first, buildings and pylons stay to
+  the fog. Long roadside meshes (rails, fences, wires) are split per cell.
+- **Traffic** swaps to a single merged mesh beyond 220 m and disappears past
+  4 km. Static parts of the helicopter and Humvee are merged by material.
+- The camera's far plane stops just past the fog.
+
+World generation logs its phase timings to the console.
+
 ## Code map
 
 ```
@@ -275,4 +295,5 @@ src/
   fx/                particles (dust, smoke, fire), tracers, explosions
   audio.ts           synthesized rotor, turbine, wind and effects audio
   ui/                HUD, minimap and theater map, terminal and dialogs
+  world/lod.ts       distance culling and per-cell splitting of world chunks
 ```

@@ -112,7 +112,7 @@ export class Traffic {
 
     // Convoys of 1–3 spread over the network.
     const total = lanes.reduce((s, l) => s + l.cum[l.cum.length - 1], 0) / 2;
-    const groups = Math.max(6, Math.min(16, Math.round(total / 1500)));
+    const groups = Math.max(6, Math.min(34, Math.round(total / 1500)));
     const long = lanes.filter((l) => l.pts.length > 30);
     let id = 0;
     for (let g = 0; g < groups && long.length; g++) {
@@ -443,6 +443,15 @@ export class Traffic {
       for (const w of car.m.wheels) {
         w.spin.rotation.x -= (car.v * dt) / w.r;
         if (w.front) w.pivot.rotation.y = car.steer;
+      }
+      // Level of detail: animated parts up close, one merged mesh further out, nothing past 4 km.
+      const d2 = camPos.distanceToSquared(g.position);
+      const far = d2 > 220 * 220;
+      g.visible = d2 < 4000 * 4000;
+      if (car.m.far.visible !== far) {
+        car.m.far.visible = far;
+        car.m.body.visible = !far;
+        for (const w of car.m.wheels) w.pivot.visible = !far;
       }
 
       // Dust off gravel tracks.

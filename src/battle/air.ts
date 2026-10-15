@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { HALF, PLAY_HALF } from '../world/terrain';
 import type { World } from '../world/worldgen';
 import type { Effects, SmokeEmitter } from '../fx/effects';
 import type { AudioEngine } from '../audio';
@@ -139,7 +140,7 @@ export class AirOps {
     let target = this.battle.strikeTarget(side, hp);
     if (!target) {
       // Nothing live nearby: hit somewhere along the front within sight.
-      const z = clamp(hp.z + this.rng.range(-900, 900), -2900, 2900);
+      const z = clamp(hp.z + this.rng.range(-900, 900), -PLAY_HALF + 200, PLAY_HALF - 200);
       const fx = this.world.front.x(z);
       if (Math.abs(hp.x - fx) > 3500) return false;
       const x = fx + (side === 'blue' ? 1 : -1) * this.rng.range(150, 500);
@@ -158,7 +159,7 @@ export class AirOps {
       // Enter from the friendly rear, offset for the wingman.
       const start = tgt.clone().addScaledVector(runDir, -this.rng.range(4200, 5200));
       start.z += this.rng.range(-1500, 1500) + i * 180;
-      start.x = clamp(start.x, -3950, 3950);
+      start.x = clamp(start.x, -HALF + 50, HALF - 50);
       start.y = 700 + i * 40;
       jet.pos.copy(start);
       jet.waypoint.copy(tgt).addScaledVector(runDir, -2300 - i * 400);
@@ -232,7 +233,7 @@ export class AirOps {
       if (toTarget < 320 || ahead < 0) {
         j.phase = 'egress';
         const home = j.side === 'blue' ? -1 : 1;
-        j.waypoint.set(home * 4300, j.pos.y + 600, j.pos.z + this.rng.range(-1500, 1500));
+        j.waypoint.set(home * (HALF + 300), j.pos.y + 600, j.pos.z + this.rng.range(-1500, 1500));
         if (j.doomed) {
           j.phase = 'down';
           j.smoke = this.effects.addEmitter(j.pos, 'burning', 30);
@@ -247,7 +248,7 @@ export class AirOps {
         for (const s of [-1, 1])
           this.effects.fire.emit({ x: j.pos.x, y: j.pos.y - 1, z: j.pos.z, vx: j.dir.x * 60 + s * 25, vy: -10, vz: j.dir.z * 60, life: 2.4, size0: 5, size1: 2, r: 2, g: 1.7, b: 1.2, alpha: 1, fadeIn: 0.01, drag: 0.8, buoyancy: -6 });
       }
-      if (Math.abs(j.pos.x) > 4250 || j.t > 120) return true;
+      if (Math.abs(j.pos.x) > HALF + 250 || j.t > 160) return true;
     }
 
     // --- Steering ----------------------------------------------------------

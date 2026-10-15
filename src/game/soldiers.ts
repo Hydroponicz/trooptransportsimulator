@@ -480,6 +480,8 @@ export class SoldierRenderer {
     for (const p of PARTS) {
       const m = this.meshes[p];
       m.count = n;
+      // No draw call at all when nobody's there.
+      m.visible = n > 0;
       m.instanceMatrix.needsUpdate = true;
       if (m.instanceColor) m.instanceColor.needsUpdate = true;
     }

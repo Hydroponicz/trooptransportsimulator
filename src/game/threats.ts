@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { PLAY_HALF } from '../world/terrain';
 import type { RNG } from '../util/noise';
 import type { World, EnemyKind } from '../world/worldgen';
 import type { Heli } from '../heli/heli';
@@ -329,7 +330,7 @@ export class Threats {
     this.ambientT -= dt;
     if (this.ambientT <= 0) {
       this.ambientT = this.rng.range(1.2, 4);
-      const z = clamp(camPos.z + this.rng.range(-2500, 2500), -3000, 3000);
+      const z = clamp(camPos.z + this.rng.range(-2500, 2500), -PLAY_HALF + 100, PLAY_HALF - 100);
       const x = front.x(z) + this.rng.gauss() * 220;
       const at = new THREE.Vector3(x, terrain.heightAt(x, z), z);
       const d = at.distanceTo(camPos);
@@ -341,7 +342,7 @@ export class Threats {
     this.ambientTracerT -= dt;
     if (this.ambientTracerT <= 0) {
       this.ambientTracerT = this.rng.range(0.6, 2.2);
-      const z = clamp(camPos.z + this.rng.range(-1800, 1800), -3000, 3000);
+      const z = clamp(camPos.z + this.rng.range(-1800, 1800), -PLAY_HALF + 100, PLAY_HALF - 100);
       const fx = front.x(z);
       const friendly = this.rng.chance(0.5);
       const ax = fx + (friendly ? -1 : 1) * this.rng.range(80, 250);

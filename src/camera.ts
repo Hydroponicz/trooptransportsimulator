@@ -27,7 +27,8 @@ export class CameraRig {
   private initialized = false;
 
   constructor(aspect: number) {
-    this.camera = new THREE.PerspectiveCamera(60, aspect, 0.5, 14000);
+    // Fog is opaque by 7.5 km: nothing past ~9 km needs drawing.
+    this.camera = new THREE.PerspectiveCamera(60, aspect, 0.5, 9500);
   }
 
   next() {

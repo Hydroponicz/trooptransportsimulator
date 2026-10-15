@@ -142,6 +142,7 @@ export class SoldierRenderer {
       for (const p of PARTS) {
         const m = this.meshes[side][p];
         m.count = idx[side];
+        m.visible = idx[side] > 0;
         m.instanceMatrix.needsUpdate = true;
       }
   }

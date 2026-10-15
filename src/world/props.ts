@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { DistanceCuller } from './lod';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { AABB, ColliderSet } from './colliders';
 
@@ -554,6 +555,40 @@ interface Batch {
 }
 
 /** Collects structure placements and emits one InstancedMesh per prototype. */
+/** How far away each prototype stays drawn (metres from its chunk); unlisted ones use 4 km. */
+const VIEW: Partial<Record<ProtoName, number>> = {
+  delineator: 900,
+  fencepost: 1200,
+  railpost: 1200,
+  barrel: 1200,
+  crates: 1500,
+  sandbag: 1800,
+  haybale: 1800,
+  signpost: 1800,
+  signboard: 1200,
+  streetlight: 2200,
+  jersey: 1800,
+  rubble: 2500,
+  rock: 3000,
+  hangar: 7500,
+  building: 7500,
+  hospital: 7500,
+  house_a: 7500,
+  house_b: 7500,
+  house_c: 7500,
+  apartment: 7500,
+  church: 7500,
+  ruin_house: 7000,
+  ruin_apartment: 7500,
+  barn: 7000,
+  silo: 7500,
+  pylon: 7500,
+  lattice: 7500,
+  bridge_pier: 7500,
+  tank: 6000,
+  antenna: 6000,
+};
+
 export class Props {
   private batches = new Map<ProtoName, Batch>();
   private material = new THREE.MeshLambertMaterial({ vertexColors: true });
@@ -610,19 +645,36 @@ export class Props {
     return n;
   }
 
-  build(): THREE.Group {
+  /**
+   * One instanced mesh per prototype per 2.4 km cell, so each can be frustum
+   * culled (and shadow-culled) and hidden by distance: clutter goes first,
+   * buildings and pylons stay visible out to the fog.
+   */
+  build(culler: DistanceCuller): THREE.Group {
     const g = new THREE.Group();
-    for (const [, b] of this.batches) {
-      const mesh = new THREE.InstancedMesh(b.geo, this.material, b.mats.length);
-      const white = new THREE.Color(1, 1, 1);
+    const CELLSZ = 2400;
+    const white = new THREE.Color(1, 1, 1);
+    for (const [name, b] of this.batches) {
+      const cells = new Map<string, number[]>();
       b.mats.forEach((m, i) => {
-        mesh.setMatrixAt(i, m);
-        mesh.setColorAt(i, b.colors[i] ?? white);
+        const e = m.elements;
+        const k = `${Math.floor(e[12] / CELLSZ)},${Math.floor(e[14] / CELLSZ)}`;
+        let arr = cells.get(k);
+        if (!arr) cells.set(k, (arr = []));
+        arr.push(i);
       });
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.computeBoundingSphere();
-      g.add(mesh);
+      for (const idx of cells.values()) {
+        const mesh = new THREE.InstancedMesh(b.geo, this.material, idx.length);
+        idx.forEach((src, i) => {
+          mesh.setMatrixAt(i, b.mats[src]);
+          mesh.setColorAt(i, b.colors[src] ?? white);
+        });
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.computeBoundingSphere();
+        g.add(mesh);
+        culler.addMesh(mesh, VIEW[name] ?? 4000);
+      }
     }
     return g;
   }

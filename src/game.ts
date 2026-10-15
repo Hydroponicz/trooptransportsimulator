@@ -11,7 +11,7 @@ import { SlingSystem } from './game/sling';
 import { MissionSystem, siteRisk, type Payout } from './game/missions';
 import { Threats } from './game/threats';
 import { Traffic } from './game/traffic';
-import { Campaign } from './battle/campaign';
+import { Campaign, CAMPAIGN_VERSION, SECTOR_COUNT } from './battle/campaign';
 import { Battle } from './battle/battle';
 import { AirOps } from './battle/air';
 import { CABIN } from './heli/chinookModel';
@@ -126,7 +126,9 @@ export class Game {
     });
     this.scene.add(this.threats.group);
 
-    const campaign = career.data.campaign ? new Campaign(career.data.campaign, this.rng.fork()) : Campaign.fresh(this.rng.fork());
+    // A campaign saved for the old, smaller map has the wrong sectors: start a new one.
+    const saved = career.data.campaign;
+    const campaign = saved && saved.version === CAMPAIGN_VERSION && saved.sectors.length === SECTOR_COUNT ? new Campaign(saved, this.rng.fork()) : Campaign.fresh(this.rng.fork());
     career.data.campaign = campaign.data;
     this.battle = new Battle(this.world, campaign, this.effects, this.audio, this.threats, this.rng.fork(), {
       radio: (from, msg) => {
@@ -382,6 +384,8 @@ export class Game {
     if (this.mode === 'drive') this.cam.updateGround(modal ? 0 : dt, this.humvee, this.world.terrain, mouse);
     else this.cam.update(modal ? 0 : dt, this.heli, this.world.terrain, mouse);
     this.env.follow(this.playerPos, this.cam.camera.position);
+    this.world.terrain.updateLod(this.cam.camera.position);
+    this.world.culler.update(this.cam.camera.position);
     this.vehicleSound ??= this.audio.vehicle();
     {
       const v = this.humvee;

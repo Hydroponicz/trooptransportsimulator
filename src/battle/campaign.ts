@@ -1,14 +1,18 @@
 import type { RNG } from '../util/noise';
 import type { Contract } from '../game/missions';
 import { clamp } from '../util/math';
+import { WORLD_SCALE } from '../world/terrain';
 
 export type Side = 'blue' | 'red';
 export const SIDES: Side[] = ['blue', 'red'];
 export const enemyOf = (s: Side): Side => (s === 'blue' ? 'red' : 'blue');
 
-export const SECTOR_COUNT = 10;
-const Z0 = -3000;
-const Z1 = 3000;
+/** 600 m sectors along the whole front. */
+export const SECTOR_COUNT = Math.round((6000 * WORLD_SCALE) / 600);
+const Z0 = -3000 * WORLD_SCALE;
+const Z1 = 3000 * WORLD_SCALE;
+/** Bumped when the sector layout changes; older saved campaigns start fresh. */
+export const CAMPAIGN_VERSION = 2;
 const SECTOR_LEN = (Z1 - Z0) / SECTOR_COUNT;
 
 type PerSide = { blue: number; red: number };
@@ -34,7 +38,7 @@ export interface SectorState {
 }
 
 export interface CampaignData {
-  version: 1;
+  version: number;
   sectors: SectorState[];
 }
 
@@ -66,7 +70,7 @@ export class Campaign {
         arty: { blue: 1, red: 1 },
       });
     }
-    return new Campaign({ version: 1, sectors }, rng);
+    return new Campaign({ version: CAMPAIGN_VERSION, sectors }, rng);
   }
 
   get sectors() {

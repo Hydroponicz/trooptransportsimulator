@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import type { Noise2D, RNG } from '../util/noise';
 import { smoothstep } from '../util/math';
 import { merge, part } from './props';
-import { HALF, type Terrain } from './terrain';
+import { HALF, WORLD_SIZE, type Terrain } from './terrain';
+import type { DistanceCuller } from './lod';
 
 interface Tree {
   x: number;
@@ -13,7 +14,11 @@ interface Tree {
 }
 
 const GRID = 40;
-const CHUNKS = 5;
+/** 1.8 km chunks, for culling. */
+const CHUNKS = Math.round(WORLD_SIZE / 1800);
+/** Full trees inside this distance (from the chunk's bounds), simple stand-ins out to the fog. */
+const HI_DIST = 1600;
+const LO_DIST = 7000;
 
 function pineGeo() {
   return merge([
@@ -36,14 +41,22 @@ function deadGeo() {
   ]);
 }
 
+/** Far-away stand-in for any tree: a five-sided cone (white, tinted per instance). */
+function farTree() {
+  return merge([part(new THREE.ConeGeometry(2.3, 7.6, 5, 1, true), 0xffffff, 0, 4.8, 0)]);
+}
+/** Stand-in colours: pine, broadleaf, dead. */
+const LO_TINT = [new THREE.Color(0x37552e), new THREE.Color(0x56682f), new THREE.Color(0x3a352c)];
+
 /** Instanced forests, chunked for culling, with a point-vs-tree hit test for rotor strikes. */
 export class Vegetation {
   group = new THREE.Group();
   private grid = new Map<number, Tree[]>();
   count = 0;
 
-  constructor(terrain: Terrain, noise: Noise2D, rng: RNG, blocked: (x: number, z: number) => boolean) {
+  constructor(terrain: Terrain, noise: Noise2D, rng: RNG, blocked: (x: number, z: number) => boolean, culler: DistanceCuller) {
     const kinds = [pineGeo(), broadGeo(), deadGeo()];
+    const loGeo = farTree();
     const material = new THREE.MeshLambertMaterial({ vertexColors: true });
     const buckets: THREE.Matrix4[][][] = [];
     const colors: THREE.Color[][][] = [];
@@ -86,7 +99,9 @@ export class Vegetation {
         this.insert({ x, z, y, h, r });
       }
     }
-    for (let ci = 0; ci < CHUNKS * CHUNKS; ci++)
+    for (let ci = 0; ci < CHUNKS * CHUNKS; ci++) {
+      // Full trees: one mesh per kind.
+      let sphere: THREE.Sphere | null = null;
       for (let k = 0; k < 3; k++) {
         const list = buckets[ci][k];
         if (!list.length) continue;
@@ -99,7 +114,21 @@ export class Vegetation {
         mesh.receiveShadow = true;
         mesh.computeBoundingSphere();
         this.group.add(mesh);
+        culler.add(mesh, mesh.boundingSphere!.center, mesh.boundingSphere!.radius + 30, HI_DIST);
+        sphere = sphere ? sphere.union(mesh.boundingSphere!) : mesh.boundingSphere!.clone();
       }
+      if (!sphere) continue;
+      // Far away: every tree in the chunk is one simple stand-in, tinted by kind, in a single draw call.
+      const all = [0, 1, 2].flatMap((k) => buckets[ci][k].map((m, i) => ({ m, c: colors[ci][k][i].clone().multiply(LO_TINT[k]) })));
+      const lo = new THREE.InstancedMesh(loGeo, material, all.length);
+      all.forEach(({ m, c }, i) => {
+        lo.setMatrixAt(i, m);
+        lo.setColorAt(i, c);
+      });
+      lo.computeBoundingSphere();
+      this.group.add(lo);
+      culler.add(lo, sphere.center, sphere.radius + 30, LO_DIST, HI_DIST);
+    }
   }
 
   private insert(t: Tree) {

@@ -18,6 +18,9 @@ export interface Town {
 export const TOWN_NAMES = [
   'Volnovka', 'Krasny Brod', 'Sosnivka', 'Belaya Gorka', 'Pryluky', 'Zarechye', 'Olkhovets', 'Dubrava',
   'Lesnoye', 'Kamenka', 'Bystritsa', 'Hlynsk', 'Ozerne', 'Vyshnevo', 'Staritsa', 'Polyana',
+  'Topolino', 'Verkhnya', 'Hrabove', 'Lisichki', 'Sokolets', 'Mykhailivka', 'Borovoe', 'Klenovka',
+  'Zhuravli', 'Pervomaisk', 'Rudnya', 'Dibrova', 'Yablunivka', 'Chervone', 'Vodyane', 'Kalinovo',
+  'Stepove', 'Zolotarivka', 'Nikolske', 'Hrushivka',
 ];
 
 const STREET = 42;

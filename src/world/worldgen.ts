@@ -6,7 +6,8 @@ import { Props } from './props';
 import { Roads, type RoadClass } from './roads';
 import { buildRoadside } from './roadside';
 import { buildSite, type Site, type SiteKind, type SiteDecor } from './sites';
-import { PLAY_HALF, Terrain } from './terrain';
+import { PLAY_HALF, Terrain, WORLD_SCALE } from './terrain';
+import { DistanceCuller, splitByCells } from './lod';
 import { Vegetation } from './vegetation';
 import { buildTown, TOWN_NAMES, type Town } from './towns';
 import { groundDetailTexture } from '../util/textures';
@@ -31,19 +32,33 @@ export interface World {
   smokeSpots: THREE.Vector3[];
   windsocks: THREE.Object3D[];
   group: THREE.Group;
+  /** Hides far-off chunks of forest, props and roadside furniture. */
+  culler: DistanceCuller;
 }
 
 const NAMES: Record<SiteKind, string[]> = {
   base: ['Camp Anvil', 'Camp Liberty', 'Camp Ironside', 'Camp Bastion'],
-  fob: ['FOB Viper', 'FOB Granite', 'FOB Hatchet', 'FOB Raven', 'FOB Sentinel', 'FOB Warhorse'],
-  cop: ['COP Hammer', 'COP Spartan', 'COP Badger', 'COP Wolfhound', 'COP Tusk', 'COP Gauntlet', 'COP Mako', 'COP Rattler'],
-  lz: ['LZ Alpha', 'LZ Bravo', 'LZ Charlie', 'LZ Delta', 'LZ Echo', 'LZ Foxtrot', 'LZ Golf', 'LZ Hotel', 'LZ India', 'LZ Juliet', 'LZ Kilo', 'LZ Lima'],
+  fob: ['FOB Viper', 'FOB Granite', 'FOB Hatchet', 'FOB Raven', 'FOB Sentinel', 'FOB Warhorse', 'FOB Talon', 'FOB Cobra', 'FOB Bulldog', 'FOB Phoenix', 'FOB Tomahawk', 'FOB Lancer'],
+  cop: [
+    'COP Hammer', 'COP Spartan', 'COP Badger', 'COP Wolfhound', 'COP Tusk', 'COP Gauntlet', 'COP Mako', 'COP Rattler',
+    'COP Javelin', 'COP Coyote', 'COP Bayonet', 'COP Stryker', 'COP Kodiak', 'COP Saber', 'COP Wolverine', 'COP Grizzly',
+  ],
+  lz: [
+    'LZ Alpha', 'LZ Bravo', 'LZ Charlie', 'LZ Delta', 'LZ Echo', 'LZ Foxtrot', 'LZ Golf', 'LZ Hotel', 'LZ India', 'LZ Juliet', 'LZ Kilo', 'LZ Lima',
+    'LZ Mike', 'LZ November', 'LZ Oscar', 'LZ Papa', 'LZ Quebec', 'LZ Romeo', 'LZ Sierra', 'LZ Tango', 'LZ Uniform', 'LZ Victor', 'LZ Whiskey', 'LZ Xray',
+  ],
 };
 
 const RADIUS: Record<SiteKind, number> = { base: 175, fob: 112, cop: 64, lz: 34 };
 const BLEND: Record<SiteKind, number> = { base: 110, fob: 80, cop: 70, lz: 45 };
 
-export function generateWorld(seed: number, onProgress?: (msg: string) => void): World {
+export function generateWorld(seed: number, report?: (msg: string) => void): World {
+  // Time each phase (logged once at the end) so slow generation is easy to pin down.
+  const marks: [string, number][] = [['start', performance.now()]];
+  const onProgress = (msg: string) => {
+    marks.push([msg, performance.now()]);
+    report?.(msg);
+  };
   const rng = new RNG(seed);
   const n1 = new Noise2D(seed ^ 0x1234);
   const n2 = new Noise2D(seed ^ 0x5678);
@@ -120,11 +135,13 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
   };
 
   onProgress?.('Surveying terrain');
-  const base = place('base', () => [-2900, -2200], [-1200, 1200], 80)!;
+  // Everything is laid out on the original 6.2 km plan, scaled up to the current map.
+  const K = WORLD_SCALE;
+  const base = place('base', () => [-2900 * K, -2200 * K], [-1200 * K, 1200 * K], 80)!;
   const bands = (n: number, lo: number, hi: number) =>
     Array.from({ length: n }, (_, i) => [lo + ((hi - lo) * i) / n, lo + ((hi - lo) * (i + 1)) / n] as [number, number]);
-  for (const zr of bands(3, -2700, 2700)) place('fob', (z) => [-1800, front.x(z) - 1000], zr, 50);
-  for (const zr of bands(6, -2900, 2900)) place('cop', (z) => [front.x(z) - 650, front.x(z) - 280], zr, 40);
+  for (const zr of bands(6, -2700 * K, 2700 * K)) place('fob', (z) => [-1800 * K, front.x(z) - 1000], zr, 50);
+  for (const zr of bands(12, -2900 * K, 2900 * K)) place('cop', (z) => [front.x(z) - 650, front.x(z) - 280], zr, 40);
   // Towns: some straddle the front (contested), others sit safely behind either line.
   const placeTown = (contested: boolean, xr: (z: number) => [number, number], zr: [number, number], rr: [number, number]) => {
     let best: { x: number; z: number; r: number; score: number } | null = null;
@@ -162,17 +179,38 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
     terrain.flattens.push({ x: town.x, z: town.z, radius: town.r + 10, blend: 170, height: h });
     if (!contested) terrain.farms.push({ x: town.x, z: town.z, rot: town.rot, r: town.r });
   };
-  for (const zr of bands(3, -2600, 2600)) placeTown(true, (z) => [front.x(z) - 90, front.x(z) + 90], zr, [150, 190]);
-  for (const zr of bands(4, -2700, 2700)) placeTown(false, (z) => [-2600, front.x(z) - 1000], zr, [85, 120]);
-  for (const zr of bands(2, -2400, 2400)) placeTown(false, (z) => [front.x(z) + 900, 2800], zr, [85, 115]);
+  for (const zr of bands(6, -2600 * K, 2600 * K)) placeTown(true, (z) => [front.x(z) - 90, front.x(z) + 90], zr, [150, 190]);
+  for (const zr of bands(14, -2700 * K, 2700 * K)) placeTown(false, (z) => [-2600 * K, front.x(z) - 1000], zr, [85, 120]);
+  for (const zr of bands(7, -2400 * K, 2400 * K)) placeTown(false, (z) => [front.x(z) + 900, 2800 * K], zr, [85, 115]);
 
-  for (const zr of bands(7, -2900, 2900)) place('lz', (z) => [front.x(z) - 1500, front.x(z) - 200], zr, 30);
-  for (const zr of bands(4, -2600, 2600)) place('lz', (z) => [front.x(z) + 250, front.x(z) + 1100], zr, 30);
+  for (const zr of bands(14, -2900 * K, 2900 * K)) place('lz', (z) => [front.x(z) - 1500 * K, front.x(z) - 200], zr, 30);
+  for (const zr of bands(8, -2600 * K, 2600 * K)) place('lz', (z) => [front.x(z) + 250, front.x(z) + 1100 * K], zr, 30);
 
   // Shell craters along the front.
-  const nearSite = (x: number, z: number, m: number) =>
-    sites.some((s) => Math.hypot(s.x - x, s.z - z) < s.radius + m) || towns.some((t) => Math.hypot(t.x - x, t.z - z) < t.r + m);
-  for (let i = 0; i < 340; i++) {
+  // Sites and towns bucketed by 500 m cell (rebuilt if more are added), so placement checks stay cheap on a big map.
+  const SG = 500;
+  const siteGrid = new Map<number, { x: number; z: number; r: number }[]>();
+  let gridCount = -1;
+  const nearSite = (x: number, z: number, m: number) => {
+    if (gridCount !== sites.length + towns.length) {
+      gridCount = sites.length + towns.length;
+      siteGrid.clear();
+      for (const o of [...sites.map((s) => ({ x: s.x, z: s.z, r: s.radius })), ...towns.map((t) => ({ x: t.x, z: t.z, r: t.r }))]) {
+        const R = o.r + 300;
+        for (let cx = Math.floor((o.x - R) / SG); cx <= Math.floor((o.x + R) / SG); cx++)
+          for (let cz = Math.floor((o.z - R) / SG); cz <= Math.floor((o.z + R) / SG); cz++) {
+            const k = cx + 1000 + (cz + 1000) * 3000;
+            let arr = siteGrid.get(k);
+            if (!arr) siteGrid.set(k, (arr = []));
+            arr.push(o);
+          }
+      }
+    }
+    if (m > 300) return sites.some((s) => Math.hypot(s.x - x, s.z - z) < s.radius + m) || towns.some((t) => Math.hypot(t.x - x, t.z - z) < t.r + m);
+    const arr = siteGrid.get(Math.floor(x / SG) + 1000 + (Math.floor(z / SG) + 1000) * 3000);
+    return !!arr && arr.some((o) => Math.hypot(o.x - x, o.z - z) < o.r + m);
+  };
+  for (let i = 0; i < 340 * 2; i++) {
     const z = rng.range(-PLAY_HALF, PLAY_HALF);
     const x = front.x(z) + rng.gauss() * 230;
     if (nearSite(x, z, 60)) continue;
@@ -214,13 +252,13 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
       made++;
     }
   };
-  enemyPlace('aa', 450, 1900, 8);
-  enemyPlace('mg', 120, 900, 18);
-  enemyPlace('manpads', 400, 1700, 5);
+  enemyPlace('aa', 450, 1900 * K, 16);
+  enemyPlace('mg', 120, 900, 36);
+  enemyPlace('manpads', 400, 1700 * K, 10);
 
   // Burning wrecks along the front.
   const smokeSpots: THREE.Vector3[] = [];
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 28; i++) {
     const z = rng.range(-PLAY_HALF + 300, PLAY_HALF - 300);
     const x = front.x(z) + rng.gauss() * 160;
     if (nearSite(x, z, 40)) continue;
@@ -350,6 +388,7 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
   // Every town gets a track: rear villages and contested towns join the
   // nearest road or hub junction, enemy villages the nearest enemy-side town.
   const dist = (a: { x: number; z: number }, b: { x: number; z: number }) => Math.hypot(a.x - b.x, a.z - b.z);
+  const linked = new Set<string>();
   for (const t of towns) {
     const hub = plan.townLinks.get(t);
     const edge = (o: { x: number; z: number }) => {
@@ -362,6 +401,10 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
       const others = towns.filter((o) => o !== t && (o.contested || o.enemySide));
       if (!others.length) continue;
       const o = others.reduce((a, b) => (dist(a, t) < dist(b, t) ? a : b));
+      // Mutual nearest neighbours would otherwise get two overlapping tracks.
+      const pair = [t.name, o.name].sort().join('|');
+      if (linked.has(pair)) continue;
+      linked.add(pair);
       const from = new THREE.Vector2(o.x + ((t.x - o.x) / (dist(o, t) || 1)) * o.r * 0.85, o.z + ((t.z - o.z) / (dist(o, t) || 1)) * o.r * 0.85);
       const e = edge(o);
       roads.add(from.x, from.y, e.x, e.y, rng, 'track');
@@ -387,7 +430,7 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
   const yards = roadside.userData.yards as { x: number; z: number; r: number }[];
 
   // Rock outcrops and hay bales.
-  for (let i = 0; i < 900; i++) {
+  for (let i = 0; i < 3600; i++) {
     const x = rng.range(-PLAY_HALF, PLAY_HALF);
     const z = rng.range(-PLAY_HALF, PLAY_HALF);
     const y = terrain.heightAt(x, z);
@@ -419,11 +462,30 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
     yards.some((q) => Math.hypot(q.x - x, q.z - z) < q.r) ||
     inFarmland(x, z) ||
     enemies.some((e) => Math.abs(e.pos.x - x) < 14 && Math.abs(e.pos.z - z) < 14);
-  const vegetation = new Vegetation(terrain, n3, rng.fork(), blocked);
+  const culler = new DistanceCuller();
+  const vegetation = new Vegetation(terrain, n3, rng.fork(), blocked, culler);
   group.add(vegetation.group);
-  group.add(props.build());
+  group.add(props.build(culler));
+  // Long merged roadside meshes (rails, fences, wires) → per-cell pieces that can be culled.
+  for (const child of [...roadside.children]) {
+    const o = child as THREE.Mesh | THREE.LineSegments;
+    if (!(o as THREE.Mesh).isMesh && !(o as THREE.LineSegments).isLineSegments) continue;
+    if ((o as THREE.InstancedMesh).isInstancedMesh) continue;
+    o.geometry.computeBoundingSphere();
+    if (o.geometry.boundingSphere!.radius < 1200) continue;
+    roadside.remove(o);
+    for (const piece of splitByCells(o, 3200)) {
+      roadside.add(piece);
+      culler.addMesh(piece, (o as THREE.LineSegments).isLineSegments ? 3500 : 4500);
+    }
+  }
   group.add(decor.group);
 
+  marks.push(['done', performance.now()]);
+  console.info(
+    `World generated in ${Math.round(marks[marks.length - 1][1] - marks[0][1])} ms:`,
+    marks.slice(1).map(([m, t], i) => `${marks[i][0]} ${Math.round(t - marks[i][1])}ms`).join(', '),
+  );
   return {
     seed,
     terrain,
@@ -438,6 +500,7 @@ export function generateWorld(seed: number, onProgress?: (msg: string) => void):
     smokeSpots,
     windsocks: decor.windsocks,
     group,
+    culler,
   };
 }
 

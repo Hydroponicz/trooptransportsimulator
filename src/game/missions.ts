@@ -8,6 +8,7 @@ import type { Roads } from '../world/roads';
 import type { Effects, SmokeEmitter } from '../fx/effects';
 import type { Terrain } from '../world/terrain';
 import { clamp } from '../util/math';
+import { WORLD_SCALE } from '../world/terrain';
 
 export type CargoKind = 'troops' | 'pallets' | 'casualties' | 'sling';
 
@@ -243,11 +244,11 @@ export class MissionSystem {
       let from: Site;
       if (t.from.includes(site.kind) && sideOk(t, site) && rng.chance(0.85)) from = site;
       else {
-        const cands = this.sites.filter((s) => s !== site && t.from.includes(s.kind) && sideOk(t, s) && dist2(s, site) < 3800);
+        const cands = this.sites.filter((s) => s !== site && t.from.includes(s.kind) && sideOk(t, s) && dist2(s, site) < 3800 * WORLD_SCALE);
         if (!cands.length) continue;
         from = rng.pick(cands);
       }
-      const tos = this.sites.filter((s) => s !== from && t.to.includes(s.kind) && sideOk(t, s) && dist2(s, from) > 700 && dist2(s, from) < 5200);
+      const tos = this.sites.filter((s) => s !== from && t.to.includes(s.kind) && sideOk(t, s) && dist2(s, from) > 700 && dist2(s, from) < 5200 * WORLD_SCALE);
       if (!tos.length) continue;
       const to = rng.pick(tos);
       if (out.some((c) => c.type === t && c.to === to && c.from === from)) continue;
@@ -283,12 +284,12 @@ export class MissionSystem {
       const pool = GROUND_CARGO.filter((g) => g.from.includes(site.kind)).flatMap((g) => Array(g.weight).fill(g) as CargoType[]);
       for (let tries = 0; tries < 30 && made < 3 && pool.length; tries++) {
         const t = rng.pick(pool);
-        const tos = this.sites.filter((s) => s !== site && !s.enemySide && t.to.includes(s.kind));
+        const tos = this.sites.filter((s) => s !== site && !s.enemySide && t.to.includes(s.kind) && dist2(s, site) < 7500);
         if (!tos.length) continue;
         const to = rng.pick(tos);
         if (out.some((c) => c.mode === 'ground' && c.to === to && c.type === t)) continue;
         const route = this.roads.route(site.x, site.z, to.x, to.z);
-        if (route === null || route < 700 || route > 8000) continue;
+        if (route === null || route < 700 || route > 11000) continue;
         const a = this.roads.curbside(site.x, site.z, site.radius);
         const b = this.roads.curbside(to.x, to.z, to.radius);
         if (!a || !b) continue;

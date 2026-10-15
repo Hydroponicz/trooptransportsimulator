@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { PLAY_HALF } from '../world/terrain';
 import type { Game } from '../game';
 import { fmtDist, fmtMoney, fmtTime, clamp } from '../util/math';
 import { RANKS } from '../game/career';
@@ -210,7 +211,7 @@ export class Hud {
     if (fm.fuel < fm.fuelCapacity * 0.15) caution.push('LOW FUEL');
     if (game.threats.underFire > 0) caution.push('UNDER FIRE');
     if (fm.torquePct > 95 && fm.torquePct <= 105) caution.push('HIGH TORQUE');
-    if (Math.abs(fm.pos.x) > 3050 || Math.abs(fm.pos.z) > 3050) caution.push('LEAVING AO');
+    if (Math.abs(fm.pos.x) > PLAY_HALF - 50 || Math.abs(fm.pos.z) > PLAY_HALF - 50) caution.push('LEAVING AO');
     const html = w.map((x) => `<div>${x}</div>`).join('') + caution.map((x) => `<div class="caution">${x}</div>`).join('');
     if (e.warnings.innerHTML !== html) e.warnings.innerHTML = html;
     }

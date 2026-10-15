@@ -2,7 +2,7 @@ import type { World } from '../world/worldgen';
 import { HALF, WORLD_SIZE } from '../world/terrain';
 import type { Site } from '../world/sites';
 
-const IMG = 512;
+const IMG = 1024;
 
 export const SITE_COLOR: Record<string, string> = { base: '#6fb0ff', fob: '#8fe08f', cop: '#f2e9a6', lz: '#ffffff' };
 
@@ -232,22 +232,22 @@ export class MapRenderer {
     // Front sectors: control bar (blue = friendly share), letter, and a pulse if fighting is live.
     for (const sm of sectors) {
       const [x, y] = toS(sm.x, sm.z);
-      const w = 46;
+      const w = 30;
       const share = (sm.control + 1) / 2;
       g.fillStyle = 'rgba(0,0,0,0.55)';
-      g.fillRect(x - w / 2 - 2, y - 5, w + 4, 10);
+      g.fillRect(x - w / 2 - 2, y - 4, w + 4, 8);
       g.fillStyle = '#5aa0ff';
-      g.fillRect(x - w / 2, y - 3, w * share, 6);
+      g.fillRect(x - w / 2, y - 2, w * share, 4);
       g.fillStyle = '#ff5a46';
-      g.fillRect(x - w / 2 + w * share, y - 3, w * (1 - share), 6);
-      g.font = 'bold 12px ui-monospace, monospace';
+      g.fillRect(x - w / 2 + w * share, y - 2, w * (1 - share), 4);
+      g.font = 'bold 10px ui-monospace, monospace';
       g.fillStyle = '#fff';
       g.fillText(sm.name.replace('Sector ', ''), x + w / 2 + 6, y + 4);
       if (sm.active) {
         g.strokeStyle = 'rgba(255,200,80,0.9)';
         g.lineWidth = 2;
         g.beginPath();
-        g.arc(x, y, 18, 0, Math.PI * 2);
+        g.arc(x, y, 13, 0, Math.PI * 2);
         g.stroke();
       }
     }
