@@ -7,15 +7,15 @@ import {
   buckle,
   crouch,
   fly,
-  gait,
+  gait as gait0,
   hold,
   idle,
   kneel,
   gunner,
-  litterCarry,
+  litterCarry as litterCarry0,
   litterLift,
   lying,
-  push,
+  push as push0,
   pull,
   randomSkin,
   rifleArms,
@@ -33,6 +33,33 @@ import {
 } from './soldiers';
 
 export type ActorKind = 'soldier' | 'casualty' | 'pallet';
+
+/**
+ * How urgently the group being updated is working, 0 (routine) to 1 (taking
+ * fire). Set per group in CargoManager.update; the pose wrappers below read it
+ * so people under fire move hunched over and at a run rather than strolling.
+ */
+let urgency = 0;
+/** Speed multiplier for the group being updated (its dt is scaled by this too). */
+let tempo = 1;
+const gait = (out: Joints, phase: number, speed: number, tactical = 0) =>
+  gait0(out, phase, speed * tempo, Math.max(tactical, urgency * 0.85));
+const litterCarry = (out: Joints, phase: number, speed: number, front: boolean) => {
+  litterCarry0(out, phase, speed * tempo, front);
+  // Hunched low over the litter, heads down.
+  out.lean += 0.2 * urgency;
+  out.hip -= 0.06 * urgency;
+  out.kneeL += 0.15 * urgency;
+  out.kneeR += 0.15 * urgency;
+  out.head -= 0.15 * urgency;
+  return out;
+};
+const push = (out: Joints, phase: number, speed: number) => {
+  push0(out, phase, speed * tempo);
+  out.lean += 0.12 * urgency;
+  out.hip -= 0.04 * urgency;
+  return out;
+};
 
 /** Where things go inside a carrier, in its body frame (forward = −Z). */
 export interface CabinLayout {
@@ -58,6 +85,8 @@ export interface CrewContext {
   chiefSeat: THREE.Vector3;
   /** Door and window gunners. */
   gunners: CrewStation[];
+  /** Their guns, which they keep their hands on as the guns swivel. */
+  guns?: { mount: THREE.Object3D; baseYaw: number; gripR: THREE.Object3D; gripL: THREE.Object3D; flash: THREE.Object3D }[];
   /** Pilot (right seat) and co-pilot. */
   pilots: CrewStation[];
   /** Hide the pilot when the camera is in his seat. */
@@ -81,6 +110,8 @@ export interface LoadContext {
   crew?: CrewContext;
   /** Camera position: soldiers near it get the detailed model. */
   camPos?: THREE.Vector3;
+  /** The carrier is taking (or just took) fire: everyone hurries. */
+  underFire?: boolean;
 }
 
 type Space = 'world' | 'cabin';
@@ -145,6 +176,8 @@ class Person {
   seed = Math.random() * 10;
   /** Reached the aisle beside its seat and is now sitting down. */
   sitting = false;
+  /** Last time this (door) gunner's gun fired. */
+  firedAt = -9;
   constructor(outfit: Outfit, rifle: RifleCarry, rnd: () => number) {
     this.inst = { matrix: new THREE.Matrix4(), joints: this.joints, rifle, outfit, skin: randomSkin(rnd), visible: true };
   }
@@ -325,6 +358,8 @@ export class CargoGroup {
   dest: Destination | null = null;
   /** Hot zone: troops move with weapons up and set a security perimeter. */
   hostile = false;
+  /** 0..1: rises at once when the aircraft takes fire, eases off slowly after. */
+  urgency = 0;
   /** Delivered: remove once everyone is indoors (or after a while). */
   retiring = false;
   retireT = 0;
@@ -933,7 +968,13 @@ export class CargoManager {
     ctx.crew?.frame.updateMatrixWorld(true);
     const instances: SoldierInstance[] = [];
     for (const g of this.groups) {
-      g.dispatchTimer -= dt;
+      // Under fire nobody strolls: everything (walking, lifting, strapping) speeds up.
+      if (ctx.underFire) {
+        g.urgency = Math.min(1, g.urgency + dt * 4);
+        g.hostile = true;
+      } else g.urgency = Math.max(g.hostile ? 0.35 : 0, g.urgency - dt * 0.08);
+      urgency = g.urgency;
+      g.dispatchTimer -= dt * (1 + 1.6 * urgency);
       g.frame?.updateMatrixWorld(true);
       // Loading: send the next one in.
       if (ctx.canLoad && g.dispatchTimer <= 0 && (!g.frame || g.frame === ctx.frame)) {
@@ -950,12 +991,17 @@ export class CargoManager {
         }
       }
       for (const a of g.actors) {
-        if (a.kind === 'soldier') this.updateSoldier(g, a, dt, ctx);
-        else if (a.kind === 'casualty') this.updateLitter(g, a, dt, ctx);
-        else this.updatePallet(g, a, dt, ctx);
-        this.place(g, a, ctx, dt, instances);
-        if (g.dest) this.updateHelpers(g, a, dt, ctx, instances);
+        // Riflemen already move briskly; litter teams and loaders have the most to gain.
+        tempo = 1 + urgency * (a.kind === 'soldier' ? 0.45 : 0.9);
+        const da = dt * tempo;
+        if (a.kind === 'soldier') this.updateSoldier(g, a, da, ctx);
+        else if (a.kind === 'casualty') this.updateLitter(g, a, da, ctx);
+        else this.updatePallet(g, a, da, ctx);
+        this.place(g, a, ctx, da, instances);
+        if (g.dest) this.updateHelpers(g, a, da, ctx, instances);
       }
+      urgency = 0;
+      tempo = 1;
       if (g.retiring) {
         g.retireT += dt;
         const done = g.actors.every((a) => a.state === 'inside' || (a.state === 'arrived' && a.timer > (g.hostile ? 60 : 12)));
@@ -1754,6 +1800,25 @@ export class CargoManager {
       g.pos.copy(st.pos);
       g.heading = st.heading;
       gunner(g.target, this.time + i * 3.7);
+      const gun = crew.guns?.[i];
+      if (gun) {
+        // Swivel on the seat and twist to follow the gun; lean over it when it points down.
+        const yaw = Math.atan2(Math.sin(gun.mount.rotation.y - gun.baseYaw), Math.cos(gun.mount.rotation.y - gun.baseYaw));
+        const pitch = gun.mount.rotation.x;
+        const firing = gun.flash.visible || this.time - g.firedAt < 0.15;
+        if (gun.flash.visible) g.firedAt = this.time;
+        g.heading = st.heading + yaw * 0.6;
+        const tg = g.target;
+        tg.twist = yaw * 0.3;
+        tg.lean = 0.3 - pitch * 0.35 + (firing ? 0.06 + Math.random() * 0.03 : 0);
+        // Eyes down the barrel while engaging, otherwise scanning ahead of the gun.
+        tg.headYaw = firing ? yaw * 0.1 : tg.headYaw * 0.6 + yaw * 0.1;
+        tg.head = pitch * 0.5 - (firing ? 0.12 : 0);
+        gun.mount.updateWorldMatrix(true, true);
+        const h = (g.inst.hands ??= { r: new THREE.Vector3(), l: new THREE.Vector3() });
+        gun.gripR.getWorldPosition(h.r);
+        gun.gripL.getWorldPosition(h.l);
+      }
       crewList.push(g);
     });
     crew.pilots.forEach((st, i) => {

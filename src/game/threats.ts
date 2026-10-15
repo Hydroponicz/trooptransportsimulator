@@ -199,7 +199,10 @@ export class Threats {
       b.life -= dt;
       let dead = b.life <= 0;
       if (!dead && alive && p0.distanceToSquared(hp) < 160 * 160) {
-        if (segSegDist(p0, b.p, axisA, axisB) < player.hitRadius) {
+        const miss = segSegDist(p0, b.p, axisA, axisB);
+        // Rounds cracking past count as being under fire too (the crew and passengers hear them).
+        if (miss < 9) this.underFire = Math.max(this.underFire, 2.5);
+        if (miss < player.hitRadius) {
           dead = true;
           player.damage(b.dmg, air ? 'Ground fire' : 'Small-arms fire');
           this.hooks.onHit(b.dmg);

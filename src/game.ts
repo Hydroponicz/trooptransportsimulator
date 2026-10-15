@@ -629,10 +629,12 @@ export class Game {
       frame: carrier.cabinFrame,
       layout: carrier.cabinLayout,
       camPos: this.cam.camera.position,
+      underFire: this.threats.underFire > 0,
       crew: {
         frame: h.parts.exterior,
         chiefSeat: CABIN.crewChief,
         gunners: CABIN.gunners,
+        guns: h.parts.doorGuns,
         pilots: CABIN.pilots,
         hidePilot: this.mode === 'fly' && this.cam.mode === 'cockpit',
         hinge: CABIN.hinge,

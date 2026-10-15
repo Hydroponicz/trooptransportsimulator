@@ -71,6 +71,11 @@ of their opening, out to 550 m) with short bursts. They are support, not a
 weapon system: kills are occasional, get rarer with range, speed and
 altitude, and they call them out on the radio. Every kill counts against
 the enemy in that sector's battle.
+Each M240 swivels on its pintle mount: the gunner traverses it onto the
+enemy he is engaging and only opens fire once the barrel is on target. The
+gun shudders and flashes with each burst. The gunner swivels on his seat to
+follow it, with both hands on the grips, head down behind the gun. With
+nothing to shoot at, he sweeps the ground slowly.
 
 ## Soldiers
 
@@ -90,7 +95,11 @@ rhythm, and walking uses heel-to-toe steps with hip sway. In a hostile LZ
 (high-risk sites and enemy-side drops) the waiting squad kneels in a
 perimeter facing outward, weapons up. Troops you drop there bound off the
 ramp in a crouched combat walk and set up a kneeling security perimeter
-facing away from the aircraft. Soldiers close to the camera get full detail;
+facing away from the aircraft. When the aircraft takes fire (hits, rounds
+cracking past or shells landing close), everyone loading or unloading
+hurries. Troops sprint, litter teams and loaders move hunched at a run, and
+strapping and lifting go roughly twice as fast. They stay hurried for a
+while after the shooting stops. Soldiers close to the camera get full detail;
 distant ones switch to a simpler model.
 
 ## The Humvee

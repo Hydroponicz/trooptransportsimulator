@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { clamp, smoothstep } from '../util/math';
 import type { CabinLayout } from '../game/cargo';
-import type { PlayerTarget } from '../game/target';
+import type { DoorGunPort, PlayerTarget } from '../game/target';
 import { buildChinook, CABIN, AFT_HUB, FRONT_HUB, GEAR_Y, HOOK_POS, HULL_POINTS, ROTOR_RADIUS, type ChinookParts } from './chinookModel';
 import { FlightModel, type FlightEnv } from './flight';
 import type { World } from '../world/worldgen';
@@ -15,6 +15,7 @@ export interface HeliEvents {
 }
 
 const _p = new THREE.Vector3();
+const _qi = new THREE.Quaternion();
 
 export class Heli implements PlayerTarget {
   readonly kind = 'air' as const;
@@ -183,6 +184,64 @@ export class Heli implements PlayerTarget {
     const on = fm.engineSpool > 0.05 && this.strobeT % 1.1 < 0.09;
     this.parts.strobeMat.color.setHex(on ? 0xffffff : 0x551010);
     this.syncTransform();
+    this.updateDoorGuns(dt);
+  }
+
+  /**
+   * Swing each door gun toward what its gunner is engaging, at the rate a man
+   * can traverse a pintle mount; scan the ground slowly when there's nothing.
+   */
+  private updateDoorGuns(dt: number) {
+    this.gunT += dt;
+    const t = this.gunT;
+    const fm = this.fm;
+    _qi.copy(fm.quat).invert();
+    this.parts.doorGuns.forEach((m, i) => {
+      const port = this.doorGuns[i];
+      const lay = this.gunLay[i];
+      port.aimAge += dt;
+      if (port.aimAge > 0.5) port.firing = false;
+      const parent = m.mount.parent!;
+      parent.updateWorldMatrix(true, false);
+      let yaw: number;
+      let pitch: number;
+      const engaged = !!port.aim && port.aimAge < 0.5 && !this.crashed;
+      if (engaged) {
+        _p.copy(port.aim!);
+        parent.worldToLocal(_p).sub(m.mount.position);
+        yaw = Math.atan2(-_p.x, -_p.z) - m.baseYaw;
+        yaw = Math.atan2(Math.sin(yaw), Math.cos(yaw));
+        pitch = Math.atan2(_p.y, Math.hypot(_p.x, _p.z));
+      } else {
+        // Scanning: a slow sweep across the arc, barrel a little down.
+        yaw = 0.55 * Math.sin(t * 0.21 + i * 2.1) + 0.15 * Math.sin(t * 0.67 + i);
+        pitch = -0.28 + 0.1 * Math.sin(t * 0.33 + i * 1.3);
+      }
+      yaw = clamp(yaw, -1.3, 1.3);
+      pitch = clamp(pitch, -1.05, 0.35);
+      const rate = (engaged ? 2.4 : 0.5) * dt;
+      lay.yaw += clamp(yaw - lay.yaw, -rate, rate);
+      lay.pitch += clamp(pitch - lay.pitch, -rate, rate);
+      port.onTarget = engaged && Math.abs(yaw - lay.yaw) < 0.06 && Math.abs(pitch - lay.pitch) < 0.06;
+      // Firing: the gun shudders on its mount and the muzzle flashes.
+      let jy = 0;
+      let jp = 0;
+      if (port.firing) {
+        jy = (Math.random() - 0.5) * 0.025;
+        jp = Math.random() * 0.03;
+        lay.flashT -= dt;
+        if (lay.flashT <= 0) lay.flashT = 0.085;
+        m.flash.visible = lay.flashT > 0.045;
+        m.flash.scale.setScalar(0.7 + Math.random() * 0.6);
+        m.flash.rotation.z = Math.random() * Math.PI;
+      } else m.flash.visible = false;
+      m.mount.rotation.y = m.baseYaw + lay.yaw + jy;
+      m.mount.rotation.x = lay.pitch + jp;
+      m.mount.updateMatrixWorld(true);
+      // Rounds leave from the real muzzle (body frame, for the battle's tracers).
+      m.muzzle.getWorldPosition(_p);
+      port.muzzle.copy(_p.sub(fm.pos).applyQuaternion(_qi));
+    });
   }
 
   syncTransform() {
@@ -240,10 +299,13 @@ export class Heli implements PlayerTarget {
   readonly hitHalfLength = 7;
   readonly hitRadius = 2.3;
   /** Right door gun and left window gun, pointing out through their openings. */
-  readonly doorGuns = CABIN.gunners.map((g) => {
+  readonly doorGuns: DoorGunPort[] = CABIN.gunners.map((g) => {
     const sx = Math.sign(g.pos.x);
-    return { muzzle: new THREE.Vector3(sx * 2.7, g.pos.y + 1.0, g.pos.z), out: new THREE.Vector3(sx, 0, 0) };
+    return { muzzle: new THREE.Vector3(sx * 2.7, g.pos.y + 1.0, g.pos.z), out: new THREE.Vector3(sx, 0, 0), aim: null, aimAge: 99, firing: false, onTarget: false };
   });
+  /** Each gun's traverse and elevation relative to straight out of its opening. */
+  private gunLay = CABIN.gunners.map(() => ({ yaw: 0, pitch: -0.2, flashT: 0 }));
+  private gunT = 0;
   get onGround() {
     return this.fm.contacts >= 3;
   }

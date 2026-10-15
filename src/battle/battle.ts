@@ -955,11 +955,13 @@ export class Battle {
       if (player.destroyed) continue;
       if (sh.hitPlayer) {
         player.damage(sh.hitPlayer, sh.scale < 1 ? 'RPG hit' : 'Tank round');
+        this.threats.underFire = Math.max(this.threats.underFire, 3);
         this.hooks.onHeliHit(sh.hitPlayer);
         this.effects.sparks(sh.at, 20);
         continue;
       }
       const dh = sh.at.distanceTo(player.pos);
+      if (dh < 45) this.threats.underFire = Math.max(this.threats.underFire, 3);
       if (dh < 18) {
         const dmg = (1 - dh / 18) * 18 * sh.scale;
         player.damage(dmg, 'Shellfire');
@@ -1014,6 +1016,7 @@ export class Battle {
         }
       }
       const t = gun.target;
+      port.firing = false;
       if (!t || !t.alive) {
         gun.burst = 0;
         return;
@@ -1023,13 +1026,17 @@ export class Battle {
         gun.target = null;
         return;
       }
+      // Tell the aircraft where to lay the gun; it fires once the barrel is on.
+      (port.aim ??= new THREE.Vector3()).copy(t.pos).setY(t.pos.y + (t.inTrench ? 0.9 : t.pose === 'prone' ? 0.3 : 1.1));
+      port.aimAge = 0;
       gun.cd -= dt;
-      if (gun.burst <= 0 && gun.cd <= 0) {
+      if (gun.burst <= 0 && gun.cd <= 0 && port.onTarget) {
         gun.burst = this.rng.int(7, 12);
         gun.cd = this.rng.range(2.5, 5);
         this.sound(muzzle, camPos, 'mg');
       }
       if (gun.burst <= 0) return;
+      port.firing = true;
       gun.burstT -= dt;
       while (gun.burstT <= 0 && gun.burst > 0) {
         gun.burstT += 0.085;

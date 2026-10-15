@@ -83,6 +83,8 @@ export interface SoldierInstance {
   outfit: Outfit;
   skin: THREE.Color;
   visible: boolean;
+  /** World-space points for the hands (e.g. a mounted gun's grips); overrides the arm pose. */
+  hands?: { r: THREE.Vector3; l: THREE.Vector3 } | null;
 }
 
 export function standJoints(): Joints {
@@ -848,6 +850,7 @@ const _e = new THREE.Euler();
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
 const _one = new THREE.Vector3(1, 1, 1);
+const _inv = new THREE.Matrix4();
 const _c = new THREE.Color();
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 
@@ -986,6 +989,16 @@ export class SoldierRenderer {
         outL += (IK.out - outL) * k;
         yawL += (IK.yaw - yawL) * k;
         elL += (IK.elbow - elL) * k;
+      }
+      if (s.hands) {
+        // Reach for fixed points in the world: bring them into the chest frame first.
+        _inv.copy(M.chest).invert();
+        _w.copy(s.hands.r).applyMatrix4(_inv);
+        solveArm(_w.x - SHOULDER_X, _w.y - SHOULDER_Y, _w.z, 1, -0.35);
+        (armR = IK.a), (outR = IK.out), (yawR = IK.yaw), (elR = IK.elbow);
+        _w.copy(s.hands.l).applyMatrix4(_inv);
+        solveArm(_w.x + SHOULDER_X, _w.y - SHOULDER_Y, _w.z, -1, 0.25);
+        (armL = IK.a), (outL = IK.out), (yawL = IK.yaw), (elL = IK.elbow);
       }
       local(M.uArmL, M.chest, -SHOULDER_X, SHOULDER_Y, 0, armL, yawL, -outL);
       local(M.uArmR, M.chest, SHOULDER_X, SHOULDER_Y, 0, armR, yawR, outR);
