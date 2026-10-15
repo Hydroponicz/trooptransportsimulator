@@ -1,15 +1,13 @@
 import * as THREE from 'three';
-import { WORLD_SIZE } from './terrain';
 
 export const FOG_COLOR = new THREE.Color(0xc4c7bb);
 export const SUN_DIR = new THREE.Vector3(-0.55, 0.62, -0.42).normalize();
 
-/** Sky dome, sun, ambient light, haze and water. */
+/** Sky dome, sun, ambient light and haze. (River water is in water.ts.) */
 export class Environment {
   sun: THREE.DirectionalLight;
   hemi: THREE.HemisphereLight;
   sky: THREE.Mesh;
-  water: THREE.Mesh;
 
   constructor(scene: THREE.Scene) {
     scene.fog = new THREE.Fog(FOG_COLOR, 900, 7500);
@@ -68,15 +66,6 @@ export class Environment {
     this.sky.frustumCulled = false;
     this.sky.renderOrder = -1;
     scene.add(this.sky);
-
-    const wg = new THREE.PlaneGeometry(WORLD_SIZE * 1.6, WORLD_SIZE * 1.6).rotateX(-Math.PI / 2);
-    this.water = new THREE.Mesh(
-      wg,
-      new THREE.MeshPhongMaterial({ color: 0x41606a, specular: 0x8899aa, shininess: 90, transparent: true, opacity: 0.88 }),
-    );
-    this.water.position.y = 0;
-    this.water.receiveShadow = true;
-    scene.add(this.water);
   }
 
   /** Keep the shadow frustum centered on the area of interest. */

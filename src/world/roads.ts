@@ -802,8 +802,12 @@ export class Roads {
       const ground = path.map((p) => this.terrain.heightAt(p.x, p.y));
       const road = this.heights[pi];
       const onBridge = new Array<boolean>(n).fill(false);
+      // Bridges are always paved: on a dirt track the deck (and a short
+      // apron either side) gets asphalt.
+      const paved = new Array<boolean>(n).fill(cls !== 'track');
       for (const sp of this.spans[pi]) {
         for (let k = sp.a; k <= sp.b; k++) onBridge[k] = true;
+        for (let k = Math.max(0, sp.a - 2); k <= Math.min(n - 1, sp.b + 2); k++) paved[k] = true;
         this.buildBridge(path, road, ground, sp.a, sp.b, hw + sh, concrete, colliders);
       }
       const dist = [0];
@@ -814,6 +818,7 @@ export class Roads {
       const pos = new Float32Array(n * 3 * 3);
       const uv = new Float32Array(n * 3 * 2);
       const idx: number[] = [];
+      const idxPaved: number[] = [];
       // Shoulders: per side, columns at the carriageway edge, shoulder edge and verge.
       const scol = [hw - 0.05, hw + sh, hw + sh + 1.6];
       const spos = new Float32Array(n * 6 * 3);
@@ -841,10 +846,11 @@ export class Roads {
           uv[j * 2 + 1] = dist[i] / 12;
         });
         if (i > 0) {
+          const into = cls === 'track' && paved[i] && paved[i - 1] ? idxPaved : idx;
           for (let c = 0; c < 2; c++) {
             const a0 = (i - 1) * 3 + c;
             const b0 = i * 3 + c;
-            idx.push(a0, a0 + 1, b0, a0 + 1, b0 + 1, b0);
+            into.push(a0, a0 + 1, b0, a0 + 1, b0 + 1, b0);
           }
         }
         for (let sd = 0; sd < 2; sd++) {
@@ -898,7 +904,14 @@ export class Roads {
         polygonOffsetFactor: -1,
         polygonOffsetUnits: -(4 + rank[cls] * 40 + pi),
       });
-      const mesh = new THREE.Mesh(mk(pos, uv, idx), mat);
+      const geo = mk(pos, uv, [...idx, ...idxPaved]);
+      let mesh: THREE.Mesh;
+      if (idxPaved.length) {
+        geo.addGroup(0, idx.length, 0);
+        geo.addGroup(idx.length, idxPaved.length, 1);
+        const asphalt = new THREE.MeshLambertMaterial({ map: textures.secondary, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: mat.polygonOffsetUnits });
+        mesh = new THREE.Mesh(geo, [mat, asphalt]);
+      } else mesh = new THREE.Mesh(geo, mat);
       mesh.receiveShadow = true;
       this.group.add(mesh);
       const smesh = new THREE.Mesh(mk(spos, suv, sidx, scl), shoulderMat);

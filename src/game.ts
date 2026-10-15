@@ -388,6 +388,7 @@ export class Game {
     else this.cam.update(modal ? 0 : dt, this.heli, this.world.terrain, mouse);
     this.env.follow(this.playerPos, this.cam.camera.position);
     this.world.terrain.updateLod(this.cam.camera.position);
+    this.world.rivers.update(dt);
     this.world.culler.update(this.cam.camera.position);
     this.vehicleSound ??= this.audio.vehicle();
     {

@@ -206,10 +206,23 @@ Y = camera, LB = flares, RB = SAS, Start = terminal.
 ## The world
 
 Each career has a seed that generates a 14.4 × 14.4 km theater (about 12.6 km
-across inside the mountains): rolling hills, a river crossed by bridges, mountains around the edges, and a winding **front
+across inside the mountains): rolling hills, rivers crossed by bridges, mountains around the edges, and a winding **front
 line** (friendly to the west, enemy to the east) scarred with craters,
 burning wrecks, artillery and tracer fire. The ground flattens out near the
-front so battles happen on sensible terrain. Places include:
+front so battles happen on sensible terrain.
+
+Rivers meander and branch through broad, gentle valleys. Each has a
+channel about 40–60 m wide and 3–4 m deep, low banks with a strip of sand
+and pebbles, a grassy floodplain, and valley sides that start at a couple of
+degrees and only slowly steepen into the hills. The water is shaded per
+pixel:
+
+- ripples that drift downstream with the current
+- sky reflections that strengthen at low angles, and sun glints
+- the riverbed showing through the shallows, darker green-brown water in the channel
+- foam streaks along the banks
+
+Places include:
 
 - **Main operating base**: hangars, fuel farm, upgrades.
 - **FOBs** (about six): fuel, repair and flares.
@@ -257,7 +270,8 @@ HESCO walls, with burned-out vehicles pushed off the road.
 Roads are graded like real ones: they cut through hills and run on
 embankments. Where they cross a river or a deep valley they go onto bridges
 and viaducts that run from bank to bank, and steep ramps climb to hilltop
-bases.
+bases. Bridges are always paved: a dirt track gets an asphalt deck and short
+asphalt approaches where it crosses.
 
 ### The war
 

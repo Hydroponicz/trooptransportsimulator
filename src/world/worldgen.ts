@@ -1,3 +1,4 @@
+import { Rivers } from './water';
 import * as THREE from 'three';
 import { Noise2D, RNG } from '../util/noise';
 import { ColliderSet } from './colliders';
@@ -34,6 +35,7 @@ export interface World {
   group: THREE.Group;
   /** Hides far-off chunks of forest, props and roadside furniture. */
   culler: DistanceCuller;
+  rivers: Rivers;
 }
 
 const NAMES: Record<SiteKind, string[]> = {
@@ -480,6 +482,8 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     }
   }
   group.add(decor.group);
+  const rivers = new Rivers(terrain);
+  group.add(rivers.group);
 
   marks.push(['done', performance.now()]);
   console.info(
@@ -501,6 +505,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     windsocks: decor.windsocks,
     group,
     culler,
+    rivers,
   };
 }
 

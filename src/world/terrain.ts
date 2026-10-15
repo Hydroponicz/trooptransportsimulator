@@ -40,6 +40,34 @@ export interface Crater {
   depth: number;
 }
 
+/** Smooth minimum (polynomial, blend width k). */
+function smin(a: number, b: number, k: number) {
+  const h = Math.max(k - Math.abs(a - b), 0) / k;
+  return Math.min(a, b) - h * h * k * 0.25;
+}
+
+/**
+ * Ground height across a river valley at distance d from the centreline:
+ * a rounded channel about 3.5 m deep, banks up to 2.6 m, a floodplain rising
+ * to ~4 m, then valley sides that start at ~2° and steepen slowly.
+ */
+export function riverProfile(d: number, w: number, plain: number) {
+  if (d < w) {
+    const u = d / w;
+    return -3.6 * (1 - u * u);
+  }
+  const bank = 14;
+  if (d < w + bank) return 2.6 * smoothstep(0, 1, (d - w) / bank);
+  const fp = d - w - bank;
+  if (fp < plain) return 2.6 + 1.4 * (fp / plain);
+  const v = fp - plain;
+  return 4 + 0.035 * v + 0.00011 * v * v;
+}
+
+/** River distance grid spacing and size. */
+const RG = 20;
+const RN = Math.ceil(WORLD_SIZE / RG) + 1;
+
 const CRATER_CELL = 100;
 const FGRID = 200;
 const NONE: FlattenZone[] = [];
@@ -80,15 +108,122 @@ export class Terrain {
       h += r * r * 45 * rw * (1 - 0.85 * near);
     }
     h += this.n3.fbm(x * 0.003, z * 0.003, 3) * 3.5 * (1 - 0.4 * near);
-    // A meandering river valley with gentle banks.
-    const rv = Math.abs(this.n2.fbm(x * 0.00018 + 91.1, z * 0.00018 - 44.2, 3));
-    const cut = 1 - smoothstep(0.01, 0.06, rv);
-    h = lerp(h, -4, Math.pow(cut, 1.4) * 0.95);
+    // Rivers: a channel with low banks, a floodplain, and valley sides that
+    // rise gently (a few degrees) back up to the hills.
+    const rv = this.river(x, z, h);
+    if (rv.weight > 0) h = lerp(h, smin(h, riverProfile(rv.dist, rv.width, rv.plain), 12), rv.weight);
     // Mountains walling in the map edges.
     const d = Math.max(Math.abs(x), Math.abs(z));
     const e = smoothstep(HALF - 1100, HALF - 100, d);
     if (e > 0) h += e * e * (420 + 220 * this.n1.fbm(x * 0.0015 + 5, z * 0.0015, 3));
     return h;
+  }
+
+  private _river = { dist: Infinity, width: 0, plain: 0, weight: 0, fx: 0, fz: 0 };
+  /** Distance (m) to the nearest river centreline on a coarse grid (built on first use). */
+  private riverDist: Float32Array | null = null;
+  private riverField(x: number, z: number) {
+    return this.n2.fbm(x * 0.00018 + 91.1, z * 0.00018 - 44.2, 3);
+  }
+
+  /** Exact distance transform of the river centrelines (zero crossings of the field). */
+  private buildRiverDist() {
+    const n = RN;
+    const f = new Float32Array(n * n);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) f[j * n + i] = this.riverField(-HALF + i * RG, -HALF + j * RG);
+    const INF = 1e12;
+    const d2 = new Float64Array(n * n).fill(INF);
+    for (let j = 0; j < n; j++)
+      for (let i = 0; i < n; i++) {
+        const v = f[j * n + i];
+        if ((i + 1 < n && v * f[j * n + i + 1] <= 0) || (j + 1 < n && v * f[(j + 1) * n + i] <= 0)) d2[j * n + i] = 0;
+        if ((i > 0 && v * f[j * n + i - 1] <= 0) || (j > 0 && v * f[(j - 1) * n + i] <= 0)) d2[j * n + i] = 0;
+      }
+    // Felzenszwalb & Huttenlocher: 1D squared-distance passes along columns, then rows.
+    const g = new Float64Array(n);
+    const v = new Int32Array(n);
+    const zb = new Float64Array(n + 1);
+    const pass = (get: (k: number) => number, set: (k: number, val: number) => void) => {
+      for (let q = 0; q < n; q++) g[q] = get(q);
+      let k = 0;
+      v[0] = 0;
+      zb[0] = -Infinity;
+      zb[1] = Infinity;
+      for (let q = 1; q < n; q++) {
+        let sx = (g[q] + q * q - (g[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+        while (sx <= zb[k]) {
+          k--;
+          sx = (g[q] + q * q - (g[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+        }
+        k++;
+        v[k] = q;
+        zb[k] = sx;
+        zb[k + 1] = Infinity;
+      }
+      k = 0;
+      for (let q = 0; q < n; q++) {
+        while (zb[k + 1] < q) k++;
+        set(q, (q - v[k]) * (q - v[k]) + g[v[k]]);
+      }
+    };
+    for (let i = 0; i < n; i++) pass((q) => d2[q * n + i], (q, val) => (d2[q * n + i] = val));
+    for (let j = 0; j < n; j++) pass((q) => d2[j * n + q], (q, val) => (d2[j * n + q] = val));
+    const out = new Float32Array(n * n);
+    for (let k = 0; k < n * n; k++) out[k] = Math.sqrt(d2[k]) * RG;
+    this.riverDist = out;
+  }
+
+  private gridRiverDist(x: number, z: number) {
+    if (!this.riverDist) this.buildRiverDist();
+    const D = this.riverDist!;
+    const gx = Math.min(Math.max((x + HALF) / RG, 0), RN - 1.001);
+    const gz = Math.min(Math.max((z + HALF) / RG, 0), RN - 1.001);
+    const i = Math.floor(gx);
+    const j = Math.floor(gz);
+    const fx = gx - i;
+    const fz = gz - j;
+    const a = D[j * RN + i] + (D[j * RN + i + 1] - D[j * RN + i]) * fx;
+    const b = D[(j + 1) * RN + i] + (D[(j + 1) * RN + i + 1] - D[(j + 1) * RN + i]) * fx;
+    return a + (b - a) * fz;
+  }
+
+  /**
+   * The river field near (x, z): distance to the nearest river centreline
+   * (rivers follow the zero line of a noise field, so they meander and
+   * branch), the river's half-width and floodplain width there, and the unit
+   * downstream direction (fx, fz). weight is 0 far from any river (or, given
+   * the natural ground height, where the valley would not cut into it).
+   */
+  river(x: number, z: number, ground = Infinity) {
+    const r = this._river;
+    const far = this.gridRiverDist(x, z);
+    // Skip points the valley can't reach: even the widest valley is above the ground there.
+    if (far > 1900 || riverProfile(far - 20, 29, 200) > ground + 12) {
+      r.weight = 0;
+      r.dist = Infinity;
+      return r;
+    }
+    r.weight = 1;
+    r.dist = far;
+    r.fx = r.fz = 0;
+    if (far < 130) {
+      const f = this.riverField(x, z);
+      const e = 15;
+      const gx = (this.riverField(x + e, z) - f) / e;
+      const gz = (this.riverField(x, z + e) - f) / e;
+      const g = Math.hypot(gx, gz) || 1e-6;
+      // Close to the line the field's own gradient gives the distance to the
+      // metre; further out (where the gradient can fade) use the grid.
+      const near = Math.abs(f) / Math.max(g, 0.00005);
+      const t = smoothstep(35, 90, Math.min(near, far + 20));
+      r.dist = near + (far - near) * t;
+      // Flow runs along the river: perpendicular to the field's gradient.
+      r.fx = -gz / g;
+      r.fz = gx / g;
+    }
+    r.width = 20 + 9 * this.n3.fbm(x * 0.0004 + 12.3, z * 0.0004 - 7.1, 2);
+    r.plain = 110 + 90 * this.n1.fbm(x * 0.0005 - 3.3, z * 0.0005 + 8.8, 2);
+    return r;
   }
 
   addCrater(c: Crater) {
@@ -194,7 +329,8 @@ export class Terrain {
     const forest = C(0x4f6233);
     const rock = C(0x7c776c);
     const sand = C(0x9d9070);
-    const mud = C(0x5e5440);
+    const mud = C(0x5a5442);
+    const lush = C(0x58773a);
     const scorched = C(0x4a4436);
     const siteDirt = C(0x9a8a66);
     const tmp = new THREE.Color();
@@ -210,8 +346,11 @@ export class Terrain {
         const f = this.n1.fbm(x * 0.0012 + 40, z * 0.0012, 2) * 0.5 + 0.5;
         tmp.copy(grass).lerp(grass2, smoothstep(0.35, 0.75, n));
         tmp.lerp(forest, smoothstep(0.55, 0.75, f) * 0.6);
-        tmp.lerp(sand, smoothstep(4, 0.5, h));
-        tmp.lerp(mud, smoothstep(0, -3, h));
+        // River flats: lush grass on the floodplain, a narrow strip of sand
+        // and pebbles at the waterline, silt on the bed.
+        tmp.lerp(lush, smoothstep(7, 3, h) * 0.55);
+        tmp.lerp(sand, smoothstep(2.2, 0.6, h) * 0.85);
+        tmp.lerp(mud, smoothstep(0.3, -2.5, h));
         tmp.lerp(rock, smoothstep(0.86, 0.72, ny) * 0.85 + smoothstep(260, 420, h) * 0.5);
         const sd = Math.abs(this.front.side(x, z));
         const scorch = (1 - smoothstep(60, 520, sd)) * (0.45 + 0.55 * smoothstep(0.3, 0.6, n));
