@@ -9,7 +9,7 @@ import { Props } from './props';
 import { Roads, type RoadClass } from './roads';
 import { buildRoadside } from './roadside';
 import { buildSite, type Site, type SiteKind, type SiteDecor } from './sites';
-import { PLAY_HALF, Terrain, WORLD_SCALE } from './terrain';
+import { BASE_SCALE, PLAY_HALF, Terrain, WORLD_SCALE } from './terrain';
 import { DistanceCuller, splitByCells } from './lod';
 import { Vegetation } from './vegetation';
 import { buildTown, CITY_NAMES, TOWN_NAMES, type SettlementKind, type Town } from './towns';
@@ -45,6 +45,11 @@ export interface World {
   shadows: ShadowCasters;
 }
 
+const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
+/** Parts for making up more town names on a big map. */
+const NAME_HEADS = ['Novo', 'Staro', 'Verkhnyo', 'Nyzhnyo', 'Krasno', 'Bilo', 'Cherno', 'Zeleno', 'Sosno', 'Dubo', 'Lypo', 'Kamiano', 'Bereza', 'Vyshno', 'Ozerno', 'Hlyno', 'Zoloto', 'Pisko', 'Tern', 'Zaliz'];
+const NAME_TAILS = ['vka', 'ivka', 'ske', 'pil', 'hrad', 'dolsk', 'brid', 'vets', 'yne', 'ove', 'yany', 'hirka', 'polye', 'rechye', 'lyn', 'myr'];
+
 const NAMES: Record<SiteKind, string[]> = {
   base: ['Camp Anvil', 'Camp Liberty', 'Camp Ironside', 'Camp Bastion'],
   fob: ['FOB Viper', 'FOB Granite', 'FOB Hatchet', 'FOB Raven', 'FOB Sentinel', 'FOB Warhorse', 'FOB Talon', 'FOB Cobra', 'FOB Bulldog', 'FOB Phoenix', 'FOB Tomahawk', 'FOB Lancer'],
@@ -79,9 +84,27 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
   const townNames = [...TOWN_NAMES];
   const cityNames = [...CITY_NAMES];
   const names = Object.fromEntries(Object.entries(NAMES).map(([k, v]) => [k, [...v]])) as Record<SiteKind, string[]>;
+  // Once a list is used up, names come round again with a numeral (FOB Viper II).
+  const rounds: Partial<Record<SiteKind, number>> = {};
   const takeName = (k: SiteKind) => {
-    const arr = names[k];
-    return arr.splice(Math.floor(rng.next() * arr.length), 1)[0] ?? `${k.toUpperCase()} ${sites.length}`;
+    let arr = names[k];
+    if (!arr.length) {
+      rounds[k] = (rounds[k] ?? 1) + 1;
+      arr = names[k] = NAMES[k].map((n) => `${n} ${ROMAN[Math.min(rounds[k]!, ROMAN.length - 1)]}`);
+    }
+    return arr.splice(Math.floor(rng.next() * arr.length), 1)[0];
+  };
+  const usedTownNames = new Set<string>();
+  const takeTownName = (kind: SettlementKind) => {
+    const list = kind === 'city' && cityNames.length ? cityNames : townNames;
+    let name = list.length ? list.splice(Math.floor(rng.next() * list.length), 1)[0] : '';
+    // Out of names (a big map): make one up from the usual parts.
+    for (let i = 0; !name || usedTownNames.has(name); i++) {
+      name = rng.pick(NAME_HEADS) + rng.pick(NAME_TAILS);
+      if (i > 40) name += ` ${usedTownNames.size}`;
+    }
+    usedTownNames.add(name);
+    return name;
   };
 
   /** Max height deviation across an area: lower = flatter. */
@@ -147,11 +170,16 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
   onProgress?.('Surveying terrain');
   // Everything is laid out on the original 6.2 km plan, scaled up to the current map.
   const K = WORLD_SCALE;
+  // How many times wider than the original 14.4 km theater: things along the front
+  // scale with it, things spread over the land with its square.
+  const L = K / BASE_SCALE;
+  const A = L * L;
+  const n = (count: number, f: number) => Math.max(1, Math.round(count * f));
   const base = place('base', () => [-2900 * K, -2200 * K], [-1200 * K, 1200 * K], 80)!;
   const bands = (n: number, lo: number, hi: number) =>
     Array.from({ length: n }, (_, i) => [lo + ((hi - lo) * i) / n, lo + ((hi - lo) * (i + 1)) / n] as [number, number]);
-  for (const zr of bands(6, -2700 * K, 2700 * K)) place('fob', (z) => [-1800 * K, front.x(z) - 1000], zr, 50);
-  for (const zr of bands(12, -2900 * K, 2900 * K)) place('cop', (z) => [front.x(z) - 650, front.x(z) - 280], zr, 40);
+  for (const zr of bands(n(6, L), -2700 * K, 2700 * K)) place('fob', (z) => [-1800 * K, front.x(z) - 1000], zr, 50);
+  for (const zr of bands(n(12, L), -2900 * K, 2900 * K)) place('cop', (z) => [front.x(z) - 650, front.x(z) - 280], zr, 40);
   // Towns: some straddle the front (contested), others sit safely behind either line.
   const placeTown = (kind: SettlementKind, contested: boolean, xr: (z: number) => [number, number], zr: [number, number], rr: [number, number]) => {
     let best: { x: number; z: number; r: number; score: number } | null = null;
@@ -179,9 +207,8 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
       h += terrain.baseHeight(best.x + Math.cos(a) * rr2, best.z + Math.sin(a) * rr2);
     }
     h = Math.max(5, h / 9);
-    const names = kind === 'city' && cityNames.length ? cityNames : townNames;
     const town: Town = {
-      name: names.splice(Math.floor(rng.next() * names.length), 1)[0] ?? 'Town',
+      name: takeTownName(kind),
       x: best.x,
       z: best.z,
       y: h,
@@ -198,11 +225,11 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     if (!contested && kind !== 'city') terrain.farms.push({ x: town.x, z: town.z, rot: town.rot, r: town.r });
   };
   // Cities first (they need the most room): two behind our lines, one behind theirs.
-  for (const zr of bands(2, -2600 * K, 2600 * K)) placeTown('city', false, (z) => [-2500 * K, front.x(z) - 1700], zr, [480, 600]);
-  placeTown('city', false, (z) => [front.x(z) + 1700, 2700 * K], [-2000 * K, 2000 * K], [420, 520]);
-  for (const zr of bands(6, -2600 * K, 2600 * K)) placeTown('town', true, (z) => [front.x(z) - 90, front.x(z) + 90], zr, [150, 190]);
-  for (const zr of bands(6, -2700 * K, 2700 * K)) placeTown('town', false, (z) => [-2600 * K, front.x(z) - 1000], zr, [170, 230]);
-  for (const zr of bands(3, -2400 * K, 2400 * K)) placeTown('town', false, (z) => [front.x(z) + 900, 2800 * K], zr, [160, 210]);
+  for (const zr of bands(n(2, L), -2600 * K, 2600 * K)) placeTown('city', false, (z) => [-2500 * K, front.x(z) - 1700], zr, [480, 600]);
+  for (const zr of bands(n(1, L), -2000 * K, 2000 * K)) placeTown('city', false, (z) => [front.x(z) + 1700, 2700 * K], zr, [420, 520]);
+  for (const zr of bands(n(6, L), -2600 * K, 2600 * K)) placeTown('town', true, (z) => [front.x(z) - 90, front.x(z) + 90], zr, [150, 190]);
+  for (const zr of bands(n(6, A), -2700 * K, 2700 * K)) placeTown('town', false, (z) => [-2600 * K, front.x(z) - 1000], zr, [170, 230]);
+  for (const zr of bands(n(3, A), -2400 * K, 2400 * K)) placeTown('town', false, (z) => [front.x(z) + 900, 2800 * K], zr, [160, 210]);
   // Farming villages on the outskirts of each city, then more scattered through the countryside.
   for (const c of towns.filter((q) => q.kind === 'city'))
     for (let k = 0; k < 3; k++) {
@@ -211,11 +238,11 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
       placeTown('village', false, (z) => (enemy ? [Math.max(c.x - R, front.x(z) + 700), c.x + R] : [c.x - R, Math.min(c.x + R, front.x(z) - 700)]), [c.z - R, c.z + R], [60, 95]);
     }
   // Villages and farming communities scattered through the countryside.
-  for (const zr of bands(16, -2800 * K, 2800 * K)) placeTown('village', false, (z) => [-2700 * K, front.x(z) - 700], zr, [55, 100]);
-  for (const zr of bands(8, -2600 * K, 2600 * K)) placeTown('village', false, (z) => [front.x(z) + 700, 2800 * K], zr, [55, 95]);
+  for (const zr of bands(n(16, A), -2800 * K, 2800 * K)) placeTown('village', false, (z) => [-2700 * K, front.x(z) - 700], zr, [55, 100]);
+  for (const zr of bands(n(8, A), -2600 * K, 2600 * K)) placeTown('village', false, (z) => [front.x(z) + 700, 2800 * K], zr, [55, 95]);
 
-  for (const zr of bands(14, -2900 * K, 2900 * K)) place('lz', (z) => [front.x(z) - 1500 * K, front.x(z) - 200], zr, 30);
-  for (const zr of bands(8, -2600 * K, 2600 * K)) place('lz', (z) => [front.x(z) + 250, front.x(z) + 1100 * K], zr, 30);
+  for (const zr of bands(n(14, A), -2900 * K, 2900 * K)) place('lz', (z) => [front.x(z) - 1500 * K, front.x(z) - 200], zr, 30);
+  for (const zr of bands(n(8, A), -2600 * K, 2600 * K)) place('lz', (z) => [front.x(z) + 250, front.x(z) + 1100 * K], zr, 30);
 
   // Shell craters along the front.
   // Sites and towns bucketed by 500 m cell (rebuilt if more are added), so placement checks stay cheap on a big map.
@@ -241,7 +268,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     const arr = siteGrid.get(Math.floor(x / SG) + 1000 + (Math.floor(z / SG) + 1000) * 3000);
     return !!arr && arr.some((o) => Math.hypot(o.x - x, o.z - z) < o.r + m);
   };
-  for (let i = 0; i < 340 * 2; i++) {
+  for (let i = 0; i < n(680, L); i++) {
     const z = rng.range(-PLAY_HALF, PLAY_HALF);
     const x = front.x(z) + rng.gauss() * 230;
     if (nearSite(x, z, 60)) continue;

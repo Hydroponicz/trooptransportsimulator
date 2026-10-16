@@ -13,6 +13,13 @@ const Z0 = -3000 * WORLD_SCALE;
 const Z1 = 3000 * WORLD_SCALE;
 /** Bumped when the sector layout changes; older saved campaigns start fresh. */
 export const CAMPAIGN_VERSION = 2;
+
+/** A, B, ... Z, then AA, AB, ... */
+function sectorLetters(i: number): string {
+  let s = '';
+  for (let n = i + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return s;
+}
 const SECTOR_LEN = (Z1 - Z0) / SECTOR_COUNT;
 
 type PerSide = { blue: number; red: number };
@@ -61,7 +68,7 @@ export class Campaign {
       const r = (a: number, b: number) => Math.round(rng.range(a, b) * 100) / 100;
       sectors.push({
         id: i,
-        name: `Sector ${String.fromCharCode(65 + i)}`,
+        name: `Sector ${sectorLetters(i)}`,
         zc: Z0 + SECTOR_LEN * (i + 0.5),
         inf: { blue: Math.round(rng.range(32, 46)), red: Math.round(rng.range(32, 46)) },
         armor: { blue: r(2, 4), red: r(2, 4) },

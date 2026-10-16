@@ -13,6 +13,18 @@ import type { Town } from '../world/towns';
 import type { Rooftop, Rooftops } from './rooftops';
 import type { InsertPoint, Insertions } from './insertion';
 
+/**
+ * How far jobs reach (m). They grow with the map, so a bigger theater means
+ * longer hauls, but are capped so a job stays a sitting's work: about ten
+ * minutes' flying for a delivery, five for an insertion, half an hour's
+ * driving for a road job.
+ */
+const AIR_PICKUP_MAX = Math.min(3800 * WORLD_SCALE, 12000);
+const AIR_TRIP_MAX = Math.min(5200 * WORLD_SCALE, 24000);
+const INSERT_MAX = Math.min(5000 * WORLD_SCALE, 15000);
+const ROAD_REACH = Math.min(3700 * WORLD_SCALE, 20000);
+const ROAD_TRIP_MAX = Math.min(5400 * WORLD_SCALE, 30000);
+
 export type CargoKind = 'troops' | 'pallets' | 'casualties' | 'sling';
 
 /** Anything that can carry a contract: the helicopter or a ground vehicle. */
@@ -322,11 +334,11 @@ export class MissionSystem {
       let from: Site;
       if (t.from.includes(site.kind) && sideOk(t, site) && rng.chance(0.85)) from = site;
       else {
-        const cands = this.sites.filter((s) => s !== site && t.from.includes(s.kind) && sideOk(t, s) && dist2(s, site) < 3800 * WORLD_SCALE);
+        const cands = this.sites.filter((s) => s !== site && t.from.includes(s.kind) && sideOk(t, s) && dist2(s, site) < AIR_PICKUP_MAX);
         if (!cands.length) continue;
         from = rng.pick(cands);
       }
-      const tos = this.sites.filter((s) => s !== from && t.to.includes(s.kind) && sideOk(t, s) && dist2(s, from) > 700 && dist2(s, from) < 5200 * WORLD_SCALE);
+      const tos = this.sites.filter((s) => s !== from && t.to.includes(s.kind) && sideOk(t, s) && dist2(s, from) > 700 && dist2(s, from) < AIR_TRIP_MAX);
       if (!tos.length) continue;
       const to = rng.pick(tos);
       if (out.some((c) => c.type === t && c.to === to && c.from === from)) continue;
@@ -359,7 +371,7 @@ export class MissionSystem {
     // Rooftop insertions from bases and FOBs into towns, battle zones first.
     if (this.rooftops && (site.kind === 'base' || site.kind === 'fob')) {
       const R = this.rooftops;
-      const towns = this.towns.filter((t) => t.kind !== 'village' && Math.hypot(t.x - site.x, t.z - site.z) > 600 && Math.hypot(t.x - site.x, t.z - site.z) < 5000 * WORLD_SCALE && R.hasRoofs(t));
+      const towns = this.towns.filter((t) => t.kind !== 'village' && Math.hypot(t.x - site.x, t.z - site.z) > 600 && Math.hypot(t.x - site.x, t.z - site.z) < INSERT_MAX && R.hasRoofs(t));
       const pool = towns.flatMap((t) => Array((this.battleZone(t) ? 4 : 1) * (t.kind === 'city' ? 2 : 1)).fill(t) as Town[]);
       for (let made = 0, tries = 0; made < 2 && tries < 6 && pool.length; tries++) {
         const t = rng.pick(pool);
@@ -395,9 +407,9 @@ export class MissionSystem {
     // Fast-rope insertions from bases and FOBs: into towns (battle zones first), behind the line, or LZs.
     if (this.insertions && (site.kind === 'base' || site.kind === 'fob')) {
       const I = this.insertions;
-      const towns = this.towns.filter((t) => t.kind !== 'village' && t.spots?.length && Math.hypot(t.x - site.x, t.z - site.z) > 600 && Math.hypot(t.x - site.x, t.z - site.z) < 5000 * WORLD_SCALE);
+      const towns = this.towns.filter((t) => t.kind !== 'village' && t.spots?.length && Math.hypot(t.x - site.x, t.z - site.z) > 600 && Math.hypot(t.x - site.x, t.z - site.z) < INSERT_MAX);
       const townPool = towns.flatMap((t) => Array((this.battleZone(t) ? 4 : 1) * (t.kind === 'city' ? 2 : 1)).fill(t) as Town[]);
-      const lzs = this.sites.filter((s) => s.kind === 'lz' && !s.enemySide && Math.hypot(s.x - site.x, s.z - site.z) < 5000 * WORLD_SCALE);
+      const lzs = this.sites.filter((s) => s.kind === 'lz' && !s.enemySide && Math.hypot(s.x - site.x, s.z - site.z) < INSERT_MAX);
       for (let made = 0, tries = 0; made < 2 && tries < 8; tries++) {
         const roll = rng.next();
         let p: InsertPoint | null = null;
@@ -436,12 +448,12 @@ export class MissionSystem {
       const pool = GROUND_CARGO.filter((g) => g.from.includes(site.kind)).flatMap((g) => Array(g.weight).fill(g) as CargoType[]);
       for (let tries = 0; tries < 30 && made < 3 && pool.length; tries++) {
         const t = rng.pick(pool);
-        const tos = this.sites.filter((s) => s !== site && !s.enemySide && t.to.includes(s.kind) && dist2(s, site) < 7500);
+        const tos = this.sites.filter((s) => s !== site && !s.enemySide && t.to.includes(s.kind) && dist2(s, site) < ROAD_REACH);
         if (!tos.length) continue;
         const to = rng.pick(tos);
         if (out.some((c) => c.mode === 'ground' && c.to === to && c.type === t)) continue;
         const route = this.roads.route(site.x, site.z, to.x, to.z);
-        if (route === null || route < 700 || route > 11000) continue;
+        if (route === null || route < 700 || route > ROAD_TRIP_MAX) continue;
         const a = this.roads.curbside(site.x, site.z, site.radius);
         const b = this.roads.curbside(to.x, to.z, to.radius);
         if (!a || !b) continue;
