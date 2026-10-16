@@ -17,6 +17,8 @@ export const WATER_LEVEL = 0;
 export const PLAY_HALF = HALF - 900;
 /** How much bigger (per side) the play area is than the original 6.2 km map; content ranges scale by this. */
 export const WORLD_SCALE = PLAY_HALF / 3100;
+/** WORLD_SCALE of the 9-tile (14.4 km) theater the content counts were tuned on. */
+export const BASE_SCALE = ((9 * TILE_CELLS * CELL) / 2 - 900) / 3100;
 
 /** LOD rings for terrain tiles (distance from the camera to the tile's nearest point). */
 const LOD_DIST = [1400, 2800, 5000, 7500];
