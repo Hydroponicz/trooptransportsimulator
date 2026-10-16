@@ -236,7 +236,7 @@ export class AirOps {
         j.waypoint.set(home * (HALF + 300), j.pos.y + 600, j.pos.z + this.rng.range(-1500, 1500));
         if (j.doomed) {
           j.phase = 'down';
-          j.smoke = this.effects.addEmitter(j.pos, 'burning', 30);
+          j.smoke = this.effects.addEmitter(j.pos, 'trail', 45);
           this.hooks.radio(j.name, j.side === 'blue' ? "I'm hit, I'm hit! Punching out!" : 'Enemy aircraft hit and going down!');
         }
       }

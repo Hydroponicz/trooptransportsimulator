@@ -244,6 +244,12 @@ export class Game {
       wind: this.wind,
     };
 
+    this.effects.env = {
+      ground: (x, z) => terrain.surfaceAt(x, z),
+      ceiling: (x, z) => this.world.colliders.ceilingAt(x, z),
+      solid: (p) => this.world.colliders.hit(p, 0, true),
+    };
+
     this.missions.rooftops = new Rooftops(this.world);
     this.missions.insertions = new Insertions(
       this.world,
@@ -328,6 +334,9 @@ export class Game {
     this.world.culler.scales.lod = p.lodScale;
     this.world.culler.scales.clutter = p.clutterScale;
     this.world.culler.scales.far = p.farScale;
+    this.effects.density = p.smoke;
+    this.effects.smoke.collideRange = 900 * p.smoke;
+    this.env.setCloudQuality(p.cloudSteps);
     this.world.culler.update(this.cam.camera.position, true);
     this.resize();
   }
@@ -838,7 +847,7 @@ export class Game {
       this.farmWork.update(dt, this.cam.camera.position);
     }
     this.updateEffects(dt);
-    this.effects.update(dt, this.cam.camera.position);
+    this.effects.update(dt, this.cam.camera);
     this.updateDecor(dt);
     this.updatePrompt();
     this.updateSlingGuide();
@@ -894,9 +903,13 @@ export class Game {
     const h = this.heli;
     const fm = h.fm;
     const e = this.effects;
-    const ground = this.world.terrain.surfaceAt(fm.pos.x, fm.pos.z);
+    const ground = this.flightEnv.surfaceAt(fm.pos.x, fm.pos.z, fm.pos.y);
     const thrustRatio = fm.thrust / (fm.mass * 9.81);
     const washH = 32;
+    const af = h.airframe;
+    // Twin rotors wash a longer patch: treat them as one bigger disc.
+    e.downwash.radius = af.rotorRadius * (af.rotorHubs.length > 1 ? 1.35 : 1);
+    e.downwash.vi = af.id === 'chinook' ? 20 : af.id === 'blackhawk' ? 17 : 12;
     e.downwash.active = fm.rpm > 0.3 && !h.crashed;
     e.downwash.x = fm.pos.x;
     e.downwash.y = fm.pos.y;
@@ -919,7 +932,7 @@ export class Game {
         const sp = this.rng.range(8, 18) * inten;
         e.smoke.emit({
           x,
-          y: this.world.terrain.surfaceAt(x, z) + 0.4,
+          y: this.flightEnv.surfaceAt(x, z, fm.pos.y) + 0.4,
           z,
           vx: Math.cos(a) * sp + this.wind.x,
           vy: this.rng.range(0.5, 3),

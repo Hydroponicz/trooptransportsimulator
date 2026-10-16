@@ -155,6 +155,8 @@ export function inShape(b: AABB, p: THREE.Vector3, margin = 0): boolean {
 /** Static structures, bucketed in a coarse grid: a bounding box each, and the real shape where known. */
 export class ColliderSet {
   private grid = new Map<number, AABB[]>();
+  /** Highest top in each cell, for skipping points above everything. */
+  private tops = new Map<number, number>();
   count = 0;
 
   private key(cx: number, cz: number) {
@@ -169,6 +171,7 @@ export class ColliderSet {
         let arr = this.grid.get(k);
         if (!arr) this.grid.set(k, (arr = []));
         arr.push(b);
+        this.tops.set(k, Math.max(this.tops.get(k) ?? -Infinity, b.maxY));
       }
   }
 
@@ -206,6 +209,11 @@ export class ColliderSet {
           seen.add(b);
           yield b;
         }
+  }
+
+  /** The highest structure top in the grid cell at (x, z) (-Infinity if none): nothing is solid above it. */
+  ceilingAt(x: number, z: number): number {
+    return this.tops.get(this.key(Math.floor(x / CELL), Math.floor(z / CELL))) ?? -Infinity;
   }
 
   /** Returns the structure containing p (with margin), if any. */

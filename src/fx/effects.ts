@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { ParticleSystem, type Downwash } from './particles';
-import { smokeSpriteTexture, softSpriteTexture } from '../util/textures';
+import { ParticleSystem, type Downwash, type ParticleEnv } from './particles';
+import { smokeAtlasTexture, softSpriteTexture } from '../util/textures';
+import { SUN_DIR } from '../world/look';
 import type { RNG } from '../util/noise';
 
 interface Tracer {
@@ -20,6 +21,9 @@ const SMOKE_COLORS: Record<string, [number, number, number]> = {
   purple: [0.6, 0.3, 0.85],
   white: [0.9, 0.9, 0.88],
 };
+/** Most burning wrecks smoking at once (the nearest). */
+const MAX_PLUMES = 12;
+
 export type SmokeColor = keyof typeof SMOKE_COLORS;
 
 export interface SmokeEmitter {
@@ -31,6 +35,12 @@ export interface SmokeEmitter {
   rise: number;
   acc: number;
   dark: boolean;
+  /** signal: coloured smoke; plume: a burning wreck's fire and smoke column; trail: smoke streaming from something on fire in flight. */
+  kind: 'signal' | 'plume' | 'trail';
+  /** Size of the fire (plumes), 0.4..1.6. */
+  scale: number;
+  /** Where a moving emitter was last frame, so a trail is laid along the path. */
+  last: THREE.Vector3 | null;
 }
 
 /** All transient visual effects: smoke, dust, fire, tracers, explosions, flashes. */
@@ -45,12 +55,20 @@ export class Effects {
   private flash: THREE.PointLight;
   private flashT = 0;
   emitters: SmokeEmitter[] = [];
-  downwash: Downwash = { active: false, x: 0, y: 0, z: 0, ground: 0, strength: 0 };
+  downwash: Downwash = { active: false, x: 0, y: 0, z: 0, ground: 0, strength: 0, radius: 8, vi: 16 };
   wind = new THREE.Vector3();
+  /** What smoke collides with (set once the world exists). */
+  env: ParticleEnv | null = null;
+  /** Scale on emission rates (graphics quality). */
+  density = 1;
+  private time = 0;
+  private rankT = 0;
+  private livePlumes = new Set<SmokeEmitter>();
 
   constructor(private rng: RNG) {
-    this.smoke = new ParticleSystem(4000, smokeSpriteTexture(), false);
-    this.fire = new ParticleSystem(1500, softSpriteTexture(), true);
+    this.smoke = new ParticleSystem(9000, smokeAtlasTexture(), false, { lit: true, cells: 2, collide: true });
+    this.fire = new ParticleSystem(2500, softSpriteTexture(), true);
+    this.smoke.sunDir.copy(SUN_DIR);
     this.smoke.points.renderOrder = 5;
     this.fire.points.renderOrder = 6;
     this.group.add(this.smoke.points, this.fire.points);
@@ -126,8 +144,9 @@ export class Effects {
         alpha: 0.85,
         fadeIn: 0.05,
         drag: 1.2,
-        buoyancy: 1.5,
+        buoyancy: 2.5,
         wash: 0.5,
+        heat: 0.9,
       });
     }
     // Dirt kicked up.
@@ -148,6 +167,7 @@ export class Effects {
         alpha: 0.9,
         drag: 0.6,
         buoyancy: -12,
+        turb: 0.3,
       });
     }
     if (flash) {
@@ -199,11 +219,20 @@ export class Effects {
     });
   }
 
-  addEmitter(pos: THREE.Vector3, kind: SmokeColor | 'burning', rate?: number): SmokeEmitter {
+  /**
+   * Smoke from a spot. 'burning' is a burning wreck: flames, and a column of
+   * dark smoke that climbs hundreds of metres, greying as it cools and leaning
+   * downwind (rate sets its size: 7 is a tank). 'trail' follows its `pos`
+   * (keep it updated) laying a smoke trail, for an aircraft going down.
+   */
+  addEmitter(pos: THREE.Vector3, kind: SmokeColor | 'burning' | 'trail', rate?: number): SmokeEmitter {
+    const base = { pos: pos.clone(), acc: 0, last: null };
     const e: SmokeEmitter =
       kind === 'burning'
-        ? { pos: pos.clone(), rate: rate ?? 6, color: [0.12, 0.11, 0.1], size: 9, life: 22, rise: 5, acc: 0, dark: true }
-        : { pos: pos.clone(), rate: rate ?? 22, color: SMOKE_COLORS[kind], size: 2.2, life: 9, rise: 1.6, acc: 0, dark: false };
+        ?{ ...base, kind: 'plume', rate: 4.5, color: [0.1, 0.092, 0.085], size: 5, life: 85, rise: 8, dark: true, scale: THREE.MathUtils.clamp((rate ?? 6) / 7, 0.45, 1.6) }
+        : kind === 'trail'
+          ? { ...base, kind: 'trail', rate: rate ?? 40, color: [0.08, 0.075, 0.07], size: 3.5, life: 14, rise: 1, dark: true, scale: 1 }
+          : { ...base, kind: 'signal', rate: rate ?? 22, color: SMOKE_COLORS[kind], size: 2, life: 15, rise: 1.6, dark: false, scale: 1 };
     this.emitters.push(e);
     return e;
   }
@@ -214,56 +243,166 @@ export class Effects {
     if (i >= 0) this.emitters.splice(i, 1);
   }
 
-  update(dt: number, camPos: THREE.Vector3) {
+  private emitPlume(e: SmokeEmitter, far: boolean) {
     const r = this.rng;
+    const s = e.scale;
+    const grow = far ? 1.5 : 1;
+    const [cr, cg, cb] = e.color;
+    const life = e.life * r.range(0.8, 1.15) * (0.75 + 0.25 * s);
+    this.smoke.emit({
+      x: e.pos.x + r.gauss() * 1.2 * s,
+      y: e.pos.y + r.range(0, 2),
+      z: e.pos.z + r.gauss() * 1.2 * s,
+      vx: this.wind.x * 0.4 + r.gauss() * 0.8,
+      vy: e.rise * (0.8 + 0.3 * s) + r.range(0, 3),
+      vz: this.wind.z * 0.4 + r.gauss() * 0.8,
+      life,
+      size0: e.size * s * grow,
+      size1: (60 + 50 * s) * grow * r.range(0.8, 1.2),
+      r: cr,
+      g: cg,
+      b: cb,
+      r1: 0.74,
+      g1: 0.7,
+      b1: 0.66,
+      alpha: far ? 0.7 : 0.55,
+      fadeIn: 0.02,
+      fadeOut: 0.45,
+      drag: 0.15,
+      buoyancy: 1.4 + 0.7 * s,
+      wash: 0.6,
+      heat: 0.6,
+      turb: 1.4,
+    });
+  }
+
+  private emitFlame(e: SmokeEmitter) {
+    const r = this.rng;
+    const s = e.scale;
+    this.fire.emit({
+      x: e.pos.x + r.gauss() * 1.3 * s,
+      y: e.pos.y - 0.8 + r.range(0, 0.6),
+      z: e.pos.z + r.gauss() * 1.3 * s,
+      vx: this.wind.x * 0.3,
+      vy: r.range(3, 7) * (0.7 + 0.3 * s),
+      vz: this.wind.z * 0.3,
+      life: r.range(0.5, 1.3),
+      size0: r.range(3.5, 6.5) * s,
+      size1: 1.5 * s,
+      r: 1.6,
+      g: 0.75,
+      b: 0.25,
+      r1: 1.1,
+      g1: 0.3,
+      b1: 0.06,
+      alpha: 0.85,
+      fadeIn: 0.08,
+      drag: 1.5,
+      buoyancy: 4,
+      turb: 1.5,
+    });
+  }
+
+  update(dt: number, camera: THREE.Camera) {
+    const r = this.rng;
+    const camPos = camera.position;
+    this.time += dt;
+    // Only the nearest plumes (bigger fires count as nearer) are kept going, so the pool lasts.
+    this.rankT -= dt;
+    if (this.rankT <= 0) {
+      this.rankT = 0.5;
+      const plumes = this.emitters.filter((e) => e.kind === 'plume');
+      plumes.sort((a, b) => a.pos.distanceTo(camPos) / a.scale - b.pos.distanceTo(camPos) / b.scale);
+      this.livePlumes = new Set(plumes.slice(0, Math.round(MAX_PLUMES * Math.max(0.5, this.density))));
+    }
     for (const e of this.emitters) {
       const d = e.pos.distanceTo(camPos);
-      if (d > 7000) continue;
-      e.acc += e.rate * dt * (d > 3000 ? 0.3 : 1);
-      while (e.acc >= 1) {
+      if (e.kind === 'plume') {
+        if (!this.livePlumes.has(e)) continue;
+        // Columns are seen from far off; past 3 km they are drawn with fewer, bigger puffs.
+        if (d > 10000) continue;
+        const far = d > 3000;
+        e.acc += e.rate * dt * (far ? 0.45 : 1) * this.density * (0.7 + 0.3 * e.scale);
+        while (e.acc >= 1) {
+          e.acc -= 1;
+          this.emitPlume(e, far);
+        }
+        if (d < 2500) {
+          const flames = 22 * e.scale * dt * this.density;
+          for (let k = 0; k < Math.floor(flames) + (r.chance(flames % 1) ? 1 : 0); k++) this.emitFlame(e);
+        }
+        continue;
+      }
+      if (d > 7000) {
+        e.last = null;
+        continue;
+      }
+      e.acc += e.rate * dt * (d > 3000 ? 0.3 : 1) * (e.kind === 'signal' ? 1 : this.density);
+      const from = e.last ?? e.pos;
+      const count = Math.floor(e.acc);
+      for (let k = 0; k < count; k++) {
         e.acc -= 1;
+        const f = (k + r.next()) / Math.max(1, count);
         const [cr, cg, cb] = e.color;
+        const x = from.x + (e.pos.x - from.x) * f;
+        const y = from.y + (e.pos.y - from.y) * f;
+        const z = from.z + (e.pos.z - from.z) * f;
+        if (e.kind === 'trail') {
+          this.smoke.emit({
+            x: x + r.gauss() * 0.6,
+            y: y + r.gauss() * 0.6,
+            z: z + r.gauss() * 0.6,
+            vx: r.gauss() * 1.5,
+            vy: r.gauss() * 1.5,
+            vz: r.gauss() * 1.5,
+            life: e.life * r.range(0.8, 1.2),
+            size0: e.size,
+            size1: e.size * 7,
+            r: cr,
+            g: cg,
+            b: cb,
+            r1: 0.34,
+            g1: 0.33,
+            b1: 0.32,
+            alpha: 0.8,
+            fadeIn: 0.01,
+            fadeOut: 0.5,
+            drag: 0.5,
+            buoyancy: 0.8,
+            heat: 1,
+          });
+          if (r.chance(0.6)) this.fire.emit({ x, y, z, vx: r.gauss() * 2, vy: r.gauss() * 2, vz: r.gauss() * 2, life: r.range(0.2, 0.5), size0: 4.5, size1: 1.5, r: 1.7, g: 0.8, b: 0.3, alpha: 0.9, fadeIn: 0.02, drag: 1 });
+          continue;
+        }
         this.smoke.emit({
-          x: e.pos.x + r.gauss() * 0.4,
-          y: e.pos.y,
-          z: e.pos.z + r.gauss() * 0.4,
-          vx: this.wind.x * 0.6 + r.gauss() * 0.6,
+          x: x + r.gauss() * 0.25,
+          y: y + 0.2,
+          z: z + r.gauss() * 0.25,
+          vx: this.wind.x * 0.5 + r.gauss() * 0.7,
           vy: e.rise + r.range(0, 1.5),
-          vz: this.wind.z * 0.6 + r.gauss() * 0.6,
+          vz: this.wind.z * 0.5 + r.gauss() * 0.7,
           life: e.life * r.range(0.8, 1.2),
           size0: e.size,
-          size1: e.dark ? e.size * 4 : e.size * 6,
+          size1: e.size * 6.5,
           r: cr,
           g: cg,
           b: cb,
-          r1: e.dark ? 0.35 : cr * 0.9 + 0.1,
-          g1: e.dark ? 0.34 : cg * 0.9 + 0.1,
-          b1: e.dark ? 0.32 : cb * 0.9 + 0.1,
-          alpha: e.dark ? 0.7 : 0.85,
-          fadeIn: 0.04,
-          drag: 0.25,
-          buoyancy: e.dark ? 0.8 : 0.15,
+          r1: cr * 0.8 + 0.1,
+          g1: cg * 0.8 + 0.1,
+          b1: cb * 0.8 + 0.1,
+          alpha: 0.72,
+          fadeIn: 0.03,
+          fadeOut: 0.55,
+          drag: 0.6,
+          buoyancy: 0.35,
           wash: 1,
+          turb: 0.8,
         });
-        if (e.dark && r.chance(0.35))
-          this.fire.emit({
-            x: e.pos.x + r.gauss() * 1.2,
-            y: e.pos.y - 0.5,
-            z: e.pos.z + r.gauss() * 1.2,
-            vy: r.range(2, 5),
-            life: r.range(0.4, 0.9),
-            size0: 3,
-            size1: 1.5,
-            r: 1.5,
-            g: 0.7,
-            b: 0.2,
-            alpha: 0.9,
-            fadeIn: 0.05,
-          });
       }
+      e.last = e.kind === 'trail' ? (e.last ?? new THREE.Vector3()).copy(e.pos) : null;
     }
-    this.smoke.update(dt, this.downwash);
-    this.fire.update(dt, null);
+    this.smoke.update(dt, { dw: this.downwash, wind: this.wind, camera, env: this.env, time: this.time });
+    this.fire.update(dt, { dw: null, wind: this.wind, camera, env: null, time: this.time });
 
     // Tracers.
     const tp = this.tracerPos;

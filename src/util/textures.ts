@@ -310,3 +310,167 @@ export function chainlinkTexture(): THREE.Texture {
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
+
+/**
+ * Billowing smoke puffs, four variants in a 2×2 atlas. Each is a cluster of
+ * overlapping round billows roughened with noise: RGB holds the surface
+ * normal (x right, y up, z toward the viewer, 0..1) for lighting, A the
+ * density. Kept as raw data so the colour isn't premultiplied away at the
+ * thin edges.
+ */
+export function smokeAtlasTexture(): THREE.Texture {
+  const C = 256;
+  const S = C * 2;
+  const data = new Uint8Array(S * S * 4);
+  const n = new Noise2D(4177);
+  let seed = 91;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const h = new Float32Array(C * C);
+  for (let cell = 0; cell < 4; cell++) {
+    const ox = (cell % 2) * C;
+    const oy = Math.floor(cell / 2) * C;
+    // Billows: [x, y, z, r] in cell units (-1..1).
+    const bl: number[][] = [[0, -0.05, 0, 0.5]];
+    const count = 7 + cell * 2;
+    for (let k = 0; k < count; k++) {
+      const a = rnd() * Math.PI * 2;
+      const r = 0.12 + rnd() * 0.24;
+      const d = rnd() * (0.9 - r) * 0.85;
+      bl.push([Math.cos(a) * d, Math.sin(a) * d, (rnd() - 0.5) * 0.2, r]);
+    }
+    for (let y = 0; y < C; y++)
+      for (let x = 0; x < C; x++) {
+        const px = (x + 0.5) / C * 2 - 1;
+        const py = (y + 0.5) / C * 2 - 1;
+        let top = 0;
+        for (const [bx, by, bz, br] of bl) {
+          const d2 = (px - bx) ** 2 + (py - by) ** 2;
+          if (d2 < br * br) top = Math.max(top, bz + Math.sqrt(br * br - d2));
+        }
+        const rr = Math.hypot(px, py);
+        const edge = Math.max(0, Math.min(1, (0.98 - rr) / 0.18));
+        const nz = n.fbm(px * 3.1 + cell * 7, py * 3.1, 4) * 0.5 + n.fbm(px * 9 + cell * 3, py * 9, 2) * 0.18;
+        h[y * C + x] = Math.max(0, top * (1 + nz * 0.55)) * edge;
+      }
+    for (let y = 0; y < C; y++)
+      for (let x = 0; x < C; x++) {
+        const v = h[y * C + x];
+        const hx = h[y * C + Math.min(C - 1, x + 1)] - h[y * C + Math.max(0, x - 1)];
+        const hy = h[Math.min(C - 1, y + 1) * C + x] - h[Math.max(0, y - 1) * C + x];
+        // Gradient over 2 px in cell units: 2 / (C/2).
+        const s = C / 4;
+        let nx = -hx * s;
+        let ny = -hy * s;
+        let nz = 1;
+        const l = Math.hypot(nx, ny, nz);
+        nx /= l;
+        ny /= l;
+        nz /= l;
+        const a = Math.min(1, Math.pow(Math.min(1, v / 0.42), 0.8));
+        const i = ((oy + y) * S + ox + x) * 4;
+        data[i] = (nx * 0.5 + 0.5) * 255;
+        data[i + 1] = (ny * 0.5 + 0.5) * 255;
+        data[i + 2] = (nz * 0.5 + 0.5) * 255;
+        data[i + 3] = a * 255;
+      }
+  }
+  const tex = new THREE.DataTexture(data, S, S, THREE.RGBAFormat);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/**
+ * Tileable 3D cloud noise (64³): R is Perlin-Worley (soft value noise carved
+ * by inverted cellular noise: the billowy shape of cumulus), G a higher
+ * frequency cellular fbm for eroding the edges into wisps.
+ */
+export function cloudNoiseTexture(): THREE.Data3DTexture {
+  const S = 64;
+  const data = new Uint8Array(S * S * S * 2);
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  // Value-noise lattices with wrap-around for each period.
+  const lattice = (P: number) => {
+    const a = new Float32Array(P * P * P);
+    for (let i = 0; i < a.length; i++) a[i] = rnd();
+    return a;
+  };
+  const value = (lat: Float32Array, P: number, x: number, y: number, z: number) => {
+    const fx = x * P;
+    const fy = y * P;
+    const fz = z * P;
+    const ix = Math.floor(fx);
+    const iy = Math.floor(fy);
+    const iz = Math.floor(fz);
+    const tx = fx - ix;
+    const ty = fy - iy;
+    const tz = fz - iz;
+    const sx = tx * tx * (3 - 2 * tx);
+    const sy = ty * ty * (3 - 2 * ty);
+    const sz = tz * tz * (3 - 2 * tz);
+    const at = (i: number, j: number, k: number) => lat[(((k % P) + P) % P) * P * P + (((j % P) + P) % P) * P + (((i % P) + P) % P)];
+    const l = (a: number, b: number, t: number) => a + (b - a) * t;
+    return l(
+      l(l(at(ix, iy, iz), at(ix + 1, iy, iz), sx), l(at(ix, iy + 1, iz), at(ix + 1, iy + 1, iz), sx), sy),
+      l(l(at(ix, iy, iz + 1), at(ix + 1, iy, iz + 1), sx), l(at(ix, iy + 1, iz + 1), at(ix + 1, iy + 1, iz + 1), sx), sy),
+      sz,
+    );
+  };
+  const points = (F: number) => {
+    const a = new Float32Array(F * F * F * 3);
+    for (let i = 0; i < a.length; i++) a[i] = rnd();
+    return a;
+  };
+  /** 1 at a feature point, falling to 0 a cell away (wrapping). */
+  const worley = (pts: Float32Array, F: number, x: number, y: number, z: number) => {
+    const fx = x * F;
+    const fy = y * F;
+    const fz = z * F;
+    const cx = Math.floor(fx);
+    const cy = Math.floor(fy);
+    const cz = Math.floor(fz);
+    let best = 9;
+    for (let k = -1; k <= 1; k++)
+      for (let j = -1; j <= 1; j++)
+        for (let i = -1; i <= 1; i++) {
+          const X = cx + i;
+          const Y = cy + j;
+          const Z = cz + k;
+          const w = ((((Z % F) + F) % F) * F * F + (((Y % F) + F) % F) * F + (((X % F) + F) % F)) * 3;
+          const dx = X + pts[w] - fx;
+          const dy = Y + pts[w + 1] - fy;
+          const dz = Z + pts[w + 2] - fz;
+          const d = dx * dx + dy * dy + dz * dz;
+          if (d < best) best = d;
+        }
+    return 1 - Math.min(1, Math.sqrt(best));
+  };
+  const L = [4, 8, 16, 32].map((P) => [lattice(P), P] as const);
+  const W = [4, 8, 16, 32].map((F) => [points(F), F] as const);
+  for (let z = 0; z < S; z++)
+    for (let y = 0; y < S; y++)
+      for (let x = 0; x < S; x++) {
+        const u = x / S;
+        const v = y / S;
+        const w = z / S;
+        const perlin = value(L[0][0], 4, u, v, w) * 0.55 + value(L[1][0], 8, u, v, w) * 0.28 + value(L[2][0], 16, u, v, w) * 0.17;
+        const wLow = worley(W[0][0], 4, u, v, w) * 0.625 + worley(W[1][0], 8, u, v, w) * 0.25 + worley(W[2][0], 16, u, v, w) * 0.125;
+        // Perlin-Worley: remap the soft noise with the cellular as its floor.
+        const pw = Math.max(0, Math.min(1, (perlin - (wLow - 1)) / (1 - (wLow - 1)) - 0.25) / 0.75);
+        const wHigh = worley(W[1][0], 8, u, v, w) * 0.5 + worley(W[2][0], 16, u, v, w) * 0.3 + worley(W[3][0], 32, u, v, w) * 0.2;
+        const i = (z * S * S + y * S + x) * 2;
+        data[i] = Math.max(0, Math.min(255, pw * 255));
+        data[i + 1] = Math.max(0, Math.min(255, wHigh * 255));
+      }
+  const tex = new THREE.Data3DTexture(data, S, S, S);
+  tex.format = THREE.RGFormat;
+  tex.wrapS = tex.wrapT = tex.wrapR = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.unpackAlignment = 1;
+  tex.needsUpdate = true;
+  return tex;
+}

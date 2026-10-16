@@ -24,6 +24,10 @@ export interface Profile {
   clutterScale: number;
   /** Scale on how far buildings, forests and roadside stay drawn. */
   farScale: number;
+  /** Scale on smoke emission and how far from the camera smoke flows round buildings. */
+  smoke: number;
+  /** Steps marched through the cloud layer per sky texel (0 = flat painted clouds). */
+  cloudSteps: number;
 }
 
 export const PROFILES: Record<Quality, Profile> = {
@@ -40,6 +44,8 @@ export const PROFILES: Record<Quality, Profile> = {
     lodScale: 1,
     clutterScale: 1,
     farScale: 1,
+    smoke: 1,
+    cloudSteps: 48,
   },
   medium: {
     pixelRatio: 1,
@@ -54,6 +60,8 @@ export const PROFILES: Record<Quality, Profile> = {
     lodScale: 0.6,
     clutterScale: 0.7,
     farScale: 0.85,
+    smoke: 0.75,
+    cloudSteps: 28,
   },
   low: {
     pixelRatio: 0.75,
@@ -69,6 +77,8 @@ export const PROFILES: Record<Quality, Profile> = {
     lodScale: 0.38,
     clutterScale: 0.5,
     farScale: 0.7,
+    smoke: 0.5,
+    cloudSteps: 0,
   },
 };
 

@@ -322,7 +322,9 @@ a one-click way back. Firefox and Safari don't support keyboard lock.
 browser. High is the full look. Medium renders at up to 1× pixel ratio, with
 a smaller, harder-edged shadow map over a smaller area, thinner and shorter
 grass, crops only within 70 m, and trees, buildings and small props swapping
-to their far versions or dropping out sooner. Low also renders at 0.75×,
+to their far versions or dropping out sooner, coarser clouds, and three
+quarters of the smoke. Low also renders at 0.75×, paints the clouds flat,
+halves the smoke,
 turns off antialiasing, removes the crop plants (the field rows stay in the
 ground) and keeps shadows only for the aircraft, vehicles and people near
 you. Auto picks a level from the GPU name (integrated Intel and software
@@ -464,11 +466,28 @@ A sunny summer day in eastern Europe:
 
 - **Light and grade:** warm sun, a blue skylight, and ACES tone mapping with
   a light grade on top (a little more saturation, an S-curve for contrast).
-- **Sky and haze:** fair-weather cumulus drift across a deep blue sky. The
-  haze is a height fog, thick in the valleys and thin over the peaks, and it
+- **Sky and clouds:** volumetric cumulus between 1.7 and 3 km, raymarched
+  through 3D Perlin-Worley noise. Each cloud is shaped by a coverage field
+  (taller towers where it is thick), lit by a short march toward the sun, and
+  has bright silver edges when the sun is behind it. Bases are flat and grey,
+  tops are cauliflower-white, and distant clouds sink into the horizon haze.
+  The clouds drift with the upper wind and their shadows move across the land
+  under them. The sky is a deep blue, richest at right angles to the sun,
+  with a soft glow round the sun's disc, which clouds pass in front of.
+- **Haze:** a height fog, thick in the valleys and thin over the peaks, that
   warms toward the sun. Distant ridges read as layers of blue rather than a
   white wall. Two rings of far mountain ranges sit on the horizon beyond the
   map.
+- **Smoke:** lit, billowing puffs. They turn as they rise and are shaded by
+  the sun, the sky above and the ground below, with fire glow on young
+  smoke. Smoke drifts with the wind (stronger with height), swirls, and is
+  driven by the rotor's wake: down through the disc, then out across the
+  ground or roof below. It slides along the ground and round buildings rather
+  than through them, so wash pushes signal smoke off a roof and round the
+  stair tower, not into it. Burning wrecks (tanks, downed jets and
+  helicopters, the Humvee) have flames at the base and a column of black,
+  oily smoke that climbs several hundred metres, greys as it cools and leans
+  downwind. A jet going down trails fire and smoke.
 - **Land:** meadow greens, drier rises and dark forest floor, with rock and
   alpine grass on the heights. Around each village is a patchwork of wheat,
   barley, young crops, rapeseed, sunflowers and ploughed earth, drawn per
@@ -544,6 +563,16 @@ The theater is big, so most of it is drawn cheaply or not at all:
   for cars kilometres away, swaps to a single merged mesh beyond 220 m and
   disappears past
   4 km. Static parts of the helicopter and Humvee are merged by material.
+- **Clouds** are raymarched into a sky panorama, not for every screen pixel
+  every frame: one band of it per frame (all of it within a fraction of a
+  second, four bands a frame after a teleport). High uses 4096×1024 and 48
+  steps, Medium 2048×512 and 28 steps. Low paints the same cloud field flat
+  instead of marching through it.
+- **Smoke** is one draw call, sorted back to front with a counting sort.
+  Only particles within 900 m of the camera (less on lower settings) test
+  for buildings, and only below the tallest roof in their 64 m cell. Ground
+  heights are cached per particle. Only the 12 nearest burning wrecks smoke,
+  and those past 3 km use fewer, bigger puffs.
 - The camera's far plane stops just past the fog.
 
 World generation logs its phase timings to the console.
@@ -577,7 +606,7 @@ src/
   battle/            campaign sectors, materialized battles, trenches, AI aircraft
   game/career.ts     ranks, upgrades, save data
   world/             terrain, front line, sites, towns/cities/villages + buildings, farms, props + surfaces, roads/bridges, roadside, forests, grass + crops, rivers, sky + look (fog, grade)
-  fx/                particles (dust, smoke, fire), tracers, explosions
+  fx/                particles (lit smoke that flows round buildings, dust, fire, plumes), tracers, explosions
   audio.ts           synthesized rotor, turbine, wind and effects audio
   ui/                HUD, minimap and theater map, terminal and dialogs, controller menu navigation
   world/colliders.ts structure collisions: a grid of bounding boxes, each with its prototype's solid parts

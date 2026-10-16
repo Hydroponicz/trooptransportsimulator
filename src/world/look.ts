@@ -27,6 +27,36 @@ export const SUN_COLOR = new THREE.Color(0xfff0d8);
 export const FOG_SCALE_HEIGHT = 520;
 export const FOG_RANGE = 11000;
 
+/** The cumulus layer: cloud base and tops (m). */
+export const CLOUD_BASE = 1700;
+export const CLOUD_TOP = 3000;
+/** How far the cloud field has drifted (m), shared by the sky and every lit material's cloud shadows. */
+export const CLOUD_SHIFT = { x: 0, y: 0 };
+
+/**
+ * Where there is cloud overhead: 0..1 coverage at a point of the layer (xz
+ * plus drift). Shared by the cloud raymarch and the ground's cloud shadows so
+ * the shadows sit under the clouds.
+ */
+export const CLOUD_COVER_GLSL = /* glsl */ `
+float cloudHash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float cloudVNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(cloudHash(i), cloudHash(i + vec2(1.0, 0.0)), u.x), mix(cloudHash(i + vec2(0.0, 1.0)), cloudHash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float cloudCover(vec2 q) {
+  vec2 p = q * (1.0 / 3800.0);
+  float n = cloudVNoise(p) * 0.55 + cloudVNoise(p * 2.13 + 7.1) * 0.3 + cloudVNoise(p * 4.37 + 3.3) * 0.15;
+  return smoothstep(0.36, 0.74, n);
+}
+`;
+
 const v3 = (v: THREE.Vector3) => `vec3(${v.x.toFixed(5)}, ${v.y.toFixed(5)}, ${v.z.toFixed(5)})`;
 const c3 = (c: THREE.Color) => `vec3(${c.r.toFixed(5)}, ${c.g.toFixed(5)}, ${c.b.toFixed(5)})`;
 
@@ -75,6 +105,32 @@ chunks.fog_pars_fragment = /* glsl */ `
   }
 #endif
 `;
+
+// Cloud shadows: the sun is dimmed where the ray toward it passes through the cloud layer.
+const cloudShadowUniform = { value: CLOUD_SHIFT };
+(THREE.UniformsLib.fog as Record<string, THREE.IUniform>).cloudShift = cloudShadowUniform;
+for (const k of Object.keys(THREE.ShaderLib)) {
+  const u = (THREE.ShaderLib as Record<string, { uniforms: Record<string, THREE.IUniform> }>)[k].uniforms;
+  if (u.fogColor) u.cloudShift = cloudShadowUniform;
+}
+chunks.fog_pars_fragment += /* glsl */ `
+#ifdef USE_FOG
+  uniform vec2 cloudShift;
+  ${CLOUD_COVER_GLSL}
+  float cloudShadow(vec3 wp) {
+    float mid = ${((CLOUD_BASE + CLOUD_TOP) / 2).toFixed(1)};
+    vec2 q = wp.xz + ${v3(SUN_DIR)}.xz * ((mid - wp.y) / ${SUN_DIR.y.toFixed(5)}) + cloudShift;
+    return 1.0 - 0.62 * smoothstep(0.08, 0.55, cloudCover(q));
+  }
+#endif
+`;
+chunks.lights_fragment_begin = chunks.lights_fragment_begin.replace(
+  'getDirectionalLightInfo( directionalLight, directLight );',
+  /* glsl */ `getDirectionalLightInfo( directionalLight, directLight );
+    #ifdef USE_FOG
+      if ( UNROLLED_LOOP_INDEX == 0 ) directLight.color *= cloudShadow( cameraPosition + vFogRay );
+    #endif`,
+);
 
 chunks.fog_fragment = /* glsl */ `
 #ifdef USE_FOG
