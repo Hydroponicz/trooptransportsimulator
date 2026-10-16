@@ -830,13 +830,33 @@ const COLLIDE: Record<ProtoName, boolean> = {
   signboard: true,
 };
 
+/** Floats per placement: x, y, z, turn, scale x/y/z, colour (0xRRGGBB, or -1 for none). */
+const STRIDE = 8;
+
 interface Batch {
   /** Simplified geometry for distant viewing, if this prototype has one. */
   lo?: THREE.BufferGeometry;
   geo: THREE.BufferGeometry;
-  mats: THREE.Matrix4[];
-  colors: (THREE.Color | null)[];
-  boxes: (AABB | null)[];
+  /** Placements, STRIDE floats each (compact: there can be millions on a big map). */
+  data: Float32Array;
+  n: number;
+  /** Collision boxes, for the prototypes that collide (same order as data). */
+  boxes: (AABB | null)[] | null;
+}
+
+/** One prototype's placements in one cell, drawn only while the camera is near enough. */
+interface CellEntry {
+  b: Batch;
+  name: ProtoName;
+  idx: Int32Array;
+  x0: number;
+  z0: number;
+  size: number;
+  view: number;
+  hi: THREE.InstancedMesh | null;
+  lo: THREE.InstancedMesh | null;
+  /** Matrices handed to the shadow casters while the full version is shown. */
+  mats: THREE.Matrix4[] | null;
 }
 
 /** Collects structure placements and emits one InstancedMesh per prototype. */
@@ -881,6 +901,18 @@ export class Props {
   private batches = new Map<ProtoName, Batch>();
   private material = withSurfaces(new THREE.MeshLambertMaterial({ vertexColors: true }));
   private tmpBox = new THREE.Box3();
+  private tmpM = new THREE.Matrix4();
+  private group = new THREE.Group();
+  private cells: CellEntry[] = [];
+  /** Cells bucketed on a coarse grid, so streaming only looks at those round the camera. */
+  private cellGrid = new Map<number, CellEntry[]>();
+  private live = new Set<CellEntry>();
+  private planAt: THREE.Vector3 | null = null;
+  private jobs: { e: CellEntry; want: 'hi' | 'lo' | 'both' }[] = [];
+  private culler: DistanceCuller | null = null;
+  private shadows: ShadowCasters | undefined;
+  /** Placements made (after removals). */
+  count = 0;
 
   constructor(readonly colliders: ColliderSet) {}
 
@@ -888,21 +920,31 @@ export class Props {
     const sc = typeof scale === 'number' ? [scale, scale, scale] : scale;
     let b = this.batches.get(name);
     if (!b) {
-      b = { geo: buildProto(name), lo: HAS_LO.has(name) ? buildProtoLo(name) : undefined, mats: [], colors: [], boxes: [] };
+      b = { geo: buildProto(name), lo: HAS_LO.has(name) ? buildProtoLo(name) : undefined, data: new Float32Array(64 * STRIDE), n: 0, boxes: COLLIDE[name] ? [] : null };
       this.batches.set(name, b);
     }
-    const m = new THREE.Matrix4().compose(
-      new THREE.Vector3(x, y, z),
-      new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rotY),
-      new THREE.Vector3(sc[0], sc[1], sc[2]),
-    );
-    b.mats.push(m);
-    b.colors.push(color !== undefined ? new THREE.Color(color) : null);
-    let box: AABB | null = null;
-    if (COLLIDE[name]) {
+    if ((b.n + 1) * STRIDE > b.data.length) {
+      const d = new Float32Array(b.data.length * 2);
+      d.set(b.data);
+      b.data = d;
+    }
+    const o = b.n * STRIDE;
+    const D = b.data;
+    D[o] = x;
+    D[o + 1] = y;
+    D[o + 2] = z;
+    D[o + 3] = rotY;
+    D[o + 4] = sc[0];
+    D[o + 5] = sc[1];
+    D[o + 6] = sc[2];
+    D[o + 7] = color ?? -1;
+    b.n++;
+    this.count++;
+    if (b.boxes) {
+      const m = this.matrixOf(b, b.n - 1, this.tmpM);
       this.tmpBox.copy(b.geo.boundingBox!).applyMatrix4(m);
       const bb = this.tmpBox;
-      box = { minX: bb.min.x, minY: bb.min.y, minZ: bb.min.z, maxX: bb.max.x, maxY: bb.max.y, maxZ: bb.max.z, tag: name };
+      const box: AABB = { minX: bb.min.x, minY: bb.min.y, minZ: bb.min.z, maxX: bb.max.x, maxY: bb.max.y, maxZ: bb.max.z, tag: name };
       // The bounding box is only the broad test; the prototype's own parts, in its turned frame, decide.
       const solids = b.geo.userData.solids as Solid[] | undefined;
       if (solids?.length) {
@@ -910,25 +952,39 @@ export class Props {
         box.place = { x, y, z, c: Math.cos(rotY), s: Math.sin(rotY), isx: 1 / sc[0], isy: 1 / sc[1], isz: 1 / sc[2] };
       }
       this.colliders.add(box);
+      b.boxes.push(box);
     }
-    b.boxes.push(box);
+  }
+
+  private matrixOf(b: Batch, i: number, out: THREE.Matrix4) {
+    const D = b.data;
+    const o = i * STRIDE;
+    _q.setFromAxisAngle(_up, D[o + 3]);
+    return out.compose(_p.set(D[o], D[o + 1], D[o + 2]), _q, _sc.set(D[o + 4], D[o + 5], D[o + 6]));
   }
 
   /** Drop placements of a prototype that match (e.g. wall segments where a road passes). */
   removeWhere(name: ProtoName, fn: (x: number, z: number, box?: AABB) => boolean): number {
     const b = this.batches.get(name);
     if (!b) return 0;
-    let removed = 0;
-    for (let i = b.mats.length - 1; i >= 0; i--) {
-      const e = b.mats[i].elements;
-      const box = b.boxes[i];
-      if (!fn(e[12], e[14], box ?? undefined)) continue;
-      if (box) this.colliders.remove(box);
-      b.mats.splice(i, 1);
-      b.colors.splice(i, 1);
-      b.boxes.splice(i, 1);
-      removed++;
+    const D = b.data;
+    let w = 0;
+    for (let i = 0; i < b.n; i++) {
+      const box = b.boxes ? b.boxes[i] : null;
+      if (fn(D[i * STRIDE], D[i * STRIDE + 2], box ?? undefined)) {
+        if (box) this.colliders.remove(box);
+        continue;
+      }
+      if (w !== i) {
+        D.copyWithin(w * STRIDE, i * STRIDE, (i + 1) * STRIDE);
+        if (b.boxes) b.boxes[w] = box;
+      }
+      w++;
     }
+    const removed = b.n - w;
+    b.n = w;
+    if (b.boxes) b.boxes.length = w;
+    this.count -= removed;
     return removed;
   }
 
@@ -940,48 +996,143 @@ export class Props {
   }
 
   /**
-   * One instanced mesh per prototype per cell (0.8–2.4 km), so each can be frustum
-   * culled (and shadow-culled) and hidden by distance: clutter goes first,
-   * buildings and pylons stay visible out to the fog.
+   * Bucket every placement per prototype per cell (0.8–2.4 km). Nothing is
+   * drawn yet: stream() makes a cell's instanced mesh when the camera comes
+   * within its view distance (clutter goes first, buildings and pylons stay to
+   * the fog; buildings swap to their far version past LOD_NEAR) and frees it
+   * when the camera has gone.
    */
   build(culler: DistanceCuller, shadows?: ShadowCasters): THREE.Group {
-    const g = new THREE.Group();
-    const white = new THREE.Color(1, 1, 1);
+    this.culler = culler;
+    this.shadows = shadows;
     for (const [name, b] of this.batches) {
-      shadows?.add(b.geo, b.mats);
       // Small props only show within a kilometre or two, and buildings swap to their far
       // version at LOD_NEAR (sooner on lower graphics settings): finer cells let both cull tightly.
       const view = VIEW[name] ?? 4000;
       const CELLSZ = view < 4000 ? 800 : b.lo ? 1200 : 2400;
-      const cells = new Map<string, number[]>();
-      b.mats.forEach((m, i) => {
-        const e = m.elements;
-        const k = `${Math.floor(e[12] / CELLSZ)},${Math.floor(e[14] / CELLSZ)}`;
+      const cells = new Map<number, number[]>();
+      for (let i = 0; i < b.n; i++) {
+        const k = (Math.floor(b.data[i * STRIDE] / CELLSZ) + 1000) * 3000 + Math.floor(b.data[i * STRIDE + 2] / CELLSZ) + 1000;
         let arr = cells.get(k);
         if (!arr) cells.set(k, (arr = []));
         arr.push(i);
-      });
-      for (const idx of cells.values()) {
-        // Buildings with a far version: detailed up close, simplified beyond LOD_NEAR.
-        for (const lo of b.lo ? [false, true] : [false]) {
-          const mesh = new THREE.InstancedMesh(lo ? b.lo! : b.geo, this.material, idx.length);
-          mesh.name = lo ? `${name}:lo` : name;
-          idx.forEach((src, i) => {
-            mesh.setMatrixAt(i, b.mats[src]);
-            mesh.setColorAt(i, b.colors[src] ?? white);
-          });
-          // Shadows come from the near-caster copies (see shadows.ts) when those are in use.
-          mesh.castShadow = !shadows;
-          mesh.receiveShadow = true;
-          mesh.computeBoundingSphere();
-          g.add(mesh);
-          // Small props (seen out to a few km at most) thin out sooner on lower graphics settings.
-          if (!b.lo) culler.addMesh(mesh, view, 0, view < 4000 ? 'clutter' : 'far');
-          else if (lo) culler.addMesh(mesh, view, LOD_NEAR, 'far', 'lod');
-          else culler.addMesh(mesh, LOD_NEAR, 0, 'lod');
-        }
+      }
+      for (const [k, idx] of cells) {
+        const cz = (k % 3000) - 1000;
+        const cx = (k - (cz + 1000)) / 3000 - 1000;
+        const e: CellEntry = { b, name, idx: Int32Array.from(idx), x0: cx * CELLSZ, z0: cz * CELLSZ, size: CELLSZ, view, hi: null, lo: null, mats: null };
+        this.cells.push(e);
+        const gk = Math.floor((e.x0 + CELLSZ / 2) / GRID_CELL) * 100003 + Math.floor((e.z0 + CELLSZ / 2) / GRID_CELL);
+        let arr = this.cellGrid.get(gk);
+        if (!arr) this.cellGrid.set(gk, (arr = []));
+        arr.push(e);
       }
     }
-    return g;
+    return this.group;
+  }
+
+  private dist(e: CellEntry, cam: THREE.Vector3) {
+    const dx = Math.max(e.x0 - cam.x, 0, cam.x - (e.x0 + e.size));
+    const dz = Math.max(e.z0 - cam.z, 0, cam.z - (e.z0 + e.size));
+    return Math.hypot(dx, dz);
+  }
+
+  private makeMesh(e: CellEntry, lo: boolean) {
+    const b = e.b;
+    const mesh = new THREE.InstancedMesh(lo ? b.lo! : b.geo, this.material, e.idx.length);
+    mesh.name = lo ? `${e.name}:lo` : e.name;
+    const mats: THREE.Matrix4[] = [];
+    e.idx.forEach((src, i) => {
+      const m = this.matrixOf(b, src, lo ? this.tmpM : new THREE.Matrix4());
+      mesh.setMatrixAt(i, m);
+      const c = b.data[src * STRIDE + 7];
+      mesh.setColorAt(i, c < 0 ? _white : _c.setHex(c));
+      if (!lo) mats.push(m);
+    });
+    // Shadows come from the near-caster copies (see shadows.ts) when those are in use.
+    mesh.castShadow = !this.shadows;
+    mesh.receiveShadow = true;
+    mesh.computeBoundingSphere();
+    this.group.add(mesh);
+    if (!lo) {
+      this.shadows?.add(b.geo, mats);
+      e.mats = mats;
+    }
+    return mesh;
+  }
+
+  private free(e: CellEntry, which: 'hi' | 'lo') {
+    const m = which === 'hi' ? e.hi : e.lo;
+    if (!m) return;
+    this.group.remove(m);
+    m.dispose();
+    if (which === 'hi') {
+      if (e.mats) this.shadows?.remove(e.b.geo, e.mats);
+      e.mats = null;
+      e.hi = null;
+    } else e.lo = null;
+  }
+
+  /** What a cell should show at distance d: its full version, its far one, or nothing. */
+  private wanted(e: CellEntry, d: number, slack: number): { hi: boolean; lo: boolean } {
+    const sc = this.culler?.scales ?? { lod: 1, clutter: 1, far: 1 };
+    if (!e.b.lo) return { hi: d < e.view * (e.view < 4000 ? sc.clutter : sc.far) + slack, lo: false };
+    const near = LOD_NEAR * sc.lod;
+    return { hi: d < near + slack, lo: d >= near - slack && d < e.view * sc.far + slack };
+  }
+
+  /**
+   * Make the meshes of cells the camera has come near (nearest first, a few
+   * milliseconds a frame; Infinity does them all now) and free those it has
+   * left. A cell keeps what it shows until a little past the line, so one on
+   * the edge doesn't flicker.
+   */
+  stream(cam: THREE.Vector3, budgetMs = 2) {
+    if (!this.planAt || this.planAt.distanceToSquared(cam) > 40 * 40) {
+      this.planAt = (this.planAt ?? new THREE.Vector3()).copy(cam);
+      for (const e of [...this.live]) {
+        const w = this.wanted(e, this.dist(e, cam), 150);
+        if (!w.hi && e.hi) this.free(e, 'hi');
+        if (!w.lo && e.lo) this.free(e, 'lo');
+        if (!e.hi && !e.lo) this.live.delete(e);
+      }
+      const jobs: { e: CellEntry; want: 'hi' | 'lo' | 'both'; d: number }[] = [];
+      const R = MAX_VIEW * Math.max(1, this.culler?.scales.far ?? 1);
+      const g0x = Math.floor((cam.x - R) / GRID_CELL);
+      const g1x = Math.floor((cam.x + R) / GRID_CELL);
+      const g0z = Math.floor((cam.z - R) / GRID_CELL);
+      const g1z = Math.floor((cam.z + R) / GRID_CELL);
+      for (let gx = g0x; gx <= g1x; gx++)
+        for (let gz = g0z; gz <= g1z; gz++) {
+          const arr = this.cellGrid.get(gx * 100003 + gz);
+          if (!arr) continue;
+          for (const e of arr) {
+            const d = this.dist(e, cam);
+            const w = this.wanted(e, d, 0);
+            const needHi = w.hi && !e.hi;
+            const needLo = w.lo && !e.lo;
+            if (needHi || needLo) jobs.push({ e, want: needHi && needLo ? 'both' : needHi ? 'hi' : 'lo', d });
+          }
+        }
+      jobs.sort((a, b) => b.d - a.d);
+      this.jobs = jobs;
+    }
+    const deadline = performance.now() + budgetMs;
+    while (this.jobs.length && performance.now() < deadline) {
+      const { e, want } = this.jobs.pop()!;
+      if ((want === 'hi' || want === 'both') && !e.hi) e.hi = this.makeMesh(e, false);
+      if ((want === 'lo' || want === 'both') && !e.lo) e.lo = this.makeMesh(e, true);
+      this.live.add(e);
+    }
   }
 }
+
+/** Coarse grid for finding the cells round the camera, and the farthest any prototype is drawn. */
+const GRID_CELL = 2400;
+const MAX_VIEW = 7500;
+const _q = new THREE.Quaternion();
+const _up = new THREE.Vector3(0, 1, 0);
+const _p = new THREE.Vector3();
+const _sc = new THREE.Vector3();
+const _c = new THREE.Color();
+const _white = new THREE.Color(1, 1, 1);

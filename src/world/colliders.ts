@@ -176,13 +176,18 @@ export class ColliderSet {
   }
 
   remove(b: AABB) {
-    for (const [k, arr] of this.grid) {
-      const i = arr.indexOf(b);
-      if (i >= 0) {
-        arr.splice(i, 1);
-        if (!arr.length) this.grid.delete(k);
+    // Just the cells it was added to.
+    for (let cx = Math.floor(b.minX / CELL); cx <= Math.floor(b.maxX / CELL); cx++)
+      for (let cz = Math.floor(b.minZ / CELL); cz <= Math.floor(b.maxZ / CELL); cz++) {
+        const k = this.key(cx, cz);
+        const arr = this.grid.get(k);
+        if (!arr) continue;
+        const i = arr.indexOf(b);
+        if (i >= 0) {
+          arr.splice(i, 1);
+          if (!arr.length) this.grid.delete(k);
+        }
       }
-    }
     this.count--;
   }
 

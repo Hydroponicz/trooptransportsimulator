@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { circleIndex } from '../util/grid';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { RNG } from '../util/noise';
 import { chainlinkTexture, gravelTexture } from '../util/textures';
@@ -38,10 +39,15 @@ export function buildRoadside(
   rng: RNG,
 ): THREE.Group {
   const group = new THREE.Group();
-  const nearSite = (x: number, z: number, m: number) =>
-    sites.some((s) => Math.hypot(s.x - x, s.z - z) < s.radius + m) || towns.some((t) => Math.hypot(t.x - x, t.z - z) < t.r + m);
-  const hubDist = (x: number, z: number) =>
-    Math.min(...sites.filter((s) => s.kind === 'base' || s.kind === 'fob').map((s) => Math.hypot(s.x - x, s.z - z) - s.radius));
+  // Sites and towns, and the hubs (base, FOBs), bucketed so a check doesn't scan every one.
+  const circles = circleIndex([...sites.map((s) => ({ x: s.x, z: s.z, r: s.radius })), ...towns.map((t) => ({ x: t.x, z: t.z, r: t.r }))], 40);
+  const nearSite = (x: number, z: number, m: number) => circles(x, z, m);
+  const hubs = sites.filter((s) => s.kind === 'base' || s.kind === 'fob');
+  const hubDist = (x: number, z: number) => {
+    let best = Infinity;
+    for (const s of hubs) best = Math.min(best, Math.hypot(s.x - x, s.z - z) - s.radius);
+    return best;
+  };
   /** Is (x, z) clear of roads other than `pi` (by `m` metres past their shoulders)? */
   const clearOfOthers = (x: number, z: number, pi: number, m: number) => roads.distanceExcept(x, z, pi) > m;
 

@@ -6,6 +6,7 @@ import { Noise2D, RNG } from '../util/noise';
 import { ColliderSet } from './colliders';
 import { Frontline } from './frontline';
 import { Props } from './props';
+import { circleIndex } from '../util/grid';
 import { Roads, type RoadClass } from './roads';
 import { buildRoadside } from './roadside';
 import { buildSite, type Site, type SiteKind, type SiteDecor } from './sites';
@@ -29,6 +30,8 @@ export interface World {
   base: Site;
   colliders: ColliderSet;
   vegetation: Vegetation;
+  /** Buildings and props (drawn per cell near the camera). */
+  props: Props;
   roads: Roads;
   towns: Town[];
   /** Fenced industrial yards beside the roads. */
@@ -43,31 +46,6 @@ export interface World {
   farmland: Farmland;
   /** Near shadow casters for trees and buildings. */
   shadows: ShadowCasters;
-}
-
-/**
- * Circles (towns, yards...) bucketed in a 250 m grid: is (x, z) within r + m of
- * one? m may be up to `pad`. `test` replaces the round test (it must stay within r + pad).
- */
-function circleIndex<T extends { x: number; z: number; r: number }>(items: T[], pad: number, test?: (o: T, x: number, z: number, m: number) => boolean) {
-  const G = 250;
-  const grid = new Map<number, T[]>();
-  for (const o of items) {
-    const R = o.r + pad;
-    for (let cx = Math.floor((o.x - R) / G); cx <= Math.floor((o.x + R) / G); cx++)
-      for (let cz = Math.floor((o.z - R) / G); cz <= Math.floor((o.z + R) / G); cz++) {
-        const k = cx + 1000 + (cz + 1000) * 3000;
-        let arr = grid.get(k);
-        if (!arr) grid.set(k, (arr = []));
-        arr.push(o);
-      }
-  }
-  return (x: number, z: number, m: number) => {
-    const arr = grid.get(Math.floor(x / G) + 1000 + (Math.floor(z / G) + 1000) * 3000);
-    if (!arr) return false;
-    for (const o of arr) if (test ? test(o, x, z, m) : Math.hypot(o.x - x, o.z - z) < o.r + m) return true;
-    return false;
-  };
 }
 
 const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
@@ -356,7 +334,8 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
 
   onProgress?.('Grading roads');
   const roads = new Roads(terrain);
-  const nearSiteXZ = (x: number, z: number, m: number) => sites.some((st) => Math.hypot(st.x - x, st.z - z) < st.radius + m);
+  const siteCircles = circleIndex(sites.map((st) => ({ x: st.x, z: st.z, r: st.radius })), 30);
+  const nearSiteXZ = (x: number, z: number, m: number) => siteCircles(x, z, m);
   // Access roads: from inside each site out through its gate to a junction.
   const stubs = new Set<number>();
   for (const g of plan.gates) {
@@ -650,6 +629,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     base,
     colliders,
     vegetation,
+    props,
     roads,
     towns,
     enemies,

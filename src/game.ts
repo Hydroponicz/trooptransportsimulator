@@ -494,6 +494,7 @@ export class Game {
       this.world.terrain.stream(this.heli.fm.pos, Infinity);
       this.world.rivers.update(0, Infinity);
       this.world.vegetation.stream(this.heli.fm.pos, Infinity);
+      this.world.props.stream(this.heli.fm.pos, Infinity);
       // Build every shader now rather than the first time something (smoke, fire) appears mid-flight.
       this.compiled = true;
       this.renderer.compile(this.scene, this.cam.camera);
@@ -545,6 +546,7 @@ export class Game {
     this.world.shadows.update(this.playerPos);
     this.world.terrain.stream(this.cam.camera.position);
     this.world.vegetation.stream(this.cam.camera.position);
+    this.world.props.stream(this.cam.camera.position);
     this.world.rivers.update(dt);
     {
       // Rotor downwash flattens the grass when the helicopter is low with the rotors turning.

@@ -89,6 +89,9 @@ export class Farmland {
     const data = new Uint8Array(NX * NZ * Math.max(1, terrain.farms.length));
     terrain.farms.forEach((f, id) => {
       const kinds = new Uint8Array(NX * NZ).fill(Crop.None);
+      // Only the sites that could touch this farm's plots (same order, same result).
+      const reach = f.r + FIELD_REACH + 200;
+      const near = keepOut.filter((k) => Math.hypot(k.x - f.x, k.z - f.z) < reach + k.radius + 60);
       const peaceful = Math.abs(front.side(f.x, f.z)) > 1500;
       for (let cz = CZ0; cz <= CZ1; cz++)
         for (let cx = CX0; cx <= CX1; cx++) {
@@ -102,12 +105,12 @@ export class Farmland {
             const V = (cz + b) * FIELD_V;
             return [f.x + U * c + V * s, f.z - U * s + V * c];
           });
-          if (keepOut.some((k) => pts.some(([x, z]) => Math.hypot(x - k.x, z - k.z) < k.radius + 60))) continue;
-          const near = d < f.r + 320;
+          if (near.some((k) => pts.some(([x, z]) => Math.hypot(x - k.x, z - k.z) < k.radius + 60))) continue;
+          const inner = d < f.r + 320;
           const roll = rng.next();
           let k: Crop;
           if (roll < 0.1) continue;
-          else if (near && roll < 0.24) k = Crop.Pasture;
+          else if (inner && roll < 0.24) k = Crop.Pasture;
           else if (roll < 0.33) k = Crop.Hay;
           else {
             const q = rng.next();
