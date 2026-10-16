@@ -30,8 +30,37 @@ const KEYMAP: Record<string, Action> = {
   KeyG: 'vehicle',
 };
 
-// Standard gamepad buttons.
-const PADMAP: Record<number, Action> = { 0: 'ramp', 1: 'hook', 2: 'engine', 3: 'camera', 4: 'flares', 5: 'sas', 9: 'terminal', 8: 'map' };
+/**
+ * Standard gamepad buttons. GTA-style: A ramp/doors, B hook/horn, X flares,
+ * Y get in/out, View camera, Menu pause, D-pad engine / assist / map /
+ * terminal, L3 horn (LB/RB yaw in the air, RB handbrake on the ground,
+ * R3 look back).
+ */
+const PADMAP_GTA: Record<number, Action> = { 0: 'ramp', 1: 'hook', 2: 'flares', 3: 'vehicle', 8: 'camera', 9: 'pause', 10: 'hook', 12: 'engine', 13: 'sas', 14: 'map', 15: 'terminal' };
+/** The original simulator layout. */
+const PADMAP_SIM: Record<number, Action> = { 0: 'ramp', 1: 'hook', 2: 'engine', 3: 'camera', 4: 'flares', 5: 'sas', 9: 'terminal', 8: 'map', 10: 'vehicle' };
+
+/**
+ * 'gta': W/S (triggers) climb and descend with the collective flown for you,
+ * A/D (bumpers) yaw, arrows / numpad (left stick) pitch and roll, right stick
+ * camera. 'sim': W/S/A/D cyclic, Q/E pedals, Shift/Ctrl collective lever,
+ * right stick cyclic.
+ */
+export type Scheme = 'gta' | 'sim';
+
+/** Gamepad state this frame (deadzoned sticks, triggers 0..1), when one is in use. */
+export interface PadState {
+  lx: number;
+  ly: number;
+  rx: number;
+  ry: number;
+  lt: number;
+  rt: number;
+  lb: boolean;
+  rb: boolean;
+  l3: boolean;
+  r3: boolean;
+}
 
 /** Keyboard, mouse and gamepad into smoothed flight controls + discrete actions. */
 export class Input {
@@ -39,7 +68,12 @@ export class Input {
   private pressed = new Set<Action>();
   private padPrev: boolean[] = [];
   private padRest = new Map<string, number[]>();
+  scheme: Scheme = 'gta';
   collective = 0;
+  /** GTA-style climb command, -1..1. */
+  climb = 0;
+  /** The connected gamepad's state while it is the active device, else null. */
+  pad: PadState | null = null;
   pitch = 0;
   roll = 0;
   yaw = 0;
@@ -171,7 +205,19 @@ export class Input {
     let tr = 0;
     let ty = 0;
     let dc = 0;
-    if (this.enabled) {
+    let climb = 0;
+    const gta = this.scheme === 'gta';
+    if (this.enabled && gta) {
+      // W/S climb / descend, A/D (or Q/E) yaw, arrows / numpad pitch and roll.
+      if (k('ArrowUp') || k('Numpad8')) tp += 1;
+      if (k('ArrowDown') || k('Numpad5') || k('Numpad2')) tp -= 1;
+      if (k('ArrowRight') || k('Numpad6')) tr += 1;
+      if (k('ArrowLeft') || k('Numpad4')) tr -= 1;
+      if (k('KeyD') || k('KeyE')) ty += 1;
+      if (k('KeyA') || k('KeyQ')) ty -= 1;
+      if (k('KeyW') || k('ShiftLeft') || k('ShiftRight') || k('PageUp')) climb += 1;
+      if (k('KeyS') || k('ControlLeft') || k('ControlRight') || k('PageDown')) climb -= 1;
+    } else if (this.enabled) {
       // W/S pitch, A/D roll (arrows as alternates), Q/E yaw, Shift/Ctrl collective.
       if (k('KeyW') || k('ArrowUp') || k('Numpad8')) tp += 1;
       if (k('KeyS') || k('ArrowDown') || k('Numpad2')) tp -= 1;
@@ -183,6 +229,7 @@ export class Input {
       if (k('ShiftLeft') || k('ShiftRight') || k('Space') || k('PageUp')) dc += rate;
       if (k('ControlLeft') || k('ControlRight') || k('PageDown')) dc -= rate;
     }
+    this.climb = climb;
 
     if (this.controlMode === 'virtual') {
       // A held key pushes the stick like a hand would: steady force against a
@@ -223,7 +270,7 @@ export class Input {
 
     // Gamepad: only takes over once the player actually moves it, and
     // keyboard flight keys always win while held.
-    const kbFlight = tp !== 0 || tr !== 0 || ty !== 0 || dc !== 0;
+    const kbFlight = tp !== 0 || tr !== 0 || ty !== 0 || dc !== 0 || climb !== 0;
     if (kbFlight) this.usingPad = false;
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
     const gp = Array.from(pads).find((p) => p && p.connected);
@@ -247,8 +294,24 @@ export class Input {
       const lt = gp.mapping === 'standard' ? (gp.buttons[6]?.value ?? 0) : 0;
       const rt = gp.mapping === 'standard' ? (gp.buttons[7]?.value ?? 0) : 0;
       const moved = Math.max(Math.abs(lx), Math.abs(ly), Math.abs(rx), Math.abs(ry), lt, rt) > 0.25;
+      const btn = (i: number) => !!gp.buttons[i]?.pressed;
       if (moved && !kbFlight) this.usingPad = true;
-      if (this.usingPad && !kbFlight) {
+      this.pad = this.usingPad ? { lx, ly, rx, ry, lt, rt, lb: btn(4), rb: btn(5), l3: btn(10), r3: btn(11) } : null;
+      if (this.usingPad && !kbFlight && gta) {
+        // Left stick cyclic, triggers climb / descend, bumpers yaw; the right stick is the camera.
+        const curve = (v: number) => v * Math.abs(v) ** 0.4;
+        this.pitch = curve(-ly);
+        this.roll = curve(lx);
+        this.yaw = (btn(5) ? 1 : 0) - (btn(4) ? 1 : 0);
+        this.stick.x = lx;
+        this.stick.y = -ly;
+        this.stick.pedal = this.yaw;
+        this.stickVel.x = this.stickVel.y = this.stickVel.pedal = 0;
+        this.climb = clamp(rt - lt, -1, 1);
+        // Camera: about 2.5 rad/s across, 1.8 up and down at full deflection (in mouse pixels).
+        this.mouseDX += rx * Math.abs(rx) * 500 * dt;
+        this.mouseDY += ry * Math.abs(ry) * 450 * dt;
+      } else if (this.usingPad && !kbFlight) {
         this.pitch = -ry * Math.abs(ry) ** 0.4;
         this.roll = rx * Math.abs(rx) ** 0.4;
         this.yaw = lx;
@@ -258,14 +321,26 @@ export class Input {
         this.stickVel.x = this.stickVel.y = this.stickVel.pedal = 0;
         this.collective = clamp(this.collective + (-ly * 0.5 + (rt - lt) * 0.5) * dt, 0, 1);
       }
+      const map = gta ? PADMAP_GTA : PADMAP_SIM;
       gp.buttons.forEach((b, i) => {
-        if (b.pressed && !this.padPrev[i] && PADMAP[i]) this.pressed.add(PADMAP[i]);
+        if (b.pressed && !this.padPrev[i] && map[i]) {
+          this.pressed.add(map[i]);
+          this.usingPad = true;
+        }
         this.padPrev[i] = b.pressed;
       });
-      // D-pad up/down for fine collective.
-      if (gp.buttons[12]?.pressed) this.collective = clamp(this.collective + 0.1 * dt, 0, 1);
-      if (gp.buttons[13]?.pressed) this.collective = clamp(this.collective - 0.1 * dt, 0, 1);
+      if (!gta) {
+        // D-pad up/down for fine collective.
+        if (gp.buttons[12]?.pressed) this.collective = clamp(this.collective + 0.1 * dt, 0, 1);
+        if (gp.buttons[13]?.pressed) this.collective = clamp(this.collective - 0.1 * dt, 0, 1);
+      }
+    } else {
+      this.pad = null;
+      // Menus open: keep the button state current so the press that closes one
+      // isn't read as a fresh in-game press next frame.
+      if (gp) gp.buttons.forEach((b, i) => (this.padPrev[i] = b.pressed));
     }
+    if (!this.usingPad) this.pad = null;
   }
 
   consumeMouse(): [number, number, number] {

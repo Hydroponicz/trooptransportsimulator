@@ -8,13 +8,17 @@ import type { Terrain } from './world/terrain';
 export type CamMode = 'chase' | 'cockpit' | 'hook' | 'orbit';
 export const CAM_MODES: CamMode[] = ['chase', 'cockpit', 'hook', 'orbit'];
 export const CAM_LABEL: Record<CamMode, string> = { chase: 'Chase', cockpit: 'Cockpit', hook: 'Hook / belly', orbit: 'Cinematic' };
+/** Chase distances the camera button steps through (GTA-style near / mid / far) before the cockpit. */
+const ZOOM = [24, 36, 60];
+const ZOOM_LABEL = ['near', 'mid', 'far'];
 
 export class CameraRig {
   mode: CamMode = 'chase';
   camera: THREE.PerspectiveCamera;
   private yawOff = 0;
   private pitchOff = 0.2;
-  private dist = 32;
+  private dist = ZOOM[1];
+  private zoom = 1;
   private idle = 0;
   private pos = new THREE.Vector3();
   private look = new THREE.Vector3();
@@ -32,9 +36,18 @@ export class CameraRig {
   }
 
   next() {
+    if (this.mode === 'chase' && this.zoom < ZOOM.length - 1) {
+      this.dist = ZOOM[++this.zoom];
+      return;
+    }
     this.mode = CAM_MODES[(CAM_MODES.indexOf(this.mode) + 1) % CAM_MODES.length];
+    if (this.mode === 'chase') this.dist = ZOOM[(this.zoom = 0)];
     this.lookYaw = 0;
     this.lookPitch = -0.05;
+  }
+
+  get label() {
+    return this.mode === 'chase' ? `Chase (${ZOOM_LABEL[this.zoom]})` : CAM_LABEL[this.mode];
   }
 
   snap() {
@@ -72,7 +85,7 @@ export class CameraRig {
       this.heading += dh * (1 - Math.exp(-4 * dt));
       const orbit = this.mode === 'orbit' ? (this.orbitA += dt * 0.15) : 0;
       const yaw = this.heading + this.yawOff + (this.lookBack ? Math.PI : 0) + orbit;
-      const d = Math.min(this.dist, 26) * (this.mode === 'orbit' ? 1.4 : 0.55);
+      const d = Math.max(6, this.dist * 0.5) * (this.mode === 'orbit' ? 1.4 : 1);
       const target = new THREE.Vector3(
         v.pos.x - Math.sin(yaw) * Math.cos(this.pitchOff) * d,
         v.pos.y + 1.6 + Math.sin(this.pitchOff) * d,

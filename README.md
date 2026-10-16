@@ -156,44 +156,78 @@ The flight model is a rigid body simulated at 120 Hz:
 
 **Stability assist** (`T`) has three levels:
 - **Rate**: manual. The stick commands rotation rates.
-- **Attitude hold** (default): the stick commands bank and pitch angles, and
-  the aircraft levels itself when you let go.
-- **Hover hold**: like attitude hold, but at low speed with the stick centered
-  it also cancels drift. Useful for sling work.
+- **Attitude hold** (the Sim layout's default): the stick commands bank and
+  pitch angles, and the aircraft levels itself when you let go.
+- **Hover hold** (the GTA-style default): like attitude hold, but at low
+  speed with the stick centered it also cancels drift. Useful for sling work.
+  With the GTA-style controls it brakes to a hover from any speed.
+
+With the GTA-style controls an **altitude hold** also flies the collective:
+the climb input asks for a rate of climb (up to 7.5 m/s) or descent (up to
+7 m/s, less at low speed to stay out of the vortex ring and less near the
+ground), and with it released the aircraft holds its height. The lever
+moves at a hand's pace, so the rotor's droop and torque limits still apply.
 
 ## Controls
+
+Two layouts, switched under **Controls** in the pause menu. **GTA-style** is
+the default; **Sim** is the original stick-and-lever layout.
+
+### GTA-style
+
+The helicopter flies itself in the vertical: W / RT asks for a climb and
+S / LT for a descent, and the collective is moved for you. Let go and it
+holds the altitude. Descents slow down near the ground for a gentle
+touchdown, and once on the ground the lever drops so the aircraft sits.
+Let go of the stick and it levels off and slows to a hover (stability
+assist in hover hold; `T` / D-pad down changes it). W also starts the
+engines.
+
+| Key | Helicopter | Humvee |
+| --- | --- | --- |
+| `W` / `S` | Climb / descend | Accelerate / brake, then reverse |
+| `A` / `D` | Turn (yaw) | Steer |
+| Arrows or numpad `8` `5` `4` `6` | Tilt forward / back, bank left / right | |
+| `Space` | | Handbrake |
+| `I` | Start / stop engines | |
+| `R` | Ramp | Rear doors |
+| `H` | Hook / release sling load | Horn |
+| `F` | Flares | |
+| `T` | Stability assist mode | Call recovery ($400) |
+| `G` | Get out (to the Humvee) | Get back in the helicopter |
+| `C` | Camera: chase near / mid / far, cockpit, hook, cinematic | Chase near / mid / far, driver's seat |
+| Mouse, wheel | Camera, zoom. In fullscreen the cursor is hidden; windowed, drag | Same |
+| Hold left `Alt` | Show the cursor (fullscreen) | Same |
+| `B` | Look back | Look back |
+| `Tab` / `M` | Base terminal / theater map | Same |
+| `Esc` / `P` | Pause | Pause |
+
+| Controller | Helicopter | Humvee |
+| --- | --- | --- |
+| Left stick | Tilt and bank | Steer |
+| RT / LT | Climb / descend | Accelerate / brake, then reverse |
+| LB / RB | Turn left / right | RB handbrake |
+| Right stick, R3 | Camera, look back | Same |
+| A / B / X / Y | Ramp / hook / flares / get out | Doors / horn / — / get back in |
+| View / Menu | Camera / pause | Same |
+| D-pad | Up engines, down assist, left map, right terminal | Down recovery, left map, right terminal |
+
+Menus, dialogs and the base terminal work on the controller too: D-pad or
+left stick moves between buttons, A selects, B goes back (or resumes from
+pause), LB / RB switch terminal tabs, the right stick scrolls.
+
+### Sim
 
 | Key | Action |
 | --- | --- |
 | `W` / `S` | Pitch: nose down (forward) / nose up |
 | `A` / `D` | Roll left / right (arrow keys also work for pitch & roll) |
 | `Q` / `E` | Yaw left / right |
-| `Shift` / `Ctrl` | Collective up / down (climb / descend); `Space` also climbs |
-| `I` | Start / stop engines |
-| `R` | Raise / lower ramp |
-| `H` | Hook / release sling load |
-| `F` | Flares |
-| `T` | Stability assist mode |
-| `C` | Camera: chase / cockpit / hook / cinematic |
-| Mouse, wheel | Look around, zoom. In fullscreen the cursor is hidden and the mouse just moves the camera; windowed, drag to look |
-| Hold left `Alt` | Show the cursor (fullscreen) |
-| `B` | Look back |
-| `Tab` | Base terminal |
-| `M` | Theater map |
-| `Esc` / `P` | Pause |
+| `Shift` / `Ctrl` | Collective up / down (climb / descend); `Space` also climbs. The lever stays where you leave it |
 
-**Humvee** (`G` to switch vehicles):
-
-| Key | Action |
-| --- | --- |
-| `W` | Accelerate |
-| `S` | Brake, then reverse when stopped |
-| `A` / `D` | Steer |
-| `Space` | Handbrake (parks the truck when slow) |
-| `R` | Open / close doors (load and unload) |
-| `H` | Horn |
-| `T` | Call recovery ($400) |
-| `C` | Camera: chase / driver's seat |
+Other keys and the Humvee are as above. Controller: left stick collective
+and yaw, right stick cyclic, triggers collective, A ramp, B hook, X engine,
+Y camera, LB flares, RB assist, L3 get in / out, Start terminal, View map.
 
 The game goes fullscreen with keyboard lock when you start or continue a
 career, so in Chrome and Edge Ctrl+W / Ctrl+Q go to the game instead of
@@ -429,6 +463,8 @@ World generation logs its phase timings to the console.
 ```
 src/
   main.ts            menu, launching a career
+  input.ts           keyboard, mouse and gamepad: GTA-style and Sim layouts
+  camera.ts          chase (near / mid / far), cockpit, hook and cinematic cameras
   game.ts            game loop, glue between systems, prompts, crash/respawn
   graphics.ts        graphics presets, GPU detection, Auto's resolution scaler
   heli/flight.ts     flight model (thrust, drag, control laws, ground contact)
@@ -448,7 +484,7 @@ src/
   world/             terrain, front line, sites, towns/cities/villages + buildings, farms, props + surfaces, roads/bridges, roadside, forests, grass + crops, rivers, sky + look (fog, grade)
   fx/                particles (dust, smoke, fire), tracers, explosions
   audio.ts           synthesized rotor, turbine, wind and effects audio
-  ui/                HUD, minimap and theater map, terminal and dialogs
+  ui/                HUD, minimap and theater map, terminal and dialogs, controller menu navigation
   world/colliders.ts structure collisions: a grid of bounding boxes, each with its prototype's solid parts
   world/lod.ts       distance culling and per-cell splitting of world chunks
   world/shadows.ts   near-only shadow casters for the instanced trees and buildings

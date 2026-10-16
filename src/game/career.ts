@@ -68,6 +68,8 @@ export interface SaveData {
   sas: number;
   /** Keyboard control feel. */
   controlMode?: 'virtual' | 'direct';
+  /** Control layout: GTA-style (default) or the original simulator layout. */
+  controls?: 'gta' | 'sim';
   /** The state of the war along the front. */
   campaign?: CampaignData;
 }

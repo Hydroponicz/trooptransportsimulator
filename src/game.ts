@@ -235,6 +235,12 @@ export class Game {
 
     this.heli.fm.sas = career.data.sas;
     this.input.controlMode = career.data.controlMode ?? 'virtual';
+    if (!career.data.controls) {
+      // First run with the GTA-style controls: they fly best with hover hold.
+      career.data.controls = 'gta';
+      career.data.sas = this.heli.fm.sas = 2;
+    }
+    this.input.scheme = career.data.controls;
     this.applyUpgrades();
     this.respawn(true);
     window.addEventListener('resize', () => this.resize());
@@ -382,7 +388,7 @@ export class Game {
       h.fm.input.collective = 0;
       h.rampOpen = false;
       this.cam.snap();
-      this.toast('Driving the Humvee — W/S throttle, A/D steer, Space handbrake, R rear doors, G back to the helicopter', 'good');
+      this.toast(this.input.pad ? 'Driving the Humvee — RT accelerate, LT brake / reverse, left stick steer, RB handbrake, A rear doors, Y back to the helicopter' : 'Driving the Humvee — W/S throttle, A/D steer, Space handbrake, R rear doors, G back to the helicopter', 'good');
     } else {
       if (v.groundSpeed > 2) return this.toast('Stop the vehicle first', 'bad');
       const d = v.pos.distanceTo(h.fm.pos);
@@ -416,7 +422,7 @@ export class Game {
     this.hud.show(true);
     this.audio.init();
     this.last = performance.now();
-    this.toast(`Welcome to ${this.world.base.name}. Press [I] to start the engines.`, 'good');
+    this.toast(this.input.scheme === 'gta' ? `Welcome to ${this.world.base.name}. Hold W (RT on a controller) to start the engines and lift off.` : `Welcome to ${this.world.base.name}. Press [I] to start the engines.`, 'good');
     this.toast('Open the base terminal with [Tab] to pick up a contract.');
     const loop = (ts: number) => {
       if (!this.running) return;
@@ -457,7 +463,7 @@ export class Game {
     this.input.updatePointer();
     if (!modal && dt > 0) this.simulate(dt);
     const mouse = this.input.consumeMouse();
-    this.cam.lookBack = this.input.key('KeyB');
+    this.cam.lookBack = this.input.key('KeyB') || !!this.input.pad?.r3;
     this.humvee.setInteriorView(this.mode === 'drive' && this.cam.mode === 'cockpit');
     if (this.mode === 'drive') this.cam.updateGround(modal ? 0 : dt, this.humvee, this.world.terrain, mouse);
     else this.cam.update(modal ? 0 : dt, this.heli, this.world.terrain, mouse);
@@ -589,6 +595,7 @@ export class Game {
           ${document.fullscreenElement ? '' : '<button class="primary" data-act="fsresume">Back to fullscreen</button>'}
           <button class="${document.fullscreenElement ? 'primary' : ''}" data-act="resume">Resume</button>
           <button data-act="vol">Volume: ${Math.round(this.audio.volume * 100)}%</button>
+          <button data-act="scheme" title="GTA-style: W/S climb, A/D turn, arrows tilt, triggers climb on a controller. Sim: the original stick, pedals and collective lever">Controls: ${this.input.scheme === 'gta' ? 'GTA-style' : 'Sim'}</button>
           <button data-act="ctl">Keyboard: ${this.input.controlMode === 'virtual' ? 'Virtual stick' : 'Direct'}</button>
           <button data-act="gfx" title="Auto picks a level for this computer and lowers the resolution if the frame rate drops">Graphics: ${this.graphics === 'auto' ? `Auto (${QNAME[this.quality]})` : QNAME[this.quality]}</button>
           ${document.fullscreenElement ? '<button data-act="fs">Exit fullscreen</button>' : ''}
@@ -599,6 +606,16 @@ export class Game {
           resume: () => {
             this.terminal.closeDialog();
             this.paused = false;
+          },
+          scheme: () => {
+            const gta = this.input.scheme !== 'gta';
+            this.input.scheme = this.career.data.controls = gta ? 'gta' : 'sim';
+            // Take over the lever where the assist left it, or hand it to the assist.
+            this.input.collective = this.heli.fm.input.collective;
+            if (gta && this.heli.fm.sas < 2) this.career.data.sas = this.heli.fm.sas = 2;
+            this.career.save();
+            this.paused = false;
+            this.togglePause();
           },
           ctl: () => {
             this.input.controlMode = this.input.controlMode === 'virtual' ? 'direct' : 'virtual';
@@ -658,30 +675,40 @@ export class Game {
     this.effects.wind.copy(this.wind);
 
     const driving = this.mode === 'drive';
-    fm.input.collective = driving ? 0 : inp.collective;
+    // GTA-style: the climb command flies the collective (flight.ts); sim: the lever is the player's.
+    const gta = inp.scheme === 'gta';
+    fm.assist = gta && !driving;
+    fm.climb = driving ? 0 : inp.climb;
+    if (!gta || driving) fm.input.collective = driving ? 0 : inp.collective;
+    if (fm.assist && inp.climb > 0.3 && !fm.engineOn && fm.fuel > 0 && !h.crashed) {
+      fm.engineOn = true;
+      this.toast('Engines starting — wait for 100% rotor RPM', 'info');
+    }
     fm.input.pitch = driving ? 0 : inp.pitch;
     fm.input.roll = driving ? 0 : inp.roll;
     fm.input.yaw = driving ? 0 : inp.yaw;
     const v = this.humvee;
     if (driving) {
-      // W/S: throttle; S brakes first, then reverses. Space: handbrake.
-      const fwdKey = inp.key('KeyW') || inp.key('ArrowUp');
-      const backKey = inp.key('KeyS') || inp.key('ArrowDown');
+      // W / RT: accelerate. S / LT: brake, then reverse when stopped. Space / RB: handbrake.
+      const pad = inp.pad;
+      const gas = Math.max(inp.key('KeyW') || inp.key('ArrowUp') ? 1 : 0, pad?.rt ?? 0);
+      const rev = Math.max(inp.key('KeyS') || inp.key('ArrowDown') ? 1 : 0, pad?.lt ?? 0);
       const steerKey = (inp.key('KeyD') || inp.key('ArrowRight') ? 1 : 0) - (inp.key('KeyA') || inp.key('ArrowLeft') ? 1 : 0);
+      const steerIn = steerKey || (pad?.lx ?? 0);
       let throttle = 0;
       let brake = 0;
-      if (fwdKey) {
-        if (v.speed < -1) brake = 1;
-        else throttle = 1;
-      } else if (backKey) {
-        if (v.speed > 1) brake = 1;
-        else throttle = -1;
+      if (gas > 0.05) {
+        if (v.speed < -1) brake = gas;
+        else throttle = gas;
+      } else if (rev > 0.05) {
+        if (v.speed > 1) brake = rev;
+        else throttle = -rev;
       }
       if (v.destroyed) (throttle = 0), (brake = 1);
       v.input.throttle = throttle;
       v.input.brake = brake;
-      v.input.steer += (steerKey - v.input.steer) * Math.min(1, dt * 6);
-      v.input.handbrake = inp.key('Space') || (!fwdKey && !backKey && v.groundSpeed < 0.5);
+      v.input.steer += (steerIn - v.input.steer) * Math.min(1, dt * 6);
+      v.input.handbrake = inp.key('Space') || !!pad?.rb || (gas <= 0.05 && rev <= 0.05 && v.groundSpeed < 0.5);
     }
 
     // Substep the whole frame (never more than STEP each) so the simulation advances
@@ -896,6 +923,23 @@ export class Game {
     void dt;
   }
 
+  /** A button name for a prompt, for the keyboard or the controller and the control scheme in use. */
+  private kb(a: 'ramp' | 'hook' | 'terminal' | 'vehicle' | 'sas' | 'engine'): string {
+    const pad = this.input.usingPad;
+    const gta = this.input.scheme === 'gta';
+    const K = !pad
+      ? { ramp: 'R', hook: 'H', terminal: 'Tab', vehicle: 'G', sas: 'T', engine: 'I' }
+      : gta
+        ? { ramp: 'A', hook: 'B', terminal: 'D-pad →', vehicle: 'Y', sas: 'D-pad ↓', engine: 'D-pad ↑' }
+        : { ramp: 'A', hook: 'B', terminal: 'Start', vehicle: 'L3', sas: 'RB', engine: 'X' };
+    return `<kbd>${K[a]}</kbd>`;
+  }
+
+  private liftHint(): string {
+    if (this.input.scheme === 'gta') return `Hold ${this.input.usingPad ? '<kbd>RT</kbd>' : '<kbd>W</kbd>'} to lift off`;
+    return this.input.usingPad ? 'Raise collective (left stick up / <kbd>RT</kbd>) to lift off' : 'Raise collective <kbd>Shift</kbd> to lift off';
+  }
+
   private updatePrompt() {
     if (this.mode === 'drive') return this.hud.setPrompt(this.drivePrompt());
     const h = this.heli;
@@ -903,47 +947,47 @@ export class Game {
     const m = this.missions.active;
     let p = '';
     if (h.crashed) p = '';
-    else if (!fm.engineOn && fm.rpm < 0.05) p = 'Press <kbd>I</kbd> to start engines';
+    else if (!fm.engineOn && fm.rpm < 0.05) p = this.input.scheme === 'gta' ? `${this.liftHint().replace('lift off', 'start the engines')}` : `Press ${this.kb('engine')} to start engines`;
     else if (fm.engineOn && fm.engineSpool < 0.99) p = `Engines spooling… NR ${(fm.rpm * 100).toFixed(0)}%`;
     else if (m && m.phase === 'pickup' && m.internal && m.group) {
       const near = Math.hypot(fm.pos.x - m.c.from.pads[m.c.fromPad].x, fm.pos.z - m.c.from.pads[m.c.fromPad].z) < 90;
       if (near && fm.contacts >= 3) {
-        if (!h.rampDown) p = h.rampOpen ? 'Ramp lowering…' : 'Press <kbd>R</kbd> to lower the ramp';
+        if (!h.rampDown) p = h.rampOpen ? 'Ramp lowering…' : `Press ${this.kb('ramp')} to lower the ramp`;
         else if (m.group.aboard < m.group.total) p = `Loading ${m.group.aboard}/${m.group.total} — hold position`;
       } else if (near) p = 'Land near the troops';
-    } else if (m && m.phase === 'transit' && m.internal && h.rampOpen && fm.contacts === 0 && fm.groundSpeed > 15) p = 'Ramp is down — press <kbd>R</kbd> to raise it';
+    } else if (m && m.phase === 'transit' && m.internal && h.rampOpen && fm.contacts === 0 && fm.groundSpeed > 15) p = `Ramp is down — press ${this.kb('ramp')} to raise it`;
     else if (m && m.phase === 'transit' && m.internal) {
       const d = Math.hypot(fm.pos.x - m.dropPos.x, fm.pos.z - m.dropPos.z);
-      if (d < 70 && fm.contacts >= 3 && !h.rampDown) p = h.rampOpen ? 'Ramp lowering…' : 'Press <kbd>R</kbd> to lower the ramp and unload';
+      if (d < 70 && fm.contacts >= 3 && !h.rampDown) p = h.rampOpen ? 'Ramp lowering…' : `Press ${this.kb('ramp')} to lower the ramp and unload`;
       else if (d < 70 && fm.contacts >= 3 && !h.loadable) p = 'Come to a full stop to unload';
     } else if (m && m.phase === 'dropoff') p = 'Unloading — hold position';
     if (!p && this.slingTargetRel) {
       const st = this.slingTargetRel;
-      p = st.ok ? 'Press <kbd>H</kbd> to hook the load' : 'Position the hook over the load (see drift display)';
+      p = st.ok ? `Press ${this.kb('hook')} to hook the load` : 'Position the hook over the load (see drift display)';
     }
     if (!p && this.sling.hooked) {
       const l = this.sling.hooked;
-      if (l.onGround && m && m.load === l && Math.hypot(l.pos.x - m.dropPos.x, l.pos.z - m.dropPos.z) < 22) p = 'Load is down in the zone — press <kbd>H</kbd> to release';
-      else if (l.onGround && this.sling.tension < l.mass * 3) p = 'Load on the ground — press <kbd>H</kbd> to release, or lift';
+      if (l.onGround && m && m.load === l && Math.hypot(l.pos.x - m.dropPos.x, l.pos.z - m.dropPos.z) < 22) p = `Load is down in the zone — press ${this.kb('hook')} to release`;
+      else if (l.onGround && this.sling.tension < l.mass * 3) p = `Load on the ground — press ${this.kb('hook')} to release, or lift`;
     }
     if (!p && fm.contacts >= 3 && fm.rpm > 0.97 && fm.input.collective < 0.3 && h.rampT < 0.03 && !m) {
-      p = this.currentSite && this.currentSite.kind !== 'lz' ? `Press <kbd>Tab</kbd> for the ${this.currentSite.name} terminal` : 'Raise collective <kbd>Shift</kbd> to lift off';
+      p = this.currentSite && this.currentSite.kind !== 'lz' ? `Press ${this.kb('terminal')} for the ${this.currentSite.name} terminal` : this.liftHint();
     }
     if (!p && fm.contacts >= 3 && fm.rpm > 0.97 && fm.input.collective < 0.3 && m && m.phase === 'transit') {
-      p = h.rampT > 0.03 ? 'Press <kbd>R</kbd> to raise the ramp' : 'Raise collective <kbd>Shift</kbd> to lift off';
+      p = h.rampT > 0.03 ? `Press ${this.kb('ramp')} to raise the ramp` : this.liftHint();
     }
-    if (!p && m && m.c.mode === 'ground' && fm.contacts >= 3) p = this.vehiclesTogether() ? 'Road job: press <kbd>G</kbd> to get in your Humvee' : 'Road job: your Humvee is parked elsewhere';
+    if (!p && m && m.c.mode === 'ground' && fm.contacts >= 3) p = this.vehiclesTogether() ? `Road job: press ${this.kb('vehicle')} to get in your Humvee` : 'Road job: your Humvee is parked elsewhere';
     if (!p && !fm.engineOn && fm.rpm > 0.05 && fm.contacts >= 3 && this.currentSite && this.currentSite.kind !== 'lz')
-      p = `Press <kbd>Tab</kbd> for the ${this.currentSite.name} terminal`;
+      p = `Press ${this.kb('terminal')} for the ${this.currentSite.name} terminal`;
     this.hud.setPrompt(p);
   }
 
   private drivePrompt(): string {
     const v = this.humvee;
     const m = this.missions.active;
-    if (v.flipped || v.stalled) return 'Press <kbd>T</kbd> to recover the vehicle';
+    if (v.flipped || v.stalled) return `Press ${this.kb('sas')} to recover the vehicle`;
     if (m && m.c.mode === 'air' && m.phase !== 'complete' && m.phase !== 'failed') {
-      if (this.vehiclesTogether() && v.groundSpeed < 0.5) return 'This is a helicopter job — press <kbd>G</kbd> to get back in the helicopter';
+      if (this.vehiclesTogether() && v.groundSpeed < 0.5) return `This is a helicopter job — press ${this.kb('vehicle')} to get back in the helicopter`;
       return 'Your active job needs the helicopter (🚁 AIR)';
     }
     if (m && m.c.mode === 'ground') {
@@ -952,20 +996,20 @@ export class Game {
         const d = v.rampEndWorld(new THREE.Vector3()).setY(0).distanceTo(new THREE.Vector3(m.pickupPos.x, 0, m.pickupPos.z));
         if (d < 30) {
           if (v.groundSpeed > 0.6) return 'Stop here next to the green smoke';
-          if (!v.rampDown) return 'Press <kbd>R</kbd> to open the rear doors';
+          if (!v.rampDown) return `Press ${this.kb('ramp')} to open the rear doors`;
           if (g.aboard < g.total) return `Loading ${g.aboard}/${g.total} — hold position`;
         } else if (d < 120) return `Pull up beside the green smoke (${Math.round(d)} m)`;
       } else if (m.phase === 'transit') {
         const d = Math.hypot(m.dropPos.x - v.pos.x, m.dropPos.z - v.pos.z);
         if (d < 30 && v.groundSpeed > 0.6) return 'Stop by the smoke to unload';
-        if (d < 30 && !v.rampDown) return 'Press <kbd>R</kbd> to open the rear doors and unload';
+        if (d < 30 && !v.rampDown) return `Press ${this.kb('ramp')} to open the rear doors and unload`;
         if (d >= 30 && d < 120) return `Pull up beside the smoke (${Math.round(d)} m)`;
-        if (v.rampDown && v.groundSpeed > 3) return 'Rear doors are open — <kbd>R</kbd> to close them';
+        if (v.rampDown && v.groundSpeed > 3) return `Rear doors are open — ${this.kb('ramp')} to close them`;
       } else if (m.phase === 'dropoff') return 'Unloading — hold position';
     }
-    if (v.groundSpeed < 0.5 && this.heli.onGround && this.vehiclesTogether()) return 'Press <kbd>G</kbd> to get back in the helicopter';
+    if (v.groundSpeed < 0.5 && this.heli.onGround && this.vehiclesTogether()) return `Press ${this.kb('vehicle')} to get back in the helicopter`;
     const site = this.siteUnderPlayer();
-    if (site && site.kind !== 'lz' && v.groundSpeed < 0.5) return `Press <kbd>Tab</kbd> for the ${site.name} terminal`;
+    if (site && site.kind !== 'lz' && v.groundSpeed < 0.5) return `Press ${this.kb('terminal')} for the ${site.name} terminal`;
     return '';
   }
 

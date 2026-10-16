@@ -145,3 +145,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   .left, .right { transform: translateY(-50%) scale(0.8); }
   .minimap { width: 140px; height: 140px; }
 }
+
+/* Controller focus in menus (ui/padnav.ts). */
+.pad-focus {
+  outline: 3px solid #ffcf4a !important;
+  outline-offset: 2px;
+}

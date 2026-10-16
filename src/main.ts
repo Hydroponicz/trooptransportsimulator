@@ -1,6 +1,7 @@
 import { Game } from './game';
 import { Career } from './game/career';
 import { enterFullscreen, toggleFullscreen } from './fullscreen';
+import { startPadNav } from './ui/padnav';
 
 const menu = document.getElementById('menu')!;
 const buttons = document.getElementById('menu-buttons')!;
@@ -97,3 +98,5 @@ function launch(career: Career) {
 }
 
 showMenu();
+
+startPadNav();

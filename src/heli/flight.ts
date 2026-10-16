@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { clamp, smoothstep } from '../util/math';
+import { approach, clamp, smoothstep } from '../util/math';
 import { GEAR_Y, HULL_POINTS, WHEELS } from './chinookModel';
 
 export const G = 9.81;
@@ -50,6 +50,15 @@ export class FlightModel {
   rpm = 0;
   sas = 1;
   input: FlightInput = { collective: 0, pitch: 0, roll: 0, yaw: 0 };
+  /**
+   * Assisted climb (the GTA-style controls): `climb` (-1..1) asks for a rate
+   * of climb or descent and the collective is flown for you; let go and it
+   * holds the altitude. Descents slow down near the ground, and on the
+   * ground with nothing held the lever goes down so the aircraft sits.
+   */
+  assist = false;
+  climb = 0;
+  private holdY: number | null = null;
 
   // Telemetry.
   thrust = 0;
@@ -111,6 +120,32 @@ export class FlightModel {
     if (J.lengthSq() > 1) this.settled = false;
   }
 
+  private assistCollective(dt: number, up: THREE.Vector3, vay: number, hs: number, density: number): number {
+    const c = this.climb;
+    let target = 0;
+    if (this.rpm < 0.85 || (this.contacts >= 2 && c <= 0.05)) {
+      this.holdY = null;
+    } else {
+      let vsDes: number;
+      if (Math.abs(c) > 0.05) {
+        // Down: no faster than the vortex ring allows at low speed, easing off toward the ground.
+        const maxDown = Math.min(hs < 10 ? 5 : 7, 1.2 + Math.max(0, this.agl - 1) * 0.35);
+        vsDes = c > 0 ? c * 7.5 : c * maxDown;
+        this.holdY = null;
+      } else {
+        // Hold where the climb or descent stops (allowing for the overshoot).
+        if (this.holdY === null) this.holdY = this.pos.y + this.vel.y * 0.6;
+        vsDes = clamp((this.holdY - this.pos.y) * 0.8, -3, 3);
+      }
+      // Vertical acceleration wanted, plus what the rotor's own vertical damping takes away.
+      const aDes = clamp((vsDes - this.vel.y) * 1.5, -4, 4) + 0.26 * vay * this.rpm;
+      const unit = this.maxThrust * this.rpm * this.rpm * (1 + 0.18 * this.ige) * (1 + 0.12 * this.etl) * density * (1 - 0.28 * this.vrs);
+      target = clamp((this.mass * (G + aDes)) / (unit * Math.max(0.5, up.y)), 0, 0.92);
+    }
+    // The lever moves at a hand's pace.
+    return approach(this.input.collective, target, dt * 1.2);
+  }
+
   step(dt: number, env: FlightEnv) {
     const m = this.mass;
     const q = this.quat;
@@ -158,6 +193,7 @@ export class FlightModel {
     this.etl = smoothstep(5, 16, hs);
     this.vrs = smoothstep(-6.5, -11, va.y) * (1 - smoothstep(5, 10, hs)) * smoothstep(0.15, 0.4, inp.collective);
     const density = 1 - clamp(this.pos.y, 0, 3000) * 0.00007;
+    if (this.assist) inp.collective = this.assistCollective(dt, up, va.y, hs, density);
     const T =
       inp.collective * this.maxThrust * this.rpm * this.rpm * (1 + 0.18 * this.ige) * (1 + 0.12 * this.etl) * density * (1 - 0.28 * this.vrs);
     this.thrust = T;
@@ -196,7 +232,9 @@ export class FlightModel {
         tp += Math.atan(af) * trimF;
         tr -= Math.atan(ar) * trimF;
       }
-      if (this.sas === 2 && Math.abs(inp.pitch) < 0.05 && Math.abs(inp.roll) < 0.05 && this.groundSpeed < 15) {
+      // Hover hold below 15 m/s; with the assisted (GTA-style) controls, letting go of the stick
+      // also slows the aircraft to a hover from any speed, nose up a little at most.
+      if (this.sas === 2 && Math.abs(inp.pitch) < 0.05 && Math.abs(inp.roll) < 0.05 && (this.groundSpeed < 15 || this.assist)) {
         const hf = _v3.set(fwd.x, 0, fwd.z).normalize();
         const vf = this.vel.dot(hf);
         const hr = new THREE.Vector3(right.x, 0, right.z).normalize();

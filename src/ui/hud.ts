@@ -4,7 +4,6 @@ import type { Game } from '../game';
 import { fmtDist, fmtMoney, fmtTime, clamp } from '../util/math';
 import { RANKS } from '../game/career';
 import { SAS_NAMES } from '../heli/flight';
-import { CAM_LABEL } from '../camera';
 import { noun, siteRisk } from '../game/missions';
 import type { MapMarker } from './map';
 import { SITE_COLOR } from './map';
@@ -218,7 +217,7 @@ export class Hud {
 
     const ramp = game.heli.rampT > 0.97 ? 'DOWN' : game.heli.rampT < 0.03 ? 'UP' : 'MOVING';
     e['status-line'].innerHTML =
-      (driving ? 'VEHICLE <b>HUMVEE</b><br>CAM' : `SAS <b>${SAS_NAMES[fm.sas]}</b><br>CAM`) + ` <b>${CAM_LABEL[game.cam.mode]}</b><br>RAMP <b>${ramp}</b> · HOOK <b>${hk ? 'LOADED' : 'EMPTY'}</b>` +
+      (driving ? 'VEHICLE <b>HUMVEE</b><br>CAM' : `SAS <b>${SAS_NAMES[fm.sas]}</b><br>CAM`) + ` <b>${game.cam.label}</b><br>RAMP <b>${ramp}</b> · HOOK <b>${hk ? 'LOADED' : 'EMPTY'}</b>` +
       `<br>WIND <b>${String(Math.round(((Math.atan2(-game.wind.x, game.wind.z) * 180) / Math.PI + 360) % 360)).padStart(3, '0')}° ${(game.wind.length() * 1.944).toFixed(0)}kt</b>`;
 
     this.mini.save();
