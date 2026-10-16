@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import type { RNG } from '../util/noise';
 import { CELL, HALF, SEGS, WATER_LEVEL, type Terrain } from './terrain';
 import type { ColliderSet } from './colliders';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { gravelTexture, roadTexture } from '../util/textures';
 
 const GRID = 50;
@@ -1049,9 +1048,12 @@ export class Roads {
 
   /** Concrete deck, parapets and piers between samples a..b. */
   private buildBridge(path: THREE.Vector2[], road: number[], ground: number[], a: number, b: number, half: number, mat: THREE.Material, colliders?: ColliderSet) {
-    const parts: THREE.BufferGeometry[] = [];
-    const q = new THREE.Quaternion();
-    const up = new THREE.Vector3(0, 1, 0);
+    // Boxes are written straight into one buffer from a unit-box template
+    // (much cheaper than a BoxGeometry per part plus a merge).
+    const tpl = Roads.unitBox();
+    const pos: number[] = [];
+    const nor: number[] = [];
+    const uv: number[] = [];
     const deckW = half * 2 + 0.8;
     for (let i = a; i < b; i++) {
       const p0 = path[i];
@@ -1061,37 +1063,45 @@ export class Roads {
       const y = (road[i] + road[i + 1]) / 2;
       const cx = (p0.x + p1.x) / 2;
       const cz = (p0.y + p1.y) / 2;
-      q.setFromAxisAngle(up, ang);
-      const place = (g: THREE.BufferGeometry, ox: number, oy: number, oz: number) => {
-        g.applyQuaternion(q);
-        const off = new THREE.Vector3(ox, oy, oz).applyQuaternion(q);
-        g.translate(cx + off.x, y + off.y, cz + off.z);
-        parts.push(g);
+      const co = Math.cos(ang);
+      const si = Math.sin(ang);
+      const box = (sx: number, sy: number, sz: number, ox: number, oy: number, oz: number) => {
+        const tp = tpl.p;
+        const tn = tpl.n;
+        for (let k = 0; k < tp.length; k += 3) {
+          const lx = tp[k] * sx + ox;
+          const lz = tp[k + 2] * sz + oz;
+          pos.push(cx + lx * co + lz * si, y + tp[k + 1] * sy + oy, cz - lx * si + lz * co);
+          nor.push(tn[k] * co + tn[k + 2] * si, tn[k + 1], -tn[k] * si + tn[k + 2] * co);
+        }
+        for (let k = 0; k < tpl.uv.length; k++) uv.push(tpl.uv[k]);
       };
-      place(new THREE.BoxGeometry(len, 0.8, deckW), 0, -0.35, 0);
+      box(len, 0.8, deckW, 0, -0.35, 0);
       // Parapets with a kerb inside them (left open where roads meet).
       const atPad = this.padsNear(cx, cz).some((pd) => Math.hypot(pd.x - cx, pd.z - cz) < Roads.PAD_R + 6);
       if (!atPad)
         for (const sd of [1, -1]) {
-          place(new THREE.BoxGeometry(len, 0.95, 0.3), 0, 0.5, sd * (half + 0.25));
-          place(new THREE.BoxGeometry(len, 0.18, 0.6), 0, 0.12, sd * (half - 0.15));
+          box(len, 0.95, 0.3, 0, 0.5, sd * (half + 0.25));
+          box(len, 0.18, 0.6, 0, 0.12, sd * (half - 0.15));
         }
       // Girder under the deck edges.
-      for (const sd of [1, -1]) place(new THREE.BoxGeometry(len, 1.2, 0.5), 0, -1.3, sd * (half - 1.2));
+      for (const sd of [1, -1]) box(len, 1.2, 0.5, 0, -1.3, sd * (half - 1.2));
       if ((i - a) % 3 === 1) {
         const bottom = Math.min(ground[i], 0) - 3;
         const h = y - 0.7 - bottom;
         if (h > 0.5) {
-          place(new THREE.BoxGeometry(1.8, h, half * 2 - 1.5), 0, -0.7 - h / 2, 0);
-          place(new THREE.BoxGeometry(2.4, 0.8, half * 2 + 0.2), 0, -1.3, 0);
+          box(1.8, h, half * 2 - 1.5, 0, -0.7 - h / 2, 0);
+          box(2.4, 0.8, half * 2 + 0.2, 0, -1.3, 0);
         }
       }
       this.decks.push({ x0: p0.x, z0: p0.y, x1: p1.x, z1: p1.y, y0: road[i] + 0.05, y1: road[i + 1] + 0.05, w: half });
       colliders?.add({ soft: true, minX: cx - len / 2 - half, maxX: cx + len / 2 + half, minY: y - 1, maxY: y + 1, minZ: cz - len / 2 - half, maxZ: cz + len / 2 + half });
     }
-    if (!parts.length) return;
-    const g = mergeGeometries(parts.map((x) => x.toNonIndexed()), false)!;
-    g.computeVertexNormals();
+    if (!pos.length) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     const mesh = new THREE.Mesh(g, mat);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -1100,4 +1110,13 @@ export class Roads {
   }
 
   bridgeCount = 0;
+
+  private static boxTpl?: { p: Float32Array; n: Float32Array; uv: Float32Array };
+  private static unitBox() {
+    if (!Roads.boxTpl) {
+      const g = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
+      Roads.boxTpl = { p: g.attributes.position.array as Float32Array, n: g.attributes.normal.array as Float32Array, uv: g.attributes.uv.array as Float32Array };
+    }
+    return Roads.boxTpl;
+  }
 }

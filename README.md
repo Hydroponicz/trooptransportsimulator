@@ -559,7 +559,10 @@ The theater is big, so most of it is drawn cheaply or not at all:
   Far away, heights are worked out at the point rather than by building
   terrain, so nothing stalls a frame. Laying out the plan is what the loading
   screen waits for: a few tens of seconds on a fast machine, longer on a
-  slow one.
+  slow one. The theater's natural terrain heights are worked out in
+  parallel on background workers (one per spare CPU core, up to eight), the
+  loading screen names each phase as it goes, and road grading only
+  touches ground near roads.
 - **Terrain** is 1.6 km tiles. Within 5.6 km of the camera a tile gets a
   full-detail mesh, picking one of four levels of detail by distance (12.5 m
   grid up close, 100 m at the edge). Out to 12 km, past the fog, it gets a
