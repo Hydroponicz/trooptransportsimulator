@@ -390,6 +390,9 @@ export class Game {
     this.handleActions();
     const modal = this.paused || this.terminal.isOpen || this.terminal.dialogOpen;
     this.input.enabled = !modal;
+    // Fullscreen mouse look while playing; menus and dialogs get the cursor back.
+    this.input.lookAllowed = this.running && !modal;
+    this.input.updatePointer();
     if (!modal && dt > 0) this.simulate(dt);
     const mouse = this.input.consumeMouse();
     this.cam.lookBack = this.input.key('KeyB');

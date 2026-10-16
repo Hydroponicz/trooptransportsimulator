@@ -65,13 +65,26 @@ export class Input {
    */
   active = false;
 
-  constructor(el: HTMLElement) {
+  /**
+   * Mouse look in fullscreen: while playing, the cursor is captured (hidden)
+   * and every movement turns the camera. Holding left Alt, or any menu or
+   * dialog being open, releases it. Set by the game each frame.
+   */
+  lookAllowed = false;
+  private lockRetry = 0;
+
+  constructor(private el: HTMLElement) {
     const swallow = (e: KeyboardEvent) => {
       if (this.active) e.stopPropagation();
     };
     window.addEventListener('keydown', (e) => {
       swallow(e);
       if (e.code === 'Tab' || e.code === 'F1' || e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
+      // Left Alt shows the cursor: don't let it also open the browser's menu bar.
+      if (e.code === 'AltLeft') {
+        e.preventDefault();
+        if (this.locked) document.exitPointerLock();
+      }
       // Ctrl is collective-down, so stop Ctrl+<flight key> browser shortcuts (save, bookmark, select all…).
       // Ctrl+W can only be captured in fullscreen with keyboard lock; see fullscreen.ts.
       if (e.ctrlKey && this.enabled && /^(Key[WASDQEHRFTCMIB]|Space)$/.test(e.code)) e.preventDefault();
@@ -84,12 +97,19 @@ export class Input {
       (e) => {
         swallow(e);
         this.keys.delete(e.code);
+        // Alt released: take the cursor back (still within the key press's user activation).
+        if (e.code === 'AltLeft') {
+          e.preventDefault();
+          this.keys.delete('AltLeft');
+          if (this.wantLock()) this.lock();
+        }
       },
       { capture: true },
     );
     window.addEventListener('blur', () => this.keys.clear());
     el.addEventListener('mousedown', (e) => {
       if (e.button === 0 || e.button === 2) this.dragging = true;
+      if (this.wantLock() && !this.locked) this.lock();
     });
     window.addEventListener('mouseup', () => (this.dragging = false));
     window.addEventListener('mousemove', (e) => {
@@ -104,6 +124,34 @@ export class Input {
 
   key(code: string) {
     return this.keys.has(code);
+  }
+
+  private get locked() {
+    return document.pointerLockElement === this.el;
+  }
+
+  private wantLock() {
+    return this.lookAllowed && !!document.fullscreenElement && !this.keys.has('AltLeft') && document.hasFocus();
+  }
+
+  private lock() {
+    this.lockRetry = performance.now() + 1500;
+    try {
+      const r = this.el.requestPointerLock() as unknown as Promise<void> | undefined;
+      r?.catch?.(() => {});
+    } catch {
+      /* not allowed right now (no user gesture yet): the next click or key press will do it */
+    }
+  }
+
+  /** Capture or release the cursor for mouse look (call every frame). */
+  updatePointer() {
+    const want = this.wantLock();
+    if (want && !this.locked && performance.now() > this.lockRetry) {
+      // Browsers grant the lock during a user gesture (some also in fullscreen without one):
+      // keep trying every so often; a refusal is harmless and the next click will do it.
+      this.lock();
+    } else if (!want && this.locked) document.exitPointerLock();
   }
 
   /** Consume a one-shot action. */

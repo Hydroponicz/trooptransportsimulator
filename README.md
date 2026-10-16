@@ -175,7 +175,8 @@ The flight model is a rigid body simulated at 120 Hz:
 | `F` | Flares |
 | `T` | Stability assist mode |
 | `C` | Camera: chase / cockpit / hook / cinematic |
-| Mouse drag, wheel | Look around, zoom |
+| Mouse, wheel | Look around, zoom. In fullscreen the cursor is hidden and the mouse just moves the camera; windowed, drag to look |
+| Hold left `Alt` | Show the cursor (fullscreen) |
 | `B` | Look back |
 | `Tab` | Base terminal |
 | `M` | Theater map |
