@@ -143,8 +143,17 @@ export const FAST_ROPE: CargoType = {
 };
 
 /** Can this aircraft fly this contract (seats, litters, pallets, hook rating)? */
-export function fitsAircraft(c: Contract, af: { seats: number; litters: number; pallets: boolean; slingKg: number }): boolean {
+export function fitsAircraft(
+  c: Contract,
+  af: { seats: number; litters: number; pallets: boolean; slingKg: number; rotorRadius?: number; rotorHubs?: THREE.Vector3[]; hitHalfLength?: number },
+): boolean {
   if (c.mode !== 'air') return true;
+  // A roof has to have room for the rotors (and the fuselage) over it.
+  if (c.roof && af.rotorRadius) {
+    const R = af.rotorRadius;
+    const along = Math.max((af.hitHalfLength ?? 0) + 1, ...(af.rotorHubs ?? []).map((h) => Math.abs(h.z) + R));
+    if (c.roof.along < along + 0.5 || c.roof.across < R + 0.5) return false;
+  }
   switch (c.type.kind) {
     case 'troops':
       return c.count <= af.seats;
@@ -700,13 +709,17 @@ export class MissionSystem {
             ? `${CALLSIGN}, insertion point is marked with red smoke, we're taking fire down there. Hover five to twenty metres and hold it, ropes go out as soon as you're steady.`
             : `${CALLSIGN}, insertion point marked with yellow smoke. Hover five to twenty metres over it and hold steady for the ropes.`,
         );
-      else if (c.roof)
+      else if (c.roof) {
+        // The heading with the most room over the roof (either way along it), to the nearest 10°.
+        const deg = Math.round((((Math.atan2(Math.sin(c.roof.heading), -Math.cos(c.roof.heading)) * 180) / Math.PI + 360) % 360) / 10) * 10 % 360;
+        const lineUp = `Roof's clear lined up on ${String(deg).padStart(3, '0')} or ${String((deg + 180) % 360).padStart(3, '0')}.`;
         this.hooks.radio(
           'Team leader',
           hot
-            ? `${CALLSIGN}, target roof is marked with red smoke. Contact on the streets, they'll be shooting at you. Low hover, we go fast.`
-            : `${CALLSIGN}, target roof is marked with yellow smoke. Bring us to a low hover over it, we'll go off the side. No need to set down.`,
+            ? `${CALLSIGN}, target roof is marked with red smoke. Contact on the streets, they'll be shooting at you. Low hover, we go fast. ${lineUp}`
+            : `${CALLSIGN}, target roof is marked with yellow smoke. Bring us to a low hover over it, we'll go off the side. No need to set down. ${lineUp}`,
         );
+      }
       else {
         this.hooks.radio(
           c.to.name,

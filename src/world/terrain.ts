@@ -6,7 +6,7 @@ import { CROP_COLOR, FIELD_GLSL } from './farms';
 
 /** Terrain tiles: 128 cells (1.6 km) square, so every LOD stride divides them. */
 export const TILE_CELLS = 128;
-export const TILES = 9;
+export const TILES = 36;
 export const SEGS = TILE_CELLS * TILES;
 /** 12.5 m grid. */
 export const CELL = 12.5;

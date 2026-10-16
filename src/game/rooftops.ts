@@ -27,6 +27,10 @@ export interface Rooftop {
   y: number;
   /** Radius of the clear, flat patch around (x, z). */
   clear: number;
+  /** Facing `heading` (radians), how far nose and tail (along) and each side (across) are clear, metres. */
+  along: number;
+  across: number;
+  heading: number;
   tag: string;
 }
 
@@ -112,9 +116,40 @@ export class Rooftops {
       }
       if (!best || clear > best.clear) best = { x, z, clear };
     }
-    const out = best && best.clear >= 2 ? { id: this.nextId++, town: t, x: best.x, z: best.z, y: level, clear: best.clear, tag: b.tag! } : null;
+    let out: Rooftop | null = null;
+    if (best && best.clear >= 2) {
+      const room = this.span(best.x, best.z, level);
+      out = { id: this.nextId++, town: t, x: best.x, z: best.z, y: level, clear: best.clear, tag: b.tag!, ...room };
+    }
     this.found.set(b, out);
     return out;
+  }
+
+  /**
+   * Room for an aircraft over the drop point: in the best of twelve headings,
+   * how far nose and tail can reach (along) and how far to each side (across)
+   * with nothing standing up from the deck to rotor height (stair houses,
+   * plant rooms, parapets, the building next door).
+   */
+  private span(x: number, z: number, deck: number): { along: number; across: number; heading: number } {
+    const C = this.world.colliders;
+    const p = new THREE.Vector3();
+    const reach = (dx: number, dz: number, max: number) => {
+      for (let d = 1; d <= max; d++)
+        for (const up of [0.6, 1.8, 3, 5, 7]) if (C.hit(p.set(x + dx * d, deck + up, z + dz * d), 0.2)) return d - 1;
+      return max;
+    };
+    let best = { along: 0, across: 0, heading: 0 };
+    for (let i = 0; i < 12; i++) {
+      const h = (i / 12) * Math.PI;
+      const dx = Math.sin(h);
+      const dz = Math.cos(h);
+      const along = Math.min(reach(dx, dz, 18), reach(-dx, -dz, 18));
+      const across = Math.min(reach(dz, -dx, 12), reach(-dz, dx, 12));
+      // Best: the most room for the smaller of the two needs (a long aircraft needs along, any needs across).
+      if (Math.min(along, across * 1.6) > Math.min(best.along, best.across * 1.6)) best = { along, across, heading: h };
+    }
+    return best;
   }
 
   /** Is this point on the roof (at deck height, give or take a step)? */

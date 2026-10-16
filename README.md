@@ -203,6 +203,12 @@ strapped-down pallet. The time limit is set from the route length by road at con
 not the straight-line distance, so a job that is 3 km by air can be 5 km by
 road with more time to match. Pay scales with road distance and risk.
 
+On the big map jobs reach further, but they're capped to a sitting's work:
+deliveries up to 24 km (about ten minutes' flying), pickups up to 12 km
+away, rooftop and fast-rope insertions up to 15 km, and road jobs up to
+30 km of road (about half an hour at convoy speed). Timers and pay grow with
+the distance.
+
 The truck has 4-wheel drive with independent suspension. Roads are graded
 and grip better than grass, and bridges have guard rails. Deep water stalls
 the engine. If you roll it or get stuck, `T` calls a recovery truck ($400)
@@ -340,8 +346,8 @@ Y = camera, LB = flares, RB = SAS, Start = terminal.
 
 ## The world
 
-Each career has a seed that generates a 14.4 × 14.4 km theater (about 12.6 km
-across inside the mountains): rolling hills, rivers crossed by bridges, mountains around the edges, and a winding **front
+Each career has a seed that generates a 57.6 × 57.6 km theater (about 56 km
+across inside the mountains, sixteen times the area of the first version): rolling hills, rivers crossed by bridges, mountains around the edges, and a winding **front
 line** (friendly to the west, enemy to the east) scarred with craters,
 burning wrecks, artillery and tracer fire. The ground flattens out near the
 front so battles happen on sensible terrain.
@@ -360,11 +366,11 @@ pixel:
 Places include:
 
 - **Main operating base**: hangars, fuel farm, upgrades.
-- **FOBs** (about six): fuel, repair and flares.
-- **Combat outposts** (about a dozen) near the front.
-- **Landing zones** (about twenty): open fields, some behind enemy lines.
-- **Cities** (three: two behind our lines, one behind theirs), each about a
-  kilometre across, on a street grid:
+- **FOBs** (about two dozen): fuel, repair and flares.
+- **Combat outposts** (about fifty) near the front.
+- **Landing zones** (several hundred): open fields, some behind enemy lines.
+- **Cities** (about a dozen, most behind our lines, some behind theirs),
+  each about a kilometre across, on a street grid:
   - a central square with a war memorial, a fountain and kiosks, ringed by
     Stalin-era blocks, shops with awnings and offices, with a cathedral nearby
   - panel-block estates (nine-storey slabs and sixteen-storey towers) with
@@ -373,10 +379,10 @@ Places include:
   - private houses behind board fences on the edges
   - an industrial quarter of factories, warehouses, chimneys and water towers
   - avenues lined with lime trees, and parked cars along the streets
-- **Towns**: the same plan on a smaller scale. Contested towns straddle the
-  front, ruined and fought over.
-- **Villages and farming communities** (about thirty, several on each city's
-  outskirts):
+- **Towns** (about two hundred): the same plan on a smaller scale.
+  Contested towns straddle the front, ruined and fought over.
+- **Villages and farming communities** (about five hundred, several on each
+  city's outskirts):
   - houses along the street behind board fences, with gardens, fruit trees
     and sheds
   - a shop and a bus stop, and a chapel in the bigger ones
@@ -513,15 +519,15 @@ A sunny summer day in eastern Europe:
 
 ### The war
 
-The front is split into 10 sectors (A–J) that track both sides' infantry,
-armor, fortifications, ammo and artillery. Sectors far from you fight on as
-numbers. Near you they become real battles: trench lines dug by engineers,
-squads assaulting across no-man's land, APCs bringing reinforcements, tank
-duels and artillery. A sector with a contested town fights around it. Every
-casualty is written back to the campaign, and your deliveries change it:
-troops reinforce, ammo boosts firepower, supplies fortify, howitzers add
-artillery, vehicles add armor. The **Front** tab and the theater map show
-the state of each sector.
+The front, over 50 km long, is split into 90 sectors (A, B, ... Z, AA, ...)
+that track both sides' infantry, armor, fortifications, ammo and artillery.
+Sectors far from you fight on as numbers. Near you they become real battles:
+trench lines dug by engineers, squads assaulting across no-man's land, APCs
+bringing reinforcements, tank duels and artillery. A sector with a contested
+town fights around it. Every casualty is written back to the campaign, and
+your deliveries change it: troops reinforce, ammo boosts firepower, supplies
+fortify, howitzers add artillery, vehicles add armor. The **Front** tab and
+the theater map show the state of each sector.
 
 Close air support flies its own missions. A-10s strafe enemy positions with
 their 30 mm cannon (you hear the BRRRT after the impacts), and Su-25s make
@@ -539,24 +545,39 @@ Bird about a fifth; a quick drop much less. RPGs, tank rounds and missiles
 still hit hard.
 
 Progress (money, rank, upgrades, stats, seed) is saved in `localStorage`.
+The front's campaign starts afresh whenever the theater changes size (its
+sectors no longer line up); money, rank and aircraft carry over.
 
 ## Performance
 
 The theater is big, so most of it is drawn cheaply or not at all:
 
-- **Terrain** is 81 tiles of 1.6 km, each picking one of five levels of
-  detail by distance (full 12.5 m grid up close, 200 m far out), with skirts
-  hiding the seams. Off-screen tiles are culled, including from the shadow
-  pass.
+- **Streaming.** Only what's near is built. The plan of the whole theater
+  (sites, towns, roads, farms, placements) is laid out at the start, but the
+  meshes, forests and terrain heights are made round the camera as you go,
+  nearest first, a few milliseconds a frame, and forgotten far behind you.
+  Far away, heights are worked out at the point rather than by building
+  terrain, so nothing stalls a frame. Laying out the plan is what the loading
+  screen waits for: a few tens of seconds on a fast machine, longer on a
+  slow one.
+- **Terrain** is 1.6 km tiles. Within 5.6 km of the camera a tile gets a
+  full-detail mesh, picking one of four levels of detail by distance (12.5 m
+  grid up close, 100 m at the edge). Out to 12 km, past the fog, it gets a
+  coarse 17 × 17 stand-in. Skirts hide the seams. A tile's heights and
+  colours are worked out a few rows a frame, and the road cuttings and
+  embankments are applied per vertex as it's made. River water is built per
+  full tile.
 - **Shadows**: the instanced world chunks don't cast. Invisible copies of the
   trees and buildings within 170 m (fewer on lower settings) draw only into
   the shadow map, rebuilt as you move.
-- **Forests** are in 1.2 km chunks: full trees within about 1 km, a single
+- **Forests** are generated per 1.2 km chunk from the chunk's own seed (so
+  it's the same every visit): full trees within about 1 km, a single
   five-sided stand-in per tree (one draw call per chunk) out to the fog, and
   nothing beyond.
-- **Props** are instanced per prototype per cell (0.8 km for small props,
-  1.2 km for buildings with a far version, 2.4 km otherwise) and hidden by size
-  class: fence posts and delineators go first, buildings and pylons stay to
+- **Props** are stored packed (32 bytes a placement) and instanced per
+  prototype per cell (0.8 km for small props, 1.2 km for buildings with a far
+  version, 2.4 km otherwise) only while the camera is within that class's
+  range. Fence posts and delineators go first, buildings and pylons stay to
   the fog. Buildings switch to a simplified version (plain window panes)
   beyond 1.2 km.
 - **Grass** is one instanced mesh refilled from cached 16 m cells as the
