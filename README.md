@@ -471,8 +471,8 @@ A sunny summer day in eastern Europe:
   (taller towers where it is thick), lit by a short march toward the sun, and
   has bright silver edges when the sun is behind it. Bases are flat and grey,
   tops are cauliflower-white, and distant clouds sink into the horizon haze.
-  The clouds drift with the upper wind and their shadows move across the land
-  under them. The sky is a deep blue, richest at right angles to the sun,
+  The clouds drift slowly with the upper wind, and their shadows creep
+  across the land under them. The sky is a deep blue, richest at right angles to the sun,
   with a soft glow round the sun's disc, which clouds pass in front of.
 - **Haze:** a height fog, thick in the valleys and thin over the peaks, that
   warms toward the sun. Distant ridges read as layers of blue rather than a
@@ -564,9 +564,12 @@ The theater is big, so most of it is drawn cheaply or not at all:
   disappears past
   4 km. Static parts of the helicopter and Humvee are merged by material.
 - **Clouds** are raymarched into a sky panorama, not for every screen pixel
-  every frame. Each frame redraws one vertical strip of it, from horizon to
-  zenith, so every frame costs the same. The whole panorama is redrawn in
-  under a second, or four strips a frame after a teleport. High uses
+  every frame. Each frame builds one vertical strip of the next panorama,
+  from horizon to zenith, so every frame costs the same. A whole panorama is
+  built from one moment and one viewpoint, in a hidden target, so its strips
+  always agree. The sky cross-fades from the previous panorama to the latest
+  one while the next is built, so the clouds glide rather than step. After a
+  teleport it builds four strips a frame and shows the result at once. High uses
   2048×512 and 36 steps, Medium 1536×384 and 22 steps. Low paints the same
   cloud field flat instead. Cloud shadows are worked out per vertex.
 - **Smoke** is one draw call, sorted back to front with a counting sort.

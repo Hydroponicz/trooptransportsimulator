@@ -23,22 +23,33 @@ export class Environment {
    * sky pixel every frame they are rendered into a sky panorama (x =
    * azimuth, y = sqrt of the sine of the elevation, so the horizon gets the
    * most texels): the light they scatter toward the camera (rgb) and how much
-   * of the sky behind shows through (a). The panorama is refreshed a band at
-   * a time, all of it every few frames.
+   * of the sky behind shows through (a).
+   *
+   * A new panorama is built a strip of azimuth per frame (so every frame
+   * costs the same) into a hidden target, all of it from one moment and one
+   * camera position, so strips never disagree. The sky shows a cross-fade
+   * from the previous complete panorama to the latest while the next is
+   * built: the clouds move smoothly, never in steps.
    */
-  private cloudRT: THREE.WebGLRenderTarget;
+  private rts: THREE.WebGLRenderTarget[] = [];
+  /** Shown: fading from rts[prev] to rts[cur]; being built: rts[next]. */
+  private prev = 0;
+  private cur = 1;
+  private next = 2;
+  private blend = 1;
   private cloudMat: THREE.ShaderMaterial;
   private cloudScene = new THREE.Scene();
   private cloudCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private noise = cloudNoiseTexture();
   private slice = 0;
   private slices = 8;
-  private fresh = false;
+  /** Build the next panorama fast and show it outright (start, quality change, teleport). */
+  private urgent = true;
   private blank = true;
-  /** Band where the current full redraw began. */
-  private restart = 0;
   private steps = -1;
   private camPos = new THREE.Vector3(0, 300, 0);
+  /** Camera position the panorama being built is seen from. */
+  private snapPos = new THREE.Vector3(0, 300, 0);
   private time = 0;
 
   constructor(scene: THREE.Scene) {
@@ -78,6 +89,8 @@ export class Environment {
         sunHaze: { value: SUN_HAZE.clone() },
         sunDir: { value: SUN_DIR },
         cloudTex: { value: null },
+        cloudPrev: { value: null },
+        cloudBlend: { value: 1 },
       },
       vertexShader: /* glsl */ `
         varying vec3 vDir;
@@ -98,7 +111,7 @@ export class Environment {
         time: { value: 0 },
         sunDir: { value: SUN_DIR },
         noiseTex: { value: this.noise },
-        camPos: { value: this.camPos },
+        camPos: { value: this.snapPos },
         shift: { value: new THREE.Vector2() },
         sunCol: { value: SUN_COLOR.clone().multiplyScalar(1.0) },
         skyTop: { value: SKY_TOP.clone() },
@@ -114,7 +127,6 @@ export class Environment {
     const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.cloudMat);
     quad.frustumCulled = false;
     this.cloudScene.add(quad);
-    this.cloudRT = this.makeRT(1024, 256);
     this.setCloudQuality(48);
 
     this.ranges = farRanges();
@@ -142,61 +154,87 @@ export class Environment {
     if (steps === this.steps) return;
     this.steps = steps;
     const [w, h] = steps >= 32 ? [2048, 512] : steps > 0 ? [1536, 384] : [1024, 256];
-    if (this.cloudRT.width !== w) {
-      this.cloudRT.dispose();
-      this.cloudRT = this.makeRT(w, h);
+    if (!this.rts.length || this.rts[0].width !== w) {
+      for (const rt of this.rts) rt.dispose();
+      this.rts = [0, 1, 2].map(() => this.makeRT(w, h));
+      this.blank = true;
     }
-    this.skyMat.uniforms.cloudTex.value = this.cloudRT.texture;
     this.cloudMat.defines.STEPS = steps;
     this.cloudMat.defines.LSTEPS = steps >= 32 ? 4 : 3;
     this.cloudMat.needsUpdate = true;
     this.slices = steps >= 32 ? 48 : steps > 0 ? 32 : 4;
-    this.slice = 0;
-    this.blank = true;
     this.redraw();
   }
 
+  /** Start a fresh panorama now and show it as soon as it's built. */
   private redraw() {
-    this.fresh = false;
-    this.restart = this.slice;
+    this.urgent = true;
+    this.slice = 0;
   }
 
-  /** Drift the clouds and refresh a strip of the cloud panorama (four a frame while it is redrawn). */
+  /** Drift the clouds and build a strip of the next cloud panorama (four a frame when urgent). */
   update(dt: number, renderer?: THREE.WebGLRenderer) {
     this.time += dt;
-    // The cumulus drift with the upper wind.
-    CLOUD_SHIFT.x += 7 * dt;
-    CLOUD_SHIFT.y += 2.5 * dt;
+    // The cumulus drift slowly with the upper wind (the shadows follow continuously).
+    CLOUD_SHIFT.x += 1.2 * dt;
+    CLOUD_SHIFT.y += 0.45 * dt;
     if (!renderer) return;
-    const u = this.cloudMat.uniforms;
-    u.time.value = this.time;
-    u.shift.value.set(CLOUD_SHIFT.x, CLOUD_SHIFT.y);
-    const rt = this.cloudRT;
-    const prev = renderer.getRenderTarget();
+    const prevTarget = renderer.getRenderTarget();
     if (this.blank) {
-      // New panorama: start from a clear sky.
+      // New targets: start from a clear sky.
       this.blank = false;
-      rt.scissor.set(0, 0, rt.width, rt.height);
       const cc = renderer.getClearColor(new THREE.Color());
       const ca = renderer.getClearAlpha();
-      renderer.setRenderTarget(rt);
       renderer.setClearColor(0x000000, 1);
-      renderer.clear(true, false, false);
+      for (const rt of this.rts) {
+        rt.scissor.set(0, 0, rt.width, rt.height);
+        renderer.setRenderTarget(rt);
+        renderer.clear(true, false, false);
+      }
       renderer.setClearColor(cc, ca);
     }
-    // One strip of azimuth a frame, horizon to zenith, so every frame costs the same
-    // (rows near the horizon march far further than those overhead). After a jump, a few.
-    const per = this.fresh ? 1 : 4;
-    const strip = Math.ceil(rt.width / this.slices);
+    const u = this.cloudMat.uniforms;
+    const per = this.urgent ? 4 : 1;
     for (let n = 0; n < per; n++) {
+      if (this.slice === 0) {
+        // A new panorama: one moment, one viewpoint for all of it.
+        this.snapPos.copy(this.camPos);
+        u.time.value = this.time;
+        u.shift.value.set(CLOUD_SHIFT.x, CLOUD_SHIFT.y);
+      }
+      const rt = this.rts[this.next];
+      const strip = Math.ceil(rt.width / this.slices);
       rt.scissor.set(this.slice * strip, 0, strip, rt.height);
       rt.viewport.set(0, 0, rt.width, rt.height);
       renderer.setRenderTarget(rt);
       renderer.render(this.cloudScene, this.cloudCam);
-      this.slice = (this.slice + 1) % this.slices;
-      if (this.slice === this.restart) this.fresh = true;
+      this.slice++;
+      if (this.slice >= this.slices) {
+        // Built: fade from what is on screen now to it.
+        this.slice = 0;
+        if (this.urgent) {
+          // Show it outright (nothing worth fading from).
+          this.prev = this.cur = this.next;
+          this.next = (this.cur + 1) % 3;
+          this.blend = 1;
+          this.urgent = false;
+        } else {
+          this.prev = this.cur;
+          this.cur = this.next;
+          // The one neither shown nor fading out.
+          this.next = 3 - this.prev - this.cur;
+          this.blend = 0;
+        }
+        break;
+      }
     }
-    renderer.setRenderTarget(prev);
+    renderer.setRenderTarget(prevTarget);
+    // The fade lasts as long as building the next one.
+    this.blend = Math.min(1, this.blend + 1 / this.slices);
+    const su = this.skyMat.uniforms;
+    su.cloudPrev.value = this.rts[this.prev].texture;
+    su.cloudTex.value = this.rts[this.cur].texture;
+    su.cloudBlend.value = this.blend;
   }
 
   /** Keep the shadow frustum centered on the area of interest. */
@@ -204,7 +242,7 @@ export class Environment {
     this.sun.target.position.copy(target);
     this.sun.position.copy(target).addScaledVector(SUN_DIR, 400);
     this.sky.position.copy(cameraPos);
-    // A jump (respawn, map teleport): redraw the whole panorama, not a band.
+    // A jump (respawn, map teleport): build a new panorama at once.
     if (this.camPos.distanceToSquared(cameraPos) > 300 * 300) this.redraw();
     this.camPos.copy(cameraPos);
     this.ranges.position.set(cameraPos.x, 0, cameraPos.z);
@@ -305,13 +343,13 @@ float density(vec3 p, float cov, bool detail) {
   // Taller towers where the cover is thick; flat bases, rounded tops.
   float top = 0.25 + 0.75 * cov;
   float prof = smoothstep(0.0, 0.06, h) * (1.0 - smoothstep(top * 0.45, top, h));
-  vec3 q = vec3(p.x + shift.x, p.y - time * 0.6, p.z + shift.y) * (1.0 / 2100.0);
+  vec3 q = vec3(p.x + shift.x, p.y - time * 0.12, p.z + shift.y) * (1.0 / 2100.0);
   float sh = texture(noiseTex, q).r * 0.75 + texture(noiseTex, q * 2.7 + 0.31).r * 0.25;
   float c = 0.1 + 0.6 * cov;
   float d = clamp((sh * prof - (1.0 - c)) / c, 0.0, 1.0);
   if (detail && d > 0.0) {
     // Cauliflower billows on top, ragged wisps underneath.
-    float det = texture(noiseTex, q * 6.3 + vec3(time * 0.0015, 0.0, 0.0)).g;
+    float det = texture(noiseTex, q * 6.3 + vec3(time * 0.0003, 0.0, 0.0)).g;
     det = mix(1.0 - det, det, smoothstep(0.1, 0.5, h));
     d = clamp((d - det * 0.38) / 0.62, 0.0, 1.0);
   }
@@ -404,6 +442,8 @@ uniform vec3 horizon;
 uniform vec3 sunHaze;
 uniform vec3 sunDir;
 uniform sampler2D cloudTex;
+uniform sampler2D cloudPrev;
+uniform float cloudBlend;
 varying vec3 vDir;
 
 void main() {
@@ -421,7 +461,8 @@ void main() {
 
   float vis = 1.0;
   if (d.y > 0.0) {
-    vec4 cl = texture2D(cloudTex, vec2(atan(d.z, d.x) / 6.2831853 + 0.5, sqrt(h)));
+    vec2 puv = vec2(atan(d.z, d.x) / 6.2831853 + 0.5, sqrt(h));
+    vec4 cl = mix(texture2D(cloudPrev, puv), texture2D(cloudTex, puv), cloudBlend);
     cl = mix(vec4(0.0, 0.0, 0.0, 1.0), cl, smoothstep(0.0, 0.012, h));
     col = col * cl.a + cl.rgb;
     vis = cl.a * cl.a * cl.a;
