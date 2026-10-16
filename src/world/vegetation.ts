@@ -12,8 +12,16 @@ interface Tree {
   z: number;
   y: number;
   h: number;
+  /** Crown radius. */
   r: number;
+  /** Trunk radius at the ground, and the height where the crown starts. */
+  tr: number;
+  cb: number;
 }
+
+/** Per kind (spruce, broadleaf, dead, birch): trunk radius at the base and crown bottom, unscaled. */
+const TRUNK = [0.34, 0.4, 0.3, 0.2];
+const CROWN_BASE = [2.0, 2.85, 3.0, 3.5];
 
 const GRID = 40;
 /** 1.8 km chunks, for culling. */
@@ -120,7 +128,7 @@ export class Vegetation {
         colors[ci][kind].push(new THREE.Color(v, v * rng.range(0.96, 1.04), v * 0.95));
         const h = (kind === 2 ? 6 : kind === 0 ? 10 : kind === 3 ? 8.2 : 7) * s;
         const r = (kind === 2 ? 0.8 : kind === 0 ? 2.4 : kind === 3 ? 1.6 : 2.6) * s;
-        this.insert({ x, z, y, h, r });
+        this.insert({ x, z, y, h, r, tr: TRUNK[kind] * s, cb: CROWN_BASE[kind] * s });
       }
     }
     for (let ci = 0; ci < CHUNKS * CHUNKS; ci++) {
@@ -176,7 +184,10 @@ export class Vegetation {
         for (const t of arr) {
           const ddx = p.x - t.x;
           const ddz = p.z - t.z;
-          if (ddx * ddx + ddz * ddz < t.r * t.r * 0.7 && p.y < t.y + t.h && p.y > t.y - 1) return true;
+          if (p.y > t.y + t.h || p.y < t.y - 1) continue;
+          // The trunk below the crown (vehicles pass under the branches), the crown above it.
+          const rr = p.y < t.y + t.cb ? t.tr + 0.05 : t.r * 0.84;
+          if (ddx * ddx + ddz * ddz < rr * rr) return true;
         }
       }
     return false;

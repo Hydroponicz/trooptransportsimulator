@@ -327,6 +327,19 @@ and viaducts that run from bank to bank, and steep ramps climb to hilltop
 bases. Bridges are always paved: a dirt track gets an asphalt deck and short
 asphalt approaches where it crosses.
 
+**Collisions** follow each structure's real shape, not a box around it.
+Every building and prop keeps the solid parts it is modelled from (walls,
+pillars, roofs, tanks, poles) in its own turned frame: boxes, upright
+cylinders for round parts, a half-cylinder for hangars and a ridge for
+gables and tents. Streets and pavements beside a turned building stay open,
+you can drive under a petrol-station canopy, and a rotor only strikes what
+is actually there. Parked cars, kiosks, bus stops, street lamps, sign posts,
+street trees, sandbags, crates, barrels, wrecks, rocks, hay bales and parked
+military vehicles are solid. Rubble, slabs, plazas, delineators, fence and
+guard-rail posts, and livestock can be driven over or through. Forest trees
+block at the trunk below the crown and at the crown above it, so vehicles
+pass under the branches.
+
 ### The look
 
 A sunny summer day in eastern Europe:
@@ -436,6 +449,7 @@ src/
   fx/                particles (dust, smoke, fire), tracers, explosions
   audio.ts           synthesized rotor, turbine, wind and effects audio
   ui/                HUD, minimap and theater map, terminal and dialogs
+  world/colliders.ts structure collisions: a grid of bounding boxes, each with its prototype's solid parts
   world/lod.ts       distance culling and per-cell splitting of world chunks
   world/shadows.ts   near-only shadow casters for the instanced trees and buildings
 ```

@@ -55,7 +55,7 @@ export const FOOTPRINT: Partial<Record<string, [number, number]>> = {
   shops: [26.4, 13.2],
   office: [28.8, 16],
   school: [46.2, 13.2],
-  factory: [42, 24],
+  factory: [55.4, 24],
   warehouse: [30, 18],
   garages: [25.6, 6],
   gasstation: [24, 16],
@@ -64,9 +64,9 @@ export const FOOTPRINT: Partial<Record<string, [number, number]>> = {
 /** Collides with aircraft and vehicles. */
 export const CITY_COLLIDE: Record<CityProto, boolean> = {
   block9: true, tower16: true, stalinka: true, shops: true, office: true, school: true, factory: true, warehouse: true, garages: true,
-  gasstation: true, kiosk: false, watertower: true, chimney: true, streettree: false, parkedcar: false, fence_board: false, fence_rail: false,
-  cow: false, haystack: false, shed: true, machineshed: true, tractor_parked: false, farmhouse: true, monument: true, fountain: false,
-  playground: false, busstop: false, plaza: false,
+  gasstation: true, kiosk: true, watertower: true, chimney: true, streettree: true, parkedcar: true, fence_board: false, fence_rail: false,
+  cow: false, haystack: true, shed: true, machineshed: true, tractor_parked: true, farmhouse: true, monument: true, fountain: true,
+  playground: false, busstop: true, plaza: false,
 };
 
 /** View distances (unlisted: 4 km). Tall buildings stay to the fog. */
@@ -196,20 +196,22 @@ function factory() {
   const W = 42;
   const D = 24;
   const H = 8;
-  const p: THREE.BufferGeometry[] = [sp('facade_brick', false, box(W, H, D), 0xa7614a, 0, H / 2, 0)];
+  // The office annex sticks out on the -X end; shift the whole so the footprint is centred.
+  const OX = 6.7;
+  const p: THREE.BufferGeometry[] = [sp('facade_brick', false, box(W, H, D), 0xa7614a, OX, H / 2, 0)];
   // Sawtooth roof: bays across the hall, each a sloped sheet and a glazed upstand.
   const bays = 6;
   const bw = D / bays;
   for (let i = 0; i < bays; i++) {
     const z = -D / 2 + bw * (i + 0.5);
     const a = Math.atan2(2.2, bw);
-    p.push(sp('sheet', false, box(W, 0.15, Math.hypot(bw, 2.2)), 0x8a8c86, 0, H + 1.1, z, a, 0, 0));
-    p.push(sp('glass', false, box(W, 2.2, 0.1), 0x2a3640, 0, H + 1.1, z + bw / 2 - 0.05));
+    p.push(sp('sheet', false, box(W, 0.15, Math.hypot(bw, 2.2)), 0x8a8c86, OX, H + 1.1, z, a, 0, 0));
+    p.push(sp('glass', false, box(W, 2.2, 0.1), 0x2a3640, OX, H + 1.1, z + bw / 2 - 0.05));
   }
-  p.push(sp('facade_plaster', true, box(13.2, 9.9, 9.9), 0xe0d8c4, -W / 2 - 6.6, 4.95, D / 2 - 5));
-  p.push(sp('concrete', false, box(13.6, 0.4, 10.3), CONCRETE, -W / 2 - 6.6, 10.1, D / 2 - 5));
+  p.push(sp('facade_plaster', true, box(13.2, 9.9, 9.9), 0xe0d8c4, OX - W / 2 - 6.6, 4.95, D / 2 - 5));
+  p.push(sp('concrete', false, box(13.6, 0.4, 10.3), CONCRETE, OX - W / 2 - 6.6, 10.1, D / 2 - 5));
   // Loading doors.
-  for (const x of [-8, 8]) p.push(sp('metal', false, box(5, 5, 0.15), 0x5a6a6e, x, 2.5, D / 2 + 0.08));
+  for (const x of [-8, 8]) p.push(sp('metal', false, box(5, 5, 0.15), 0x5a6a6e, OX + x, 2.5, D / 2 + 0.08));
   return merge(p);
 }
 

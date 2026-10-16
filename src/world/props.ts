@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { DistanceCuller } from './lod';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { AABB, ColliderSet } from './colliders';
+import { SolidKind, type AABB, type ColliderSet, type Solid } from './colliders';
 import type { ShadowCasters } from './shadows';
 import { surf, withSurfaces, type SurfName } from './surfaces';
 import { buildCityProto, CITY_COLLIDE, CITY_VIEW, type CityProto } from './buildings';
@@ -22,12 +22,10 @@ export function part(
 ): THREE.BufferGeometry {
   let g = geo.index ? geo.toNonIndexed() : geo.clone();
   g.deleteAttribute('uv');
-  const m = new THREE.Matrix4().compose(
-    new THREE.Vector3(x, y, z),
-    new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)),
-    new THREE.Vector3(sx, sy, sz),
-  );
+  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz));
+  const m = new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(sx, sy, sz));
   g.applyMatrix4(m);
+  g.userData = { solid: solidOf(geo, g, m, q, sx, sy, sz) };
   const c = new THREE.Color(color);
   const n = g.getAttribute('position').count;
   const arr = new Float32Array(n * 3);
@@ -40,8 +38,95 @@ export function part(
   return surf(g, 'plain');
 }
 
+/**
+ * The solid a part fills, for collisions: its own (oriented) box, as a
+ * cylinder for round primitives, or a shape the source geometry declares in
+ * `userData.solid` ({ kind, k }).
+ */
+function solidOf(raw: THREE.BufferGeometry, g: THREE.BufferGeometry, m: THREE.Matrix4, q: THREE.Quaternion, sx: number, sy: number, sz: number): Solid & { check: THREE.Box3 } {
+  if (!raw.boundingBox) raw.computeBoundingBox();
+  const bb = raw.boundingBox!;
+  const c = bb.getCenter(new THREE.Vector3()).applyMatrix4(m);
+  const half = bb.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+  const e = new THREE.Matrix4().makeRotationFromQuaternion(q).elements;
+  const decl = raw.userData.solid as { kind: SolidKind; k?: number } | undefined;
+  const round = ['CylinderGeometry', 'ConeGeometry', 'SphereGeometry', 'IcosahedronGeometry', 'DodecahedronGeometry', 'LatheGeometry'].includes(raw.type);
+  g.computeBoundingBox();
+  return {
+    kind: decl?.kind ?? (round ? SolidKind.Cylinder : SolidKind.Box),
+    k: decl?.k ?? 0,
+    cx: c.x,
+    cy: c.y,
+    cz: c.z,
+    // Matrix4 elements are column-major; this is the rotation row by row.
+    r: [e[0], e[4], e[8], e[1], e[5], e[9], e[2], e[6], e[10]],
+    hx: half.x * Math.abs(sx),
+    hy: half.y * Math.abs(sy),
+    hz: half.z * Math.abs(sz),
+    // Where the part was when its solid was taken: if it is moved afterwards, fall back to its box.
+    check: g.boundingBox!.clone(),
+  };
+}
+
+const IDENT = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
+/** The solids of the merged parts, near-duplicates and boxes inside others dropped, abutting boxes joined. */
+function solidsOf(parts: THREE.BufferGeometry[]): Solid[] {
+  const out: Solid[] = [];
+  const bb = new THREE.Box3();
+  for (const p of parts) {
+    const own = p.userData.solids as Solid[] | undefined;
+    if (own) {
+      out.push(...own);
+      continue;
+    }
+    bb.setFromBufferAttribute(p.getAttribute('position') as THREE.BufferAttribute);
+    const sd = p.userData.solid as (Solid & { check: THREE.Box3 }) | undefined;
+    if (sd && sd.check.min.distanceTo(bb.min) < 1e-3 && sd.check.max.distanceTo(bb.max) < 1e-3) {
+      const { check: _check, ...solid } = sd;
+      out.push(solid);
+    } else {
+      const c = bb.getCenter(new THREE.Vector3());
+      const h = bb.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+      out.push({ kind: SolidKind.Box, k: 0, cx: c.x, cy: c.y, cz: c.z, r: IDENT, hx: h.x, hy: h.y, hz: h.z });
+    }
+  }
+  // Axis-aligned boxes: drop ones inside another, join pairs that make a box between them.
+  const aligned = (o: Solid) => o.kind === SolidKind.Box && o.r.every((v, i) => Math.abs(v - IDENT[i]) < 1e-6);
+  const lo = (o: Solid) => [o.cx - o.hx, o.cy - o.hy, o.cz - o.hz];
+  const hi = (o: Solid) => [o.cx + o.hx, o.cy + o.hy, o.cz + o.hz];
+  const box = (a: number[], b: number[]): Solid => ({ kind: SolidKind.Box, k: 0, cx: (a[0] + b[0]) / 2, cy: (a[1] + b[1]) / 2, cz: (a[2] + b[2]) / 2, r: IDENT, hx: (b[0] - a[0]) / 2, hy: (b[1] - a[1]) / 2, hz: (b[2] - a[2]) / 2 });
+  const vol = (o: Solid) => 8 * o.hx * o.hy * o.hz;
+  let list = out;
+  for (let changed = true; changed && list.length < 600; ) {
+    changed = false;
+    outer: for (let i = 0; i < list.length; i++) {
+      if (!aligned(list[i])) continue;
+      for (let j = 0; j < list.length; j++) {
+        if (i === j || !aligned(list[j])) continue;
+        const a0 = lo(list[i]), a1 = hi(list[i]), b0 = lo(list[j]), b1 = hi(list[j]);
+        const u0 = a0.map((v, t) => Math.min(v, b0[t]));
+        const u1 = a1.map((v, t) => Math.max(v, b1[t]));
+        const inside = [0, 1, 2].every((t) => b0[t] >= a0[t] - 0.02 && b1[t] <= a1[t] + 0.02);
+        const ov = [0, 1, 2].reduce((acc, t) => acc * Math.max(0, Math.min(a1[t], b1[t]) - Math.max(a0[t], b0[t])), 1);
+        const uv = (u1[0] - u0[0]) * (u1[1] - u0[1]) * (u1[2] - u0[2]);
+        // Joined only when the union is (almost) exactly the two boxes: no new solid space.
+        const join = uv <= (vol(list[i]) + vol(list[j]) - ov) * 1.002 + 1e-4;
+        if (!inside && !join) continue;
+        list = list.filter((_, t) => t !== i && t !== j);
+        list.push(inside ? box(a0, a1) : box(u0, u1));
+        changed = true;
+        break outer;
+      }
+    }
+  }
+  return list;
+}
+
 export function merge(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const solids = solidsOf(parts);
   const g = mergeGeometries(parts, false)!;
+  g.userData = { solids };
   g.computeBoundingBox();
   g.computeBoundingSphere();
   return g;
@@ -62,6 +147,7 @@ function tentGeo(): THREE.BufferGeometry {
   s.closePath();
   const g = new THREE.ExtrudeGeometry(s, { depth: 8, bevelEnabled: false });
   g.translate(0, 0, -4);
+  g.userData.solid = { kind: SolidKind.Gable, k: 1.8 / 3.2 };
   return g;
 }
 
@@ -72,6 +158,7 @@ function hangarGeo(): THREE.BufferGeometry {
   s.lineTo(-11, 0);
   const g = new THREE.ExtrudeGeometry(s, { depth: 26, bevelEnabled: false, curveSegments: 14 });
   g.translate(0, 0, -13);
+  g.userData.solid = { kind: SolidKind.Arch };
   return g;
 }
 
@@ -139,6 +226,7 @@ function gable(w: number, h: number, d: number): THREE.BufferGeometry {
   sh.closePath();
   const g = new THREE.ExtrudeGeometry(sh, { depth: d, bevelEnabled: false });
   g.translate(0, 0, -d / 2);
+  g.userData.solid = { kind: SolidKind.Gable, k: 0 };
   return g;
 }
 
@@ -685,26 +773,31 @@ export function buildProto(name: ProtoName): THREE.BufferGeometry {
   }
 }
 
+/**
+ * Which prototypes are solid to aircraft and vehicles (with their real part
+ * shapes). Left passable: rubble, slabs and plazas you drive over, flexible
+ * delineators, fence and guard-rail posts, and livestock.
+ */
 const COLLIDE: Record<ProtoName, boolean> = {
   ...CITY_COLLIDE,
   hesco: true,
-  sandbag: false,
+  sandbag: true,
   container: true,
   tent: true,
   hangar: true,
   tower: true,
   tank: true,
-  bladder: false,
+  bladder: true,
   twall: true,
   building: true,
   net: true,
-  crates: false,
+  crates: true,
   truck: true,
-  hmmwv: false,
+  hmmwv: true,
   antenna: true,
-  aagun: false,
-  barrel: false,
-  wreck: false,
+  aagun: true,
+  barrel: true,
+  wreck: true,
   house_a: true,
   house_b: true,
   house_c: true,
@@ -718,21 +811,21 @@ const COLLIDE: Record<ProtoName, boolean> = {
   barn: true,
   silo: true,
   pylon: true,
-  rock: false,
-  haybale: false,
+  rock: true,
+  haybale: true,
   bridge_pier: true,
   lattice: true,
   woodpole: true,
-  streetlight: false,
+  streetlight: true,
   delineator: false,
   jersey: true,
   railpost: false,
   fencepost: false,
-  signpost: false,
+  signpost: true,
   hospital: true,
   medtent: true,
-  ammo_dump: false,
-  signboard: false,
+  ammo_dump: true,
+  signboard: true,
 };
 
 interface Batch {
@@ -807,7 +900,13 @@ export class Props {
     if (COLLIDE[name]) {
       this.tmpBox.copy(b.geo.boundingBox!).applyMatrix4(m);
       const bb = this.tmpBox;
-      box = { minX: bb.min.x, minY: bb.min.y, minZ: bb.min.z, maxX: bb.max.x, maxY: bb.max.y, maxZ: bb.max.z };
+      box = { minX: bb.min.x, minY: bb.min.y, minZ: bb.min.z, maxX: bb.max.x, maxY: bb.max.y, maxZ: bb.max.z, tag: name };
+      // The bounding box is only the broad test; the prototype's own parts, in its turned frame, decide.
+      const solids = b.geo.userData.solids as Solid[] | undefined;
+      if (solids?.length) {
+        box.solids = solids;
+        box.place = { x, y, z, c: Math.cos(rotY), s: Math.sin(rotY), isx: 1 / sc[0], isy: 1 / sc[1], isz: 1 / sc[2] };
+      }
       this.colliders.add(box);
     }
     b.boxes.push(box);

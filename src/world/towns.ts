@@ -229,7 +229,7 @@ function buildGrid(t: Town, props: Props, terrain: Terrain, rng: RNG) {
       if (industrial) {
         // Works: a factory or two, warehouses, garages, and the odd chimney or water tower.
         let z = z0 + 13;
-        tryBuild('factory', x0 + 26, z, 0) || tryBuild('warehouse', x0 + 16, z0 + 10, 0);
+        tryBuild('factory', x0 + 28.7, z, 0) || tryBuild('warehouse', x0 + 16, z0 + 10, 0);
         if (rng.chance(0.6)) tryBuild('chimney', x0 + 3, z0 + 4, 0);
         z = z1 - 10;
         tryBuild('warehouse', x1 - 16, z, Math.PI) || tryBuild('garages', x1 - 14, z1 - 4, Math.PI);
