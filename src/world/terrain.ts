@@ -74,8 +74,26 @@ const CRATER_CELL = 100;
 const FGRID = 200;
 const NONE: FlattenZone[] = [];
 
+/** Vertices along a tile's side (its edges are shared with the neighbours). */
+const TV = TILE_CELLS + 1;
+
+/** One tile's grid: heights, and land-cover colours once something asks for them. */
+interface TileData {
+  h: Float32Array;
+  c: Float32Array | null;
+}
+
 export class Terrain {
-  readonly heights = new Float32Array((SEGS + 1) * (SEGS + 1));
+  /**
+   * Ground heights live per tile and are worked out the first time something
+   * asks: the natural height (noise, rivers, flattened sites, craters), then,
+   * once the roads are graded, their cuttings and embankments (overlay).
+   */
+  private tileData = new Map<number, TileData>();
+  private lastKey = -1;
+  private lastTile: TileData | null = null;
+  /** Final adjustment of each grid height (road cut and fill), set once the roads are graded. */
+  private overlay: ((x: number, z: number, h: number) => number) | null = null;
   flattens: FlattenZone[] = [];
   /** Settlements with farmland around them (for ground colouring). */
   farms: { x: number; z: number; rot: number; r: number }[] = [];
@@ -88,7 +106,6 @@ export class Terrain {
   mesh!: THREE.Group;
   private tiles: { mesh: THREE.Mesh; cx: number; cz: number; lod: number }[] = [];
   private lodIndex: THREE.BufferAttribute[] = [];
-  private colors!: Float32Array;
 
   constructor(
     private n1: Noise2D,
@@ -305,64 +322,109 @@ export class Terrain {
     return h + this.craterOffset(x, z);
   }
 
-  build(detailTex: THREE.Texture) {
-    const N = SEGS + 1;
-    for (let iz = 0; iz < N; iz++)
-      for (let ix = 0; ix < N; ix++) this.heights[iz * N + ix] = this.finalHeight(-HALF + ix * CELL, -HALF + iz * CELL);
-
-    const col = (this.colors = new Float32Array(N * N * 3));
-    const C = (hex: number) => new THREE.Color(hex);
-    // Summer in eastern Europe: fresh meadow greens, drier yellow-green on the
-    // rises, dark forest floor, grey limestone on the steeps.
-    const grass = C(0x58793a);
-    const grass2 = C(0x878f4a);
-    const forest = C(0x3d5528);
-    const rock = C(0x837f76);
-    const alpine = C(0x6d7a48);
-    const sand = C(0xb0a27a);
-    const mud = C(0x5a5442);
-    const lush = C(0x58773a);
-    const scorched = C(0x4a4436);
-    const siteDirt = C(0x948a68);
-    const wornGrass = C(0x6c8540);
-    const tmp = new THREE.Color();
-    const nrm = new THREE.Vector3();
-    for (let iz = 0; iz < N; iz++)
-      for (let ix = 0; ix < N; ix++) {
-        const i = iz * N + ix;
-        const x = -HALF + ix * CELL;
-        const z = -HALF + iz * CELL;
-        const h = this.heights[i];
-        const ny = this.gridNormal(ix, iz, nrm).y;
-        const n = this.n3.fbm(x * 0.002, z * 0.002, 3) * 0.5 + 0.5;
-        const f = this.n1.fbm(x * 0.0012 + 40, z * 0.0012, 2) * 0.5 + 0.5;
-        tmp.copy(grass).lerp(grass2, smoothstep(0.35, 0.75, n));
-        tmp.lerp(forest, smoothstep(0.55, 0.75, f) * 0.6);
-        // River flats: lush grass on the floodplain, a narrow strip of sand
-        // and pebbles at the waterline, silt on the bed.
-        tmp.lerp(lush, smoothstep(7, 3, h) * 0.55);
-        tmp.lerp(sand, smoothstep(2.2, 0.6, h) * 0.85);
-        tmp.lerp(mud, smoothstep(0.3, -2.5, h));
-        // High ground: alpine meadow, then rock on the steep faces and the tops.
-        tmp.lerp(alpine, smoothstep(180, 320, h) * 0.6);
-        tmp.lerp(rock, Math.min(1, smoothstep(0.86, 0.7, ny) * 0.85 + smoothstep(380, 560, h) * 0.6));
-        const sd = Math.abs(this.front.side(x, z));
-        const scorch = (1 - smoothstep(60, 520, sd)) * (0.45 + 0.55 * smoothstep(0.3, 0.6, n));
-        tmp.lerp(scorched, scorch * 0.75);
-        const crater = this.craterOffset(x, z);
-        if (crater < -0.3) tmp.lerp(scorched, Math.min(1, -crater / 3) * 0.8);
-        // Bases and outposts: packed earth and gravel, worn grass in patches.
-        const site = this.siteInfluence(x, z);
-        if (site > 0) {
-          // Tracks and bare patches every few tens of metres where vehicles and boots wear the grass away.
-          const wear = this.n3.fbm(x * 0.018 + 7, z * 0.018 - 3, 2) * 0.5 + 0.5;
-          tmp.lerp(tmp.clone().lerp(wornGrass, 0.5), site * 0.6).lerp(siteDirt, site * smoothstep(0.42, 0.62, wear) * 0.8);
+  /**
+   * Set the per-vertex height adjustment (once, after the roads are graded).
+   * Tiles already worked out are adjusted in place rather than recomputed.
+   */
+  setOverlay(fn: (x: number, z: number, h: number) => number) {
+    this.overlay = fn;
+    for (const [key, d] of this.tileData) {
+      const tx = key % TILES;
+      const tz = (key - tx) / TILES;
+      for (let iz = 0; iz < TV; iz++)
+        for (let ix = 0; ix < TV; ix++) {
+          const i = iz * TV + ix;
+          d.h[i] = fn(-HALF + (tx * TILE_CELLS + ix) * CELL, -HALF + (tz * TILE_CELLS + iz) * CELL, d.h[i]);
         }
-        col[i * 3] = tmp.r;
-        col[i * 3 + 1] = tmp.g;
-        col[i * 3 + 2] = tmp.b;
-      }
+      d.c = null;
+    }
+  }
 
+  private data(tx: number, tz: number): TileData {
+    const key = tz * TILES + tx;
+    if (key === this.lastKey) return this.lastTile!;
+    let d = this.tileData.get(key);
+    if (!d) {
+      d = { h: new Float32Array(TV * TV), c: null };
+      const ov = this.overlay;
+      for (let iz = 0; iz < TV; iz++)
+        for (let ix = 0; ix < TV; ix++) {
+          const x = -HALF + (tx * TILE_CELLS + ix) * CELL;
+          const z = -HALF + (tz * TILE_CELLS + iz) * CELL;
+          const h = Math.fround(this.finalHeight(x, z));
+          d.h[iz * TV + ix] = ov ? ov(x, z, h) : h;
+        }
+      this.tileData.set(key, d);
+    }
+    this.lastKey = key;
+    this.lastTile = d;
+    return d;
+  }
+
+  /** Ground height at grid vertex (gx, gz), 0..SEGS each way. */
+  vertexHeight(gx: number, gz: number): number {
+    const tx = gx >= SEGS ? TILES - 1 : (gx / TILE_CELLS) | 0;
+    const tz = gz >= SEGS ? TILES - 1 : (gz / TILE_CELLS) | 0;
+    return this.data(tx, tz).h[(gz - tz * TILE_CELLS) * TV + (gx - tx * TILE_CELLS)];
+  }
+
+  /** Land-cover colours of a tile's vertices (worked out on first use). */
+  private tileColors(tx: number, tz: number): Float32Array {
+    const d = this.data(tx, tz);
+    if (d.c) return d.c;
+    const c = new Float32Array(TV * TV * 3);
+    for (let iz = 0; iz < TV; iz++)
+      for (let ix = 0; ix < TV; ix++) {
+        this.vertexColor(tx * TILE_CELLS + ix, tz * TILE_CELLS + iz, _col);
+        const i = (iz * TV + ix) * 3;
+        c[i] = _col.r;
+        c[i + 1] = _col.g;
+        c[i + 2] = _col.b;
+      }
+    // (Computing the colours may have touched neighbouring tiles; this one's record still holds.)
+    d.c = c;
+    return c;
+  }
+
+  /**
+   * Summer in eastern Europe: fresh meadow greens, drier yellow-green on the
+   * rises, dark forest floor, grey limestone on the steeps.
+   */
+  private vertexColor(gx: number, gz: number, out: THREE.Color): THREE.Color {
+    const x = -HALF + gx * CELL;
+    const z = -HALF + gz * CELL;
+    const h = this.vertexHeight(gx, gz);
+    const ny = this.gridNormal(gx, gz, _nrm).y;
+    const n = this.n3.fbm(x * 0.002, z * 0.002, 3) * 0.5 + 0.5;
+    const f = this.n1.fbm(x * 0.0012 + 40, z * 0.0012, 2) * 0.5 + 0.5;
+    const P = PALETTE;
+    out.copy(P.grass).lerp(P.grass2, smoothstep(0.35, 0.75, n));
+    out.lerp(P.forest, smoothstep(0.55, 0.75, f) * 0.6);
+    // River flats: lush grass on the floodplain, a narrow strip of sand
+    // and pebbles at the waterline, silt on the bed.
+    out.lerp(P.lush, smoothstep(7, 3, h) * 0.55);
+    out.lerp(P.sand, smoothstep(2.2, 0.6, h) * 0.85);
+    out.lerp(P.mud, smoothstep(0.3, -2.5, h));
+    // High ground: alpine meadow, then rock on the steep faces and the tops.
+    out.lerp(P.alpine, smoothstep(180, 320, h) * 0.6);
+    out.lerp(P.rock, Math.min(1, smoothstep(0.86, 0.7, ny) * 0.85 + smoothstep(380, 560, h) * 0.6));
+    const sd = Math.abs(this.front.side(x, z));
+    const scorch = (1 - smoothstep(60, 520, sd)) * (0.45 + 0.55 * smoothstep(0.3, 0.6, n));
+    out.lerp(P.scorched, scorch * 0.75);
+    const crater = this.craterOffset(x, z);
+    if (crater < -0.3) out.lerp(P.scorched, Math.min(1, -crater / 3) * 0.8);
+    // Bases and outposts: packed earth and gravel, worn grass in patches.
+    const site = this.siteInfluence(x, z);
+    if (site > 0) {
+      // Tracks and bare patches every few tens of metres where vehicles and boots wear the grass away.
+      const wear = this.n3.fbm(x * 0.018 + 7, z * 0.018 - 3, 2) * 0.5 + 0.5;
+      _col2.copy(out).lerp(P.wornGrass, 0.5);
+      out.lerp(_col2, site * 0.6).lerp(P.siteDirt, site * smoothstep(0.42, 0.62, wear) * 0.8);
+    }
+    return out;
+  }
+
+  build(detailTex: THREE.Texture) {
     // Shared index buffers: one per LOD stride, the grid plus skirts round the edge.
     const T = TILE_CELLS + 1;
     const skirtBase = T * T;
@@ -457,21 +519,19 @@ export class Terrain {
 
   /** Smooth normal at a grid vertex from its neighbours' heights. */
   private gridNormal(ix: number, iz: number, out: THREE.Vector3) {
-    const N = SEGS + 1;
-    const H = this.heights;
     const xl = Math.max(0, ix - 1);
     const xr = Math.min(SEGS, ix + 1);
     const zd = Math.max(0, iz - 1);
     const zu = Math.min(SEGS, iz + 1);
-    const hx = (H[iz * N + xr] - H[iz * N + xl]) / ((xr - xl) * CELL);
-    const hz = (H[zu * N + ix] - H[zd * N + ix]) / ((zu - zd) * CELL);
+    const hx = (this.vertexHeight(xr, iz) - this.vertexHeight(xl, iz)) / ((xr - xl) * CELL);
+    const hz = (this.vertexHeight(ix, zu) - this.vertexHeight(ix, zd)) / ((zu - zd) * CELL);
     return out.set(-hx, 1, -hz).normalize();
   }
 
-  /** Copy heights (and colours, the first time) from the global grid into a tile's vertices. */
+  /** Copy a tile's heights (and colours, the first time) into its mesh. */
   private fillTile(t: { mesh: THREE.Mesh; cx: number; cz: number }, colours: boolean) {
-    const N = SEGS + 1;
     const T = TILE_CELLS + 1;
+    const C = colours ? this.tileColors(t.cx, t.cz) : null;
     const geo = t.mesh.geometry;
     const pos = geo.getAttribute('position') as THREE.BufferAttribute;
     const nrm = geo.getAttribute('normal') as THREE.BufferAttribute;
@@ -481,14 +541,14 @@ export class Terrain {
     const ox = t.cx * TILE_CELLS;
     const oz = t.cz * TILE_CELLS;
     const put = (v: number, gx: number, gz: number, drop: number) => {
-      const gi = gz * N + gx;
       const x = -HALF + gx * CELL;
       const z = -HALF + gz * CELL;
-      pos.setXYZ(v, x, this.heights[gi] - drop, z);
+      pos.setXYZ(v, x, this.vertexHeight(gx, gz) - drop, z);
       this.gridNormal(gx, gz, n);
       nrm.setXYZ(v, n.x, n.y, n.z);
-      if (colours) {
-        col.setXYZ(v, this.colors[gi * 3], this.colors[gi * 3 + 1], this.colors[gi * 3 + 2]);
+      if (C) {
+        const ci = ((gz - oz) * T + (gx - ox)) * 3;
+        col.setXYZ(v, C[ci], C[ci + 1], C[ci + 2]);
         uv.setXY(v, x / 18, z / 18);
       }
     };
@@ -536,7 +596,6 @@ export class Terrain {
 
   /** Height exactly matching the rendered triangle mesh. */
   heightAt(x: number, z: number): number {
-    const N = SEGS + 1;
     let gx = (x + HALF) / CELL;
     let gz = (z + HALF) / CELL;
     gx = Math.min(Math.max(gx, 0), SEGS - 1e-4);
@@ -545,22 +604,28 @@ export class Terrain {
     const iz = Math.floor(gz);
     const fx = gx - ix;
     const fz = gz - iz;
-    const H = this.heights;
-    const ha = H[iz * N + ix];
-    const hb = H[(iz + 1) * N + ix];
-    const hc = H[(iz + 1) * N + ix + 1];
-    const hd = H[iz * N + ix + 1];
+    // A tile holds its far edge too, so a cell's four corners are always in one tile.
+    const tx = (ix / TILE_CELLS) | 0;
+    const tz = (iz / TILE_CELLS) | 0;
+    const H = this.data(tx, tz).h;
+    const i = (iz - tz * TILE_CELLS) * TV + (ix - tx * TILE_CELLS);
+    const ha = H[i];
+    const hb = H[i + TV];
+    const hc = H[i + TV + 1];
+    const hd = H[i + 1];
     if (fx + fz <= 1) return ha + (hd - ha) * fx + (hb - ha) * fz;
     return hc + (hb - hc) * (1 - fx) + (hd - hc) * (1 - fz);
   }
 
   /** Land-cover colour (linear RGB) at the nearest grid vertex. */
   groundColor(x: number, z: number, out: THREE.Color): THREE.Color {
-    const N = SEGS + 1;
     const ix = Math.min(SEGS, Math.max(0, Math.round((x + HALF) / CELL)));
     const iz = Math.min(SEGS, Math.max(0, Math.round((z + HALF) / CELL)));
-    const i = (iz * N + ix) * 3;
-    return out.setRGB(this.colors[i], this.colors[i + 1], this.colors[i + 2]);
+    const tx = ix >= SEGS ? TILES - 1 : (ix / TILE_CELLS) | 0;
+    const tz = iz >= SEGS ? TILES - 1 : (iz / TILE_CELLS) | 0;
+    const C = this.tileColors(tx, tz);
+    const i = ((iz - tz * TILE_CELLS) * TV + (ix - tx * TILE_CELLS)) * 3;
+    return out.setRGB(C[i], C[i + 1], C[i + 2]);
   }
 
   /** Surface the gear rests on: ground or water. */
@@ -595,6 +660,23 @@ export class Terrain {
     return true;
   }
 }
+
+const _nrm = new THREE.Vector3();
+const _col = new THREE.Color();
+const _col2 = new THREE.Color();
+const PALETTE = {
+  grass: new THREE.Color(0x58793a),
+  grass2: new THREE.Color(0x878f4a),
+  forest: new THREE.Color(0x3d5528),
+  rock: new THREE.Color(0x837f76),
+  alpine: new THREE.Color(0x6d7a48),
+  sand: new THREE.Color(0xb0a27a),
+  mud: new THREE.Color(0x5a5442),
+  lush: new THREE.Color(0x58773a),
+  scorched: new THREE.Color(0x4a4436),
+  siteDirt: new THREE.Color(0x948a68),
+  wornGrass: new THREE.Color(0x6c8540),
+};
 
 const TERRAIN_FRAG_PARS = /* glsl */ `
 varying vec3 vWPos;

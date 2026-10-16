@@ -38,8 +38,8 @@ export class Rivers {
 
   private build(terrain: Terrain) {
     const N = SEGS + 1;
-    const H = terrain.heights;
-    const wet = (ix: number, iz: number) => H[iz * N + ix] < WATER_LEVEL + 0.05;
+    const H = (ix: number, iz: number) => terrain.vertexHeight(ix, iz);
+    const wet = (ix: number, iz: number) => H(ix, iz) < WATER_LEVEL + 0.05;
     for (let tz = 0; tz < TILES; tz++)
       for (let tx = 0; tx < TILES; tx++) {
         const pos: number[] = [];
@@ -56,7 +56,7 @@ export class Rivers {
           const x = -HALF + ix * CELL;
           const z = -HALF + iz * CELL;
           pos.push(x, WATER_LEVEL, z);
-          depth.push(WATER_LEVEL - H[k]);
+          depth.push(WATER_LEVEL - H(ix, iz));
           const r = terrain.river(x, z);
           flow.push(r.dist < Infinity ? r.fx : 0, r.dist < Infinity ? r.fz : 0);
           return id;

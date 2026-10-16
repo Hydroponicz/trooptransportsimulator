@@ -42,6 +42,8 @@ interface Seg {
   bz: number;
   path: number;
   i: number;
+  /** Scratch: last query that collected this segment. */
+  stamp?: number;
 }
 
 const NO_DECKS: Roads['decks'] = [];
@@ -520,63 +522,71 @@ export class Roads {
     return y;
   }
 
-  /** Blend terrain toward the road profile in a corridor around each road. */
+  /**
+   * Blend the terrain toward the road profile in a corridor round each road:
+   * handed to the terrain as a per-vertex adjustment, so any tile's heights
+   * can be worked out on their own. Within 13 m of a road the ground takes
+   * the road's level, fading out by 32 m; where corridors overlap the nearest
+   * road wins (ties to the earlier road, as when this ran road by road over
+   * the whole grid). Site pads keep their shape; under bridges only ground
+   * that would poke through the deck is cut.
+   */
   private cutAndFill() {
     const t = this.terrain;
-    const N = SEGS + 1;
-    const target = new Float32Array(N * N);
-    const weight = new Float32Array(N * N);
-    const dist = new Float32Array(N * N).fill(1e9);
-    const cutOnly = new Uint8Array(N * N);
     const CORE = 13;
     const EDGE = 32;
-    this.paths.forEach((path, pi) => {
-      const road = this.heights[pi];
+    const cand: Seg[] = [];
+    let stamp = 0;
+    const bridged = this.paths.map((_, pi) => {
       const spans = this.spans[pi];
-      for (let i = 0; i + 1 < path.length; i++) {
-        // Under bridges, only cut away ground that would stick up through the
-        // deck; abutment segments blend in fully.
-        const bridged = spans.some((sp) => i > sp.a && i + 1 < sp.b);
-        const a = path[i];
-        const b = path[i + 1];
-        const x0 = Math.floor((Math.min(a.x, b.x) - EDGE + HALF) / CELL);
-        const x1 = Math.ceil((Math.max(a.x, b.x) + EDGE + HALF) / CELL);
-        const z0 = Math.floor((Math.min(a.y, b.y) - EDGE + HALF) / CELL);
-        const z1 = Math.ceil((Math.max(a.y, b.y) + EDGE + HALF) / CELL);
-        const dx = b.x - a.x;
-        const dz = b.y - a.y;
-        const l2 = dx * dx + dz * dz || 1;
-        for (let iz = Math.max(0, z0); iz <= Math.min(SEGS, z1); iz++)
-          for (let ix = Math.max(0, x0); ix <= Math.min(SEGS, x1); ix++) {
-            const x = -HALF + ix * CELL;
-            const z = -HALF + iz * CELL;
-            const u = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.y) * dz) / l2));
-            const d = Math.hypot(x - (a.x + dx * u), z - (a.y + dz * u));
-            if (d > EDGE) continue;
-            let w = d < CORE ? 1 : 1 - (d - CORE) / (EDGE - CORE);
-            // Site pads keep their shape, but the roadway itself is always cut
-            // through (otherwise a road skirting a raised pad runs into a wall).
-            const inf = t.siteInfluence(x, z);
-            if (inf > 0.95) continue;
-            if (d > CORE) w *= 1 - inf;
-            const idx = iz * N + ix;
-            // Nearest road wins among full-weight claims (wide corridors overlap).
-            if (w > weight[idx] || (w === weight[idx] && d < dist[idx])) {
-              dist[idx] = d;
-              cutOnly[idx] = bridged ? 1 : 0;
-              weight[idx] = w;
-              target[idx] = road[i] + (road[i + 1] - road[i]) * u - 0.15;
-            }
-          }
-      }
+      return (i: number) => spans.some((sp) => i > sp.a && i + 1 < sp.b);
     });
-    for (let i = 0; i < N * N; i++) {
-      const w = weight[i];
-      if (w <= 0) continue;
-      if (cutOnly[i] && t.heights[i] < target[i] - 0.5) continue;
-      const s = w * w * (3 - 2 * w);
-      t.heights[i] += (target[i] - 0.5 * cutOnly[i] - t.heights[i]) * s;
-    }
+    t.setOverlay((x, z, h) => {
+      // Segments within reach: each is indexed in every cell its box (grown 12 m) touches,
+      // so the cells round (x, z) out to 32 m hold every one that can be in range.
+      cand.length = 0;
+      stamp++;
+      for (let cx = Math.floor((x - EDGE) / GRID); cx <= Math.floor((x + EDGE) / GRID); cx++)
+        for (let cz = Math.floor((z - EDGE) / GRID); cz <= Math.floor((z + EDGE) / GRID); cz++) {
+          const arr = this.grid.get(cx + 1000 + (cz + 1000) * 3000);
+          if (arr)
+            for (const g of arr)
+              if (g.stamp !== stamp) {
+                g.stamp = stamp;
+                cand.push(g);
+              }
+        }
+      if (!cand.length) return h;
+      const inf = t.siteInfluence(x, z);
+      if (inf > 0.95) return h;
+      cand.sort((p, q) => p.path - q.path || p.i - q.i);
+      // (Float32 like the grids this once filled, so the result is the same to the bit.)
+      let W = 0;
+      let D = 1e9;
+      let C = 0;
+      let TGT = 0;
+      for (const g of cand) {
+        const dx = g.bx - g.ax;
+        const dz = g.bz - g.az;
+        const l2 = dx * dx + dz * dz || 1;
+        const u = Math.max(0, Math.min(1, ((x - g.ax) * dx + (z - g.az) * dz) / l2));
+        const d = Math.hypot(x - (g.ax + dx * u), z - (g.az + dz * u));
+        if (d > EDGE) continue;
+        let w = d < CORE ? 1 : 1 - (d - CORE) / (EDGE - CORE);
+        if (d > CORE) w *= 1 - inf;
+        if (w > W || (w === W && d < D)) {
+          const road = this.heights[g.path];
+          D = Math.fround(d);
+          C = bridged[g.path](g.i) ? 1 : 0;
+          W = Math.fround(w);
+          TGT = Math.fround(road[g.i] + (road[g.i + 1] - road[g.i]) * u - 0.15);
+        }
+      }
+      if (W <= 0) return h;
+      if (C && h < TGT - 0.5) return h;
+      const sm = W * W * (3 - 2 * W);
+      return Math.fround(h + (TGT - 0.5 * C - h) * sm);
+    });
     t.refreshMesh();
   }
 
