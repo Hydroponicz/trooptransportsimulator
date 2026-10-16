@@ -111,7 +111,7 @@ export class Game {
 
     this.world = generateWorld(career.data.seed, progress);
     this.scene.add(this.world.group);
-    this.grass = new Grass(this.world.terrain, this.world.roads, this.world.colliders, this.world.farmland, this.world.towns);
+    this.grass = new Grass(this.world.terrain, this.world.roads, this.world.colliders, this.world.farmland, this.world.towns, this.world.yards);
     this.scene.add(this.grass.mesh);
     this.env = new Environment(this.scene);
     progress('Fueling aircraft');

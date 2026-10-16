@@ -131,6 +131,32 @@ export class Farmland {
     this.texture.needsUpdate = true;
   }
 
+  /**
+   * Clear every plot that touches ground where farming makes no sense (towns,
+   * industrial yards, roads, military sites): tested on a grid across each
+   * plot. Fields, crops, bales and machinery all follow the plots.
+   */
+  prune(bad: (x: number, z: number) => boolean): number {
+    let n = 0;
+    for (const f of this.farms)
+      for (let cz = CZ0; cz <= CZ1; cz++)
+        for (let cx = CX0; cx <= CX1; cx++) {
+          if (this.kindAt(f, cx, cz) === Crop.None) continue;
+          let hit = false;
+          // ~15 m apart, so nothing wider than that (a road and its verges) slips between them.
+          for (let a = 0; a < 7 && !hit; a++)
+            for (let b = 0; b < 5 && !hit; b++) {
+              const p = this.toWorld(f, cx, cz, (a / 6) * FIELD_U, (b / 4) * FIELD_V);
+              hit = bad(p.x, p.z);
+            }
+          if (hit) {
+            this.setKind(f, cx, cz, Crop.None);
+            n++;
+          }
+        }
+    return n;
+  }
+
   /** Mark a plot (e.g. under a farmyard) and keep the texture in step. */
   private setKind(f: Farm, cx: number, cz: number, k: Crop) {
     const i = (cx - CX0) + (cz - CZ0) * NX;

@@ -31,6 +31,8 @@ export interface World {
   vegetation: Vegetation;
   roads: Roads;
   towns: Town[];
+  /** Fenced industrial yards beside the roads. */
+  yards: { x: number; z: number; r: number }[];
   enemies: EnemyPos[];
   smokeSpots: THREE.Vector3[];
   windsocks: THREE.Object3D[];
@@ -536,7 +538,16 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
       for (let k = 0; k < n; k++) props.add('rock', x + rng.range(-4, 4), y - 0.3, z + rng.range(-4, 4), rng.range(0, 6), rng.range(0.8, 2.6));
     }
   }
-  farmland.populate(props, terrain, rng.fork(), (x, z) => nearSite(x, z, 30) || roads.distance(x, z) < 12);
+  // No fields in towns, industrial yards, on roads or by military sites (the plots were laid
+  // out before the roads and yards existed).
+  farmland.prune(
+    (x, z) =>
+      towns.some((t) => Math.hypot(t.x - x, t.z - z) < t.r + 25) ||
+      yards.some((q) => Math.hypot(q.x - x, q.z - z) < q.r + 12) ||
+      roads.distance(x, z) < 9 ||
+      nearSite(x, z, 60),
+  );
+  farmland.populate(props, terrain, rng.fork(), (x, z) => nearSite(x, z, 30) || roads.distance(x, z) < 12 || yards.some((q) => Math.hypot(q.x - x, q.z - z) < q.r + 8));
 
   onProgress?.('Planting forests');
   // No trees on the plots themselves (hedgerow trees along pastures are fine, now and then).
@@ -595,6 +606,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     culler,
     rivers,
     farmland,
+    yards,
     shadows,
   };
 }

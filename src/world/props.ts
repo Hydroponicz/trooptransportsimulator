@@ -775,8 +775,10 @@ export function buildProto(name: ProtoName): THREE.BufferGeometry {
 
 /**
  * Which prototypes are solid to aircraft and vehicles (with their real part
- * shapes). Left passable: rubble, slabs and plazas you drive over, flexible
- * delineators, fence and guard-rail posts, and livestock.
+ * shapes: a fence is its posts and rails, not a box). Left passable: rubble,
+ * slabs and plazas you drive over, flexible delineators, lone fence and
+ * guard-rail posts (the chain-link panels between posts are solid, see
+ * roadside.ts), and livestock.
  */
 const COLLIDE: Record<ProtoName, boolean> = {
   ...CITY_COLLIDE,
@@ -880,7 +882,7 @@ export class Props {
   private material = withSurfaces(new THREE.MeshLambertMaterial({ vertexColors: true }));
   private tmpBox = new THREE.Box3();
 
-  constructor(private colliders: ColliderSet) {}
+  constructor(readonly colliders: ColliderSet) {}
 
   add(name: ProtoName, x: number, y: number, z: number, rotY = 0, scale: number | [number, number, number] = 1, color?: number) {
     const sc = typeof scale === 'number' ? [scale, scale, scale] : scale;

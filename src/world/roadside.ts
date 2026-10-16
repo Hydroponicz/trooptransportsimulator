@@ -8,6 +8,7 @@ import { ROAD_SPEC, type Roads } from './roads';
 import type { Site } from './sites';
 import type { Terrain } from './terrain';
 import type { Town } from './towns';
+import { SolidKind } from './colliders';
 
 const MSR_NAMES = ['TAMPA', 'JACKSON', 'IRISH', 'MICHIGAN', 'SANTA FE', 'DOVER', 'BOSTON'];
 const ASR_NAMES = ['BRONZE', 'COPPER', 'NICKEL', 'COBALT', 'IRON', 'ZINC', 'TIN', 'LEAD', 'SILVER', 'CHROME'];
@@ -133,6 +134,28 @@ export function buildRoadside(
     for (const k of tri) fenceQuads.push(q[k * 3], q[k * 3 + 1], q[k * 3 + 2]);
     const uv = [0, 0, len, 0, len, FH, 0, FH];
     for (const k of tri) fenceUV.push(uv[k * 2], uv[k * 2 + 1]);
+    // Solid: a thin panel along the segment, post to post, up to the top strand of wire.
+    if (len > 0.05) {
+      const ux = (b.x - a.x) / len;
+      const uz = (b.z - a.z) / len;
+      const y0 = Math.min(a.y, b.y);
+      const hy = (Math.abs(a.y - b.y) + FH + 0.55) / 2;
+      const mx = (a.x + b.x) / 2;
+      const mz = (a.z + b.z) / 2;
+      const pad = 0.12;
+      props.colliders.add({
+        minX: Math.min(a.x, b.x) - pad,
+        maxX: Math.max(a.x, b.x) + pad,
+        minY: y0,
+        maxY: y0 + hy * 2,
+        minZ: Math.min(a.z, b.z) - pad,
+        maxZ: Math.max(a.z, b.z) + pad,
+        tag: 'chainlink',
+        // Local x along the fence (world = R(yaw)·local, so cos = ux and sin = −uz).
+        place: { x: mx, y: y0, z: mz, c: ux, s: -uz, isx: 1, isy: 1, isz: 1 },
+        solids: [{ kind: SolidKind.Box, k: 0, cx: 0, cy: hy, cz: 0, r: [1, 0, 0, 0, 1, 0, 0, 0, 1], hx: len / 2, hy, hz: 0.07 }],
+      });
+    }
     // Three strands of barbed wire on the outriggers.
     for (const h of [0.1, 0.25, 0.4]) {
       const ox = lean.x * h * 0.9;

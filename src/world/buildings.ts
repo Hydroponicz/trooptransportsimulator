@@ -64,7 +64,7 @@ export const FOOTPRINT: Partial<Record<string, [number, number]>> = {
 /** Collides with aircraft and vehicles. */
 export const CITY_COLLIDE: Record<CityProto, boolean> = {
   block9: true, tower16: true, stalinka: true, shops: true, office: true, school: true, factory: true, warehouse: true, garages: true,
-  gasstation: true, kiosk: true, watertower: true, chimney: true, streettree: true, parkedcar: true, fence_board: false, fence_rail: false,
+  gasstation: true, kiosk: true, watertower: true, chimney: true, streettree: true, parkedcar: true, fence_board: true, fence_rail: true,
   cow: false, haystack: true, shed: true, machineshed: true, tractor_parked: true, farmhouse: true, monument: true, fountain: true,
   playground: false, busstop: true, plaza: false,
 };
