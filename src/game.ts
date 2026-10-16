@@ -32,8 +32,11 @@ import { SAS_NAMES, type FlightEnv } from './heli/flight';
 import type { Site } from './world/sites';
 import { WATER_LEVEL } from './world/terrain';
 import { enterFullscreen, toggleFullscreen } from './fullscreen';
+import { AutoScaler, loadSetting, lower, PROFILES, resolve, saveSetting, type GraphicsSetting, type Quality } from './graphics';
 
 const STEP = 1 / 120;
+
+const QNAME: Record<Quality, string> = { high: 'High', medium: 'Medium', low: 'Low' };
 
 export class Game {
   renderer: THREE.WebGLRenderer;
@@ -82,6 +85,11 @@ export class Game {
   private running = false;
   private saveT = 0;
   onQuit: (() => void) | null = null;
+  /** Graphics: the saved choice, the preset in use, and Auto's resolution scaler. */
+  graphics: GraphicsSetting = loadSetting();
+  quality: Quality = resolve(this.graphics);
+  private antialias = PROFILES[this.quality].antialias;
+  private autoScale = new AutoScaler();
 
   constructor(
     public career: Career,
@@ -89,11 +97,10 @@ export class Game {
     progress: (m: string) => void,
   ) {
     this.rng = new RNG(career.data.seed ^ 0xabcdef);
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    // Antialiasing can only be chosen when the context is made, so it follows the setting at launch.
+    this.renderer = new THREE.WebGLRenderer({ antialias: this.antialias, powerPreference: 'high-performance' });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     // ACES plus the grade in world/look.ts.
     this.renderer.toneMapping = THREE.CustomToneMapping;
     this.renderer.toneMappingExposure = 1.0;
@@ -231,7 +238,7 @@ export class Game {
     this.applyUpgrades();
     this.respawn(true);
     window.addEventListener('resize', () => this.resize());
-    this.resize();
+    this.applyGraphics();
     // Leaving fullscreen mid-flight drops the keyboard lock, so Ctrl+W could
     // close the tab again. Pause and offer a one-click way back.
     document.addEventListener('fullscreenchange', () => {
@@ -242,10 +249,55 @@ export class Game {
   resize() {
     const w = window.innerWidth;
     const h = window.innerHeight;
+    const auto = this.graphics === 'auto' ? this.autoScale.scale : 1;
+    const cap = Math.min(window.devicePixelRatio, PROFILES[this.quality].pixelRatio);
+    // Auto's dynamic resolution, but never below 60% of a CSS pixel.
+    this.renderer.setPixelRatio(Math.max(Math.min(cap, 0.6), cap * auto));
     this.renderer.setSize(w, h);
     this.cam.camera.aspect = w / h;
     this.cam.camera.updateProjectionMatrix();
     this.effects.setView(h * this.renderer.getPixelRatio(), this.cam.camera.fov, this.scene.fog as THREE.Fog);
+  }
+
+  /** Pick a graphics setting (saved), or re-apply the current preset to the renderer and world. */
+  setGraphics(s: GraphicsSetting) {
+    this.graphics = s;
+    saveSetting(s);
+    this.quality = resolve(s);
+    this.autoScale.reset();
+    this.applyGraphics();
+  }
+
+  private applyGraphics() {
+    const p = PROFILES[this.quality];
+    const r = this.renderer;
+    const type = p.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    if (r.shadowMap.type !== type) {
+      r.shadowMap.type = type;
+      // The shadow filter is compiled into the shaders.
+      this.scene.traverse((o) => {
+        const m = (o as THREE.Mesh).material;
+        if (m) for (const mat of Array.isArray(m) ? m : [m]) mat.needsUpdate = true;
+      });
+    }
+    const sh = this.env.sun.shadow;
+    if (sh.mapSize.x !== p.shadowMap) {
+      sh.mapSize.set(p.shadowMap, p.shadowMap);
+      sh.map?.dispose();
+      sh.map = null;
+    }
+    const sc = sh.camera;
+    sc.left = sc.bottom = -p.shadowBox;
+    sc.right = sc.top = p.shadowBox;
+    sc.updateProjectionMatrix();
+    this.world.shadows.radius = p.casterRadius;
+    this.world.shadows.invalidate();
+    this.grass.setQuality(p.grassRange, p.grassDensity, p.cropRange);
+    this.world.culler.scales.lod = p.lodScale;
+    this.world.culler.scales.clutter = p.clutterScale;
+    this.world.culler.scales.far = p.farScale;
+    this.world.culler.update(this.cam.camera.position, true);
+    this.resize();
   }
 
   applyUpgrades() {
@@ -384,7 +436,17 @@ export class Game {
   /** `now` is the vsync-aligned rAF timestamp, steadier than reading the clock. */
   private frame(now = performance.now()) {
     // The first rAF timestamp can precede the start time: never step backwards.
-    const dt = Math.max(0, Math.min(0.1, (now - this.last) / 1000));
+    const raw = (now - this.last) / 1000;
+    const dt = Math.max(0, Math.min(0.1, raw));
+    if (this.graphics === 'auto' && this.running && !document.hidden) {
+      const act = this.autoScale.sample(raw);
+      if (act === 'scale') this.resize();
+      else if (act === 'lower' && lower(this.quality)) {
+        this.quality = lower(this.quality)!;
+        this.autoScale.reset();
+        this.applyGraphics();
+      }
+    }
     this.last = Math.max(this.last, now);
     this.input.update(dt);
     this.handleActions();
@@ -528,9 +590,11 @@ export class Game {
           <button class="${document.fullscreenElement ? 'primary' : ''}" data-act="resume">Resume</button>
           <button data-act="vol">Volume: ${Math.round(this.audio.volume * 100)}%</button>
           <button data-act="ctl">Keyboard: ${this.input.controlMode === 'virtual' ? 'Virtual stick' : 'Direct'}</button>
+          <button data-act="gfx" title="Auto picks a level for this computer and lowers the resolution if the frame rate drops">Graphics: ${this.graphics === 'auto' ? `Auto (${QNAME[this.quality]})` : QNAME[this.quality]}</button>
           ${document.fullscreenElement ? '<button data-act="fs">Exit fullscreen</button>' : ''}
           <button data-act="quit">Save &amp; quit to menu</button>
-        </div>`,
+        </div>
+        ${PROFILES[this.quality].antialias !== this.antialias ? '<p style="opacity:.7">Antialiasing changes apply the next time the game is loaded.</p>' : ''}`,
         {
           resume: () => {
             this.terminal.closeDialog();
@@ -540,6 +604,12 @@ export class Game {
             this.input.controlMode = this.input.controlMode === 'virtual' ? 'direct' : 'virtual';
             this.career.data.controlMode = this.input.controlMode;
             this.career.save();
+            this.paused = false;
+            this.togglePause();
+          },
+          gfx: () => {
+            const order: GraphicsSetting[] = ['auto', 'high', 'medium', 'low'];
+            this.setGraphics(order[(order.indexOf(this.graphics) + 1) % order.length]);
             this.paused = false;
             this.togglePause();
           },

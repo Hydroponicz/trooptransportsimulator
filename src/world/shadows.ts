@@ -45,6 +45,11 @@ export class ShadowCasters {
     }
   }
 
+  /** Rebuild on the next update (after a radius change). */
+  invalidate() {
+    this.at.set(1e9, 0, 1e9);
+  }
+
   /** Rebuild the near casters when the shadow box has moved far enough. */
   update(target: THREE.Vector3) {
     if (Math.hypot(target.x - this.at.x, target.z - this.at.z) < 24) return;

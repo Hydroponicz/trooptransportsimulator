@@ -200,6 +200,20 @@ career, so in Chrome and Edge Ctrl+W / Ctrl+Q go to the game instead of
 closing the browser. Hold Esc to leave fullscreen; the game pauses and offers
 a one-click way back. Firefox and Safari don't support keyboard lock.
 
+**Graphics** (pause menu) cycles Auto / High / Medium / Low, saved in the
+browser. High is the full look. Medium renders at up to 1× pixel ratio, with
+a smaller, harder-edged shadow map over a smaller area, thinner and shorter
+grass, crops only within 70 m, and trees, buildings and small props swapping
+to their far versions or dropping out sooner. Low also renders at 0.75×,
+turns off antialiasing, removes the crop plants (the field rows stay in the
+ground) and keeps shadows only for the aircraft, vehicles and people near
+you. Auto picks a level from the GPU name (integrated Intel and software
+renderers start at Low; Iris Xe, Radeon integrated graphics and Apple
+M-series at Medium; dedicated GPUs at High). While playing it lowers the
+render resolution (to 70%) when the frame rate drops below 45 and raises it
+again with headroom. If it stays slow, it drops one level. Antialiasing
+changes apply the next time the game loads.
+
 Gamepad: the left stick is collective and yaw, the right stick is cyclic, and
 the triggers also move the collective. A = ramp, B = hook, X = engine,
 Y = camera, LB = flares, RB = SAS, Start = terminal.
@@ -372,15 +386,19 @@ The theater is big, so most of it is drawn cheaply or not at all:
   detail by distance (full 12.5 m grid up close, 200 m far out), with skirts
   hiding the seams. Off-screen tiles are culled, including from the shadow
   pass.
-- **Forests** are in 1.8 km chunks: full trees within about 1 km, a single
+- **Shadows**: the instanced world chunks don't cast. Invisible copies of the
+  trees and buildings within 170 m (fewer on lower settings) draw only into
+  the shadow map, rebuilt as you move.
+- **Forests** are in 1.2 km chunks: full trees within about 1 km, a single
   five-sided stand-in per tree (one draw call per chunk) out to the fog, and
   nothing beyond.
-- **Props** are instanced per prototype per 2.4 km cell and hidden by size
+- **Props** are instanced per prototype per cell (0.8 km for small props,
+  1.2 km for buildings with a far version, 2.4 km otherwise) and hidden by size
   class: fence posts and delineators go first, buildings and pylons stay to
   the fog. Buildings switch to a simplified version (plain window panes)
   beyond 1.2 km.
 - **Grass** is one instanced mesh refilled from cached 16 m cells as the
-  camera moves, within 120 m, and hidden above 160 m. Long roadside meshes (rails, fences, wires) are split per cell.
+  camera moves, within 120 m, and hidden above 170 m. Long roadside meshes (rails, fences, wires) are split per cell.
 - **Big buildings** draw their windows in the facade shader (a box, not
   hundreds of window parts).
 - **Crops** are instanced 4 m row segments within 110 m of the camera, with a
@@ -399,6 +417,7 @@ World generation logs its phase timings to the console.
 src/
   main.ts            menu, launching a career
   game.ts            game loop, glue between systems, prompts, crash/respawn
+  graphics.ts        graphics presets, GPU detection, Auto's resolution scaler
   heli/flight.ts     flight model (thrust, drag, control laws, ground contact)
   heli/heli.ts       aircraft entity: damage, ramp, rotors, collisions
   heli/chinookModel.ts  procedural CH-47: lofted hull with see-through glazing, cockpit, cabin, crew stations
@@ -418,4 +437,5 @@ src/
   audio.ts           synthesized rotor, turbine, wind and effects audio
   ui/                HUD, minimap and theater map, terminal and dialogs
   world/lod.ts       distance culling and per-cell splitting of world chunks
+  world/shadows.ts   near-only shadow casters for the instanced trees and buildings
 ```

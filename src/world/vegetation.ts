@@ -17,7 +17,8 @@ interface Tree {
 
 const GRID = 40;
 /** 1.8 km chunks, for culling. */
-const CHUNKS = Math.round(WORLD_SIZE / 1800);
+// Small enough that the full-tree ring (shorter on lower graphics settings) culls tightly.
+const CHUNKS = Math.round(WORLD_SIZE / 1200);
 /** Full trees inside this distance (from the chunk's bounds), simple stand-ins out to the fog. */
 const HI_DIST = 1000;
 const LO_DIST = 7000;
@@ -139,7 +140,7 @@ export class Vegetation {
         mesh.receiveShadow = true;
         mesh.computeBoundingSphere();
         this.group.add(mesh);
-        culler.add(mesh, mesh.boundingSphere!.center, mesh.boundingSphere!.radius + 30, HI_DIST);
+        culler.add(mesh, mesh.boundingSphere!.center, mesh.boundingSphere!.radius + 30, HI_DIST, 0, 'lod');
         sphere = sphere ? sphere.union(mesh.boundingSphere!) : mesh.boundingSphere!.clone();
       }
       if (!sphere) continue;
@@ -152,7 +153,7 @@ export class Vegetation {
       });
       lo.computeBoundingSphere();
       this.group.add(lo);
-      culler.add(lo, sphere.center, sphere.radius + 30, LO_DIST, HI_DIST);
+      culler.add(lo, sphere.center, sphere.radius + 30, LO_DIST, HI_DIST, 'far', 'lod');
     }
   }
 

@@ -62,6 +62,10 @@ export class Grass {
   private streets = new Map<number, Street[]>();
   private plazas: { x: number; z: number; hw: number; hd: number; rot: number }[] = [];
   private key = '';
+  /** Drawn ranges and the share of grass tufts drawn, set by the graphics quality. */
+  private range = { value: RANGE };
+  private cropRange = { value: CROP_RANGE };
+  private density = 1;
   private uniforms = { time: { value: 0 }, wash: { value: new THREE.Vector4(0, -1e5, 0, 0) }, lift: { value: 1 } };
 
   constructor(
@@ -101,7 +105,7 @@ export class Grass {
     };
     for (const [l, geo] of Object.entries(geos)) {
       const cap = l === 'grass' ? span * span * PER_CELL : l.endsWith(':far') ? 9000 : 3000;
-      const m = new THREE.InstancedMesh(geo, this.material(l === 'grass' ? RANGE : CROP_RANGE), cap);
+      const m = new THREE.InstancedMesh(geo, this.material(l === 'grass' ? this.range : this.cropRange), cap);
       m.count = 0;
       m.frustumCulled = false;
       m.receiveShadow = true;
@@ -111,10 +115,18 @@ export class Grass {
     }
   }
 
-  private material(range: number) {
+  /** Graphics quality: grass out to `range` (at most the default), a share of the tufts, crops out to `cropRange` (0: none). */
+  setQuality(range: number, density: number, cropRange: number) {
+    this.range.value = Math.min(RANGE, range);
+    this.cropRange.value = Math.min(CROP_RANGE, cropRange);
+    this.density = density;
+    this.key = '';
+  }
+
+  private material(range: { value: number }) {
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
     mat.onBeforeCompile = (sh) => {
-      Object.assign(sh.uniforms, this.uniforms, { range: { value: range } });
+      Object.assign(sh.uniforms, this.uniforms, { range });
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', '#include <common>\nuniform float time;\nuniform vec4 wash;\nuniform float range;\nuniform float lift;')
         .replace(
@@ -169,26 +181,30 @@ export class Grass {
     const key = `${cx},${cz}`;
     if (key === this.key) return;
     this.key = key;
-    const r = Math.ceil(RANGE / CELL);
+    const R = this.range.value;
+    const CR = this.cropRange.value;
+    const r = Math.ceil(R / CELL);
     const n: Record<string, number> = {};
     for (const l of Object.keys(this.meshes)) n[l] = 0;
     const keep = new Set<string>();
     for (let dz = -r; dz <= r; dz++)
       for (let dx = -r; dx <= r; dx++) {
         const d2 = (dx * dx + dz * dz) * CELL * CELL;
-        if (d2 > (RANGE + CELL) * (RANGE + CELL)) continue;
+        if (d2 > (R + CELL) * (R + CELL)) continue;
         const k = `${cx + dx},${cz + dz}`;
         keep.add(k);
         let cell = this.cells.get(k);
         if (!cell) this.cells.set(k, (cell = this.fill(cx + dx, cz + dz)));
-        const cropsHere = d2 < (CROP_RANGE + CELL) * (CROP_RANGE + CELL);
+        const cropsHere = CR > 0 && d2 < (CR + CELL) * (CR + CELL);
         const near = d2 < CROP_NEAR * CROP_NEAR;
         for (const l of LAYERS) {
           if (l !== 'grass' && !cropsHere) continue;
           const name = l === 'grass' || near ? l : `${l}:far`;
           const mesh = this.meshes[name];
           const ms = cell.m[l];
-          for (let i = 0; i < ms.length && n[name] < mesh.instanceMatrix.count; i++, n[name]++) {
+          // Tufts are placed in random order, so drawing the first share thins them evenly.
+          const len = l === 'grass' ? Math.ceil(ms.length * this.density) : ms.length;
+          for (let i = 0; i < len && n[name] < mesh.instanceMatrix.count; i++, n[name]++) {
             mesh.setMatrixAt(n[name], ms[i]);
             mesh.setColorAt(n[name], cell.c[l][i]);
           }

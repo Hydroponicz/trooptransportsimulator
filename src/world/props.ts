@@ -754,7 +754,8 @@ const VIEW: Partial<Record<ProtoName, number>> = {
   barrel: 1200,
   crates: 1500,
   sandbag: 1800,
-  haybale: 1800,
+  // Thousands of them on the fields; past a kilometre a bale is under a pixel.
+  haybale: 1000,
   signpost: 1800,
   signboard: 1200,
   streetlight: 2200,
@@ -838,16 +839,19 @@ export class Props {
   }
 
   /**
-   * One instanced mesh per prototype per 2.4 km cell, so each can be frustum
+   * One instanced mesh per prototype per cell (0.8–2.4 km), so each can be frustum
    * culled (and shadow-culled) and hidden by distance: clutter goes first,
    * buildings and pylons stay visible out to the fog.
    */
   build(culler: DistanceCuller, shadows?: ShadowCasters): THREE.Group {
     const g = new THREE.Group();
-    const CELLSZ = 2400;
     const white = new THREE.Color(1, 1, 1);
     for (const [name, b] of this.batches) {
       shadows?.add(b.geo, b.mats);
+      // Small props only show within a kilometre or two, and buildings swap to their far
+      // version at LOD_NEAR (sooner on lower graphics settings): finer cells let both cull tightly.
+      const view = VIEW[name] ?? 4000;
+      const CELLSZ = view < 4000 ? 800 : b.lo ? 1200 : 2400;
       const cells = new Map<string, number[]>();
       b.mats.forEach((m, i) => {
         const e = m.elements;
@@ -860,6 +864,7 @@ export class Props {
         // Buildings with a far version: detailed up close, simplified beyond LOD_NEAR.
         for (const lo of b.lo ? [false, true] : [false]) {
           const mesh = new THREE.InstancedMesh(lo ? b.lo! : b.geo, this.material, idx.length);
+          mesh.name = lo ? `${name}:lo` : name;
           idx.forEach((src, i) => {
             mesh.setMatrixAt(i, b.mats[src]);
             mesh.setColorAt(i, b.colors[src] ?? white);
@@ -869,9 +874,10 @@ export class Props {
           mesh.receiveShadow = true;
           mesh.computeBoundingSphere();
           g.add(mesh);
-          if (!b.lo) culler.addMesh(mesh, VIEW[name] ?? 4000);
-          else if (lo) culler.addMesh(mesh, VIEW[name] ?? 4000, LOD_NEAR);
-          else culler.addMesh(mesh, LOD_NEAR);
+          // Small props (seen out to a few km at most) thin out sooner on lower graphics settings.
+          if (!b.lo) culler.addMesh(mesh, view, 0, view < 4000 ? 'clutter' : 'far');
+          else if (lo) culler.addMesh(mesh, view, LOD_NEAR, 'far', 'lod');
+          else culler.addMesh(mesh, LOD_NEAR, 0, 'lod');
         }
       }
     }

@@ -8,7 +8,13 @@ interface Entry {
   near: number;
   far: number;
   r: number;
+  /** Which quality scale (if any) applies to each bound. */
+  nearK?: ScaleKind;
+  farK?: ScaleKind;
 }
+
+/** Distances the graphics setting can shorten: tree/building swaps to far stand-ins, small props, and the far edge of buildings, forests and roadside. */
+export type ScaleKind = 'lod' | 'clutter' | 'far';
 
 /**
  * Hides world chunks that are too far from the camera to matter (beyond the
@@ -18,14 +24,16 @@ interface Entry {
 export class DistanceCuller {
   private entries: Entry[] = [];
   private frame = 0;
+  /** Multipliers on the tagged distances, set from the graphics quality. */
+  scales: Record<ScaleKind, number> = { lod: 1, clutter: 1, far: 1 };
 
   /** Show `obj` when the camera is between `near` and `far` metres from its bounds. */
-  add(obj: THREE.Object3D, center: THREE.Vector3, radius: number, far: number, near = 0) {
-    this.entries.push({ obj, x: center.x, z: center.z, r: radius, near, far });
+  add(obj: THREE.Object3D, center: THREE.Vector3, radius: number, far: number, near = 0, farK?: ScaleKind, nearK?: ScaleKind) {
+    this.entries.push({ obj, x: center.x, z: center.z, r: radius, near, far, nearK, farK });
   }
 
   /** Register a mesh by its own bounding sphere. */
-  addMesh(mesh: THREE.Mesh | THREE.LineSegments | THREE.InstancedMesh, far: number, near = 0) {
+  addMesh(mesh: THREE.Mesh | THREE.LineSegments | THREE.InstancedMesh, far: number, near = 0, farK?: ScaleKind, nearK?: ScaleKind) {
     const g = mesh.geometry;
     if (!g.boundingSphere) g.computeBoundingSphere();
     let s = g.boundingSphere!;
@@ -34,15 +42,18 @@ export class DistanceCuller {
       if (!im.boundingSphere) im.computeBoundingSphere();
       s = im.boundingSphere!;
     }
-    this.add(mesh, s.center, s.radius, far, near);
+    this.add(mesh, s.center, s.radius, far, near, farK, nearK);
   }
 
   update(cam: THREE.Vector3, force = false) {
     // A few times a second is plenty for kilometre-scale rings.
     if (!force && this.frame++ % 6) return;
+    const sc = this.scales;
     for (const e of this.entries) {
       const d = Math.max(0, Math.hypot(cam.x - e.x, cam.z - e.z) - e.r);
-      e.obj.visible = d <= e.far && d >= e.near;
+      const far = e.farK ? e.far * sc[e.farK] : e.far;
+      const near = e.nearK ? e.near * sc[e.nearK] : e.near;
+      e.obj.visible = d <= far && d >= near;
     }
   }
 }

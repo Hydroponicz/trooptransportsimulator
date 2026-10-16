@@ -566,7 +566,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     roadside.remove(o);
     for (const piece of splitByCells(o, 3200)) {
       roadside.add(piece);
-      culler.addMesh(piece, (o as THREE.LineSegments).isLineSegments ? 3500 : 4500);
+      culler.addMesh(piece, (o as THREE.LineSegments).isLineSegments ? 3500 : 4500, 0, 'far');
     }
   }
   group.add(decor.group);
