@@ -5,6 +5,8 @@
  * right stick scrolls. In flight the game reads the pad itself (input.ts).
  */
 
+import { activePad } from '../input';
+
 /** Overlays, topmost first. */
 const LAYERS = ['dialog', 'terminal', 'menu'];
 /** Buttons B (back) and Menu press in a dialog, the first that exists. */
@@ -86,7 +88,7 @@ function tick(now: number) {
   requestAnimationFrame(tick);
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
-  const gp = navigator.getGamepads ? Array.from(navigator.getGamepads()).find((p) => p && p.connected) : null;
+  const gp = activePad();
   const top = topLayer();
   if (top !== layer) {
     layer = top;

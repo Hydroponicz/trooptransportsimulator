@@ -32,6 +32,7 @@ import { SAS_NAMES, type FlightEnv } from './heli/flight';
 import type { Site } from './world/sites';
 import { WATER_LEVEL } from './world/terrain';
 import { enterFullscreen, toggleFullscreen } from './fullscreen';
+import { activePad, padName } from './input';
 import { AutoScaler, loadSetting, lower, PROFILES, resolve, saveSetting, type GraphicsSetting, type Quality } from './graphics';
 
 const STEP = 1 / 120;
@@ -245,6 +246,12 @@ export class Game {
     this.respawn(true);
     window.addEventListener('resize', () => this.resize());
     this.applyGraphics();
+    // Say when the browser hands over (or loses) a controller, so it's clear whether it is seen at all.
+    window.addEventListener('gamepadconnected', (e) => {
+      const p = e.gamepad;
+      this.toast(`Controller connected: ${padName(p)}${p.mapping === 'standard' ? '' : ' (non-standard layout: buttons may be mixed up)'}`, 'good');
+    });
+    window.addEventListener('gamepaddisconnected', (e) => this.toast(`Controller disconnected: ${padName(e.gamepad)}`, 'bad'));
     // Leaving fullscreen mid-flight drops the keyboard lock, so Ctrl+W could
     // close the tab again. Pause and offer a one-click way back.
     document.addEventListener('fullscreenchange', () => {
@@ -591,6 +598,7 @@ export class Game {
       this.terminal.dialog(
         `<h2>Paused</h2><div class="sub">${this.world.base.name} theater · seed ${this.career.data.seed}</div>
         ${document.fullscreenElement ? '' : '<p style="color:#ffcf4a">You are not in fullscreen. Outside fullscreen the browser may treat Ctrl+W / Ctrl+Q as close-tab / quit.</p>'}
+        <p style="opacity:.75;font-size:13px">${this.padStatus()}</p>
         <div class="actions" style="justify-content:flex-start;flex-wrap:wrap">
           ${document.fullscreenElement ? '' : '<button class="primary" data-act="fsresume">Back to fullscreen</button>'}
           <button class="${document.fullscreenElement ? 'primary' : ''}" data-act="resume">Resume</button>
@@ -921,6 +929,12 @@ export class Game {
       }
     }
     void dt;
+  }
+
+  private padStatus(): string {
+    const p = activePad();
+    if (!p) return 'Controller: none detected. Press any button on it while the game is focused; if nothing shows up, this browser is not passing the controller through (it works in Chrome and Edge).';
+    return `Controller: ${padName(p)}${p.mapping === 'standard' ? '' : ' (non-standard layout: buttons may be mixed up)'}`;
   }
 
   /** A button name for a prompt, for the keyboard or the controller and the control scheme in use. */

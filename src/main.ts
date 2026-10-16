@@ -2,6 +2,7 @@ import { Game } from './game';
 import { Career } from './game/career';
 import { enterFullscreen, toggleFullscreen } from './fullscreen';
 import { startPadNav } from './ui/padnav';
+import { padName } from './input';
 
 const menu = document.getElementById('menu')!;
 const buttons = document.getElementById('menu-buttons')!;
@@ -100,3 +101,8 @@ function launch(career: Career) {
 showMenu();
 
 startPadNav();
+
+// On the menu, confirm the controller the browser sees (it lists one only after a button press).
+window.addEventListener('gamepadconnected', (e) => {
+  if (!menu.classList.contains('hidden')) status.textContent = `Controller connected: ${padName(e.gamepad)}. D-pad to choose, A to select.`;
+});

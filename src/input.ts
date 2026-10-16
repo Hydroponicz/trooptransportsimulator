@@ -62,6 +62,26 @@ export interface PadState {
   r3: boolean;
 }
 
+/**
+ * The controller to read: a standard-mapped one (Xbox and PlayStation pads
+ * are; other USB devices such as headsets, wheels or RGB keyboards can also
+ * show up as "gamepads", often first in the list), and of those the one used
+ * most recently. Browsers only list a controller after a button on it has
+ * been pressed while the page has focus.
+ */
+export function activePad(): Gamepad | null {
+  const pads = navigator.getGamepads ? Array.from(navigator.getGamepads()) : [];
+  const live = pads.filter((p): p is Gamepad => !!p && p.connected);
+  if (!live.length) return null;
+  const std = live.filter((p) => p.mapping === 'standard');
+  return (std.length ? std : live).reduce((a, b) => (b.timestamp > a.timestamp ? b : a));
+}
+
+/** Short controller name for messages ("Xbox 360 Controller (XInput STANDARD GAMEPAD)" → "Xbox 360 Controller"). */
+export function padName(p: Gamepad): string {
+  return p.id.replace(/\s*\(.*$/, '').trim() || p.id;
+}
+
 /** Keyboard, mouse and gamepad into smoothed flight controls + discrete actions. */
 export class Input {
   private keys = new Set<string>();
@@ -272,8 +292,7 @@ export class Input {
     // keyboard flight keys always win while held.
     const kbFlight = tp !== 0 || tr !== 0 || ty !== 0 || dc !== 0 || climb !== 0;
     if (kbFlight) this.usingPad = false;
-    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-    const gp = Array.from(pads).find((p) => p && p.connected);
+    const gp = activePad();
     if (gp && this.enabled) {
       // Calibrate against the device's resting state: some devices report
       // triggers or throttles as axes resting at -1, which must not read as input.
