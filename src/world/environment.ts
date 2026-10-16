@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CLOUD_BASE, CLOUD_COVER_GLSL, CLOUD_SHIFT, CLOUD_TOP, FOG_RANGE, FOG_SCALE_HEIGHT, HAZE, SKY_TOP, SUN_COLOR, SUN_DIR, SUN_HAZE } from './look';
+import { CLOUD_BASE, CLOUD_COVER_GLSL, CLOUD_SHIFT, CLOUD_TOP, FOG_RANGE, windSpeedAt, windVeerAt, FOG_SCALE_HEIGHT, HAZE, SKY_TOP, SUN_COLOR, SUN_DIR, SUN_HAZE } from './look';
 import { Noise2D } from '../util/noise';
 import { cloudNoiseTexture } from '../util/textures';
 
@@ -21,9 +21,9 @@ export class Environment {
   /**
    * The clouds change slowly, so instead of marching through them for every
    * sky pixel every frame they are rendered into a sky panorama (x =
-   * azimuth, y = sqrt of the sine of the elevation, so the horizon gets the
-   * most texels): the light they scatter toward the camera (rgb) and how much
-   * of the sky behind shows through (a).
+   * azimuth, y = sqrt of the elevation, so the horizon gets the most texels
+   * and the zenith still enough): the light they scatter toward the camera
+   * (rgb) and how much of the sky behind shows through (a).
    *
    * A new panorama is built a strip of azimuth per frame (so every frame
    * costs the same) into a hidden target, all of it from one moment and one
@@ -51,6 +51,11 @@ export class Environment {
   /** Camera position the panorama being built is seen from. */
   private snapPos = new THREE.Vector3(0, 300, 0);
   private time = 0;
+  /** Wind at the cloud base and tops (m/s, x and z). */
+  readonly cloudWind = new THREE.Vector2();
+  private topWind = new THREE.Vector2();
+  private surfaceWind = new THREE.Vector3(2, 0, 1);
+  private jitter = 0;
 
   constructor(scene: THREE.Scene) {
     scene.fog = new THREE.Fog(HAZE, FOG_SCALE_HEIGHT, FOG_RANGE);
@@ -91,6 +96,7 @@ export class Environment {
         cloudTex: { value: null },
         cloudPrev: { value: null },
         cloudBlend: { value: 1 },
+        cloudTexel: { value: new THREE.Vector2(1 / 2048, 1 / 512) },
       },
       vertexShader: /* glsl */ `
         varying vec3 vDir;
@@ -113,6 +119,8 @@ export class Environment {
         noiseTex: { value: this.noise },
         camPos: { value: this.snapPos },
         shift: { value: new THREE.Vector2() },
+        lean: { value: new THREE.Vector2() },
+        jitter: { value: 0 },
         sunCol: { value: SUN_COLOR.clone().multiplyScalar(1.0) },
         skyTop: { value: SKY_TOP.clone() },
         haze: { value: HAZE.clone() },
@@ -172,12 +180,28 @@ export class Environment {
     this.slice = 0;
   }
 
+  /** The wind near the ground (with its gusts); the clouds ride the wind at their own height. */
+  setWind(surface: THREE.Vector3) {
+    this.surfaceWind.copy(surface);
+  }
+
+  /** The wind at height h above the ground, from the surface wind (at least a light breeze aloft). */
+  private windAt(h: number, out: THREE.Vector2) {
+    const w = this.surfaceWind;
+    const sp = Math.max(Math.hypot(w.x, w.z), 1.2) * windSpeedAt(h);
+    const a = Math.atan2(w.z, w.x) + windVeerAt(h);
+    return out.set(Math.cos(a) * sp, Math.sin(a) * sp);
+  }
+
   /** Drift the clouds and build a strip of the next cloud panorama (four a frame when urgent). */
   update(dt: number, renderer?: THREE.WebGLRenderer) {
     this.time += dt;
-    // The cumulus drift slowly with the upper wind (the shadows follow continuously).
-    CLOUD_SHIFT.x += 1.2 * dt;
-    CLOUD_SHIFT.y += 0.45 * dt;
+    // The cumulus ride the wind at their height; the tops, in faster air, run ahead of the bases.
+    this.windAt(CLOUD_BASE + 400, this.cloudWind);
+    this.windAt(CLOUD_TOP, this.topWind);
+    // (The noise is sampled at position + shift, so the field moves by −shift.)
+    CLOUD_SHIFT.x -= this.cloudWind.x * dt;
+    CLOUD_SHIFT.y -= this.cloudWind.y * dt;
     if (!renderer) return;
     const prevTarget = renderer.getRenderTarget();
     if (this.blank) {
@@ -201,6 +225,11 @@ export class Environment {
         this.snapPos.copy(this.camPos);
         u.time.value = this.time;
         u.shift.value.set(CLOUD_SHIFT.x, CLOUD_SHIFT.y);
+        // How far the tops lean downwind of the bases: the shear over the time a tower takes to grow.
+        u.lean.value.subVectors(this.topWind, this.cloudWind).multiplyScalar(-300);
+        // A different raymarch dither each panorama: the cross-fade averages two of them.
+        this.jitter = (this.jitter + 0.618034) % 1;
+        u.jitter.value = this.jitter;
       }
       const rt = this.rts[this.next];
       const strip = Math.ceil(rt.width / this.slices);
@@ -235,6 +264,7 @@ export class Environment {
     su.cloudPrev.value = this.rts[this.prev].texture;
     su.cloudTex.value = this.rts[this.cur].texture;
     su.cloudBlend.value = this.blend;
+    su.cloudTexel.value.set(1 / this.rts[0].width, 1 / this.rts[0].height);
   }
 
   /** Keep the shadow frustum centered on the area of interest. */
@@ -324,6 +354,8 @@ uniform vec3 sunDir;
 uniform sampler3D noiseTex;
 uniform vec3 camPos;
 uniform vec2 shift;
+uniform vec2 lean;
+uniform float jitter;
 uniform vec3 sunCol;
 uniform vec3 skyTop;
 uniform vec3 haze;
@@ -338,28 +370,39 @@ float hg(float c, float g) {
   return (1.0 - g2) / pow(1.0 + g2 - 2.0 * g * c, 1.5);
 }
 
-float density(vec3 p, float cov, bool detail) {
+/** Where the field is sampled: drifted with the wind, the tops leaning downwind of the bases. */
+vec2 drifted(vec2 xz, float h) {
+  return xz + shift + lean * (h - 0.5);
+}
+
+// detail: 0 = shape only (light march), up to 1 = full edge erosion (less far off, where it would alias).
+float density(vec3 p, float cov, float detail) {
   float h = (p.y - BASE) / (TOP - BASE);
   // Taller towers where the cover is thick; flat bases, rounded tops.
   float top = 0.25 + 0.75 * cov;
-  float prof = smoothstep(0.0, 0.06, h) * (1.0 - smoothstep(top * 0.45, top, h));
-  vec3 q = vec3(p.x + shift.x, p.y - time * 0.12, p.z + shift.y) * (1.0 / 2100.0);
+  float prof = smoothstep(0.0, 0.08, h) * (1.0 - smoothstep(top * 0.4, top, h));
+  vec2 xz = drifted(p.xz, h);
+  // Rising slowly: the billows boil upward as the cloud grows.
+  vec3 q = vec3(xz.x, p.y - time * 0.35, xz.y) * (1.0 / 2100.0);
   float sh = texture(noiseTex, q).r * 0.75 + texture(noiseTex, q * 2.7 + 0.31).r * 0.25;
   float c = 0.1 + 0.6 * cov;
-  float d = clamp((sh * prof - (1.0 - c)) / c, 0.0, 1.0);
-  if (detail && d > 0.0) {
+  // A soft ramp at the edge rather than a hard cut.
+  float d = smoothstep(1.0 - c, 1.0 - c * 0.15, sh * prof);
+  if (detail > 0.0 && d > 0.0) {
     // Cauliflower billows on top, ragged wisps underneath.
-    float det = texture(noiseTex, q * 6.3 + vec3(time * 0.0003, 0.0, 0.0)).g;
+    float det = texture(noiseTex, q * 6.3 + vec3(time * 0.002, time * 0.001, 0.0)).g;
     det = mix(1.0 - det, det, smoothstep(0.1, 0.5, h));
-    d = clamp((d - det * 0.38) / 0.62, 0.0, 1.0);
+    float e = 0.34 * detail;
+    d = smoothstep(e * det, e * det + (1.0 - e) * 0.9, d);
   }
   return d;
 }
 
 void main() {
   float az = (vUv.x - 0.5) * 6.2831853;
-  float se = vUv.y * vUv.y;
-  float ce = sqrt(max(0.0, 1.0 - se * se));
+  float el = vUv.y * vUv.y * 1.5707963;
+  float se = sin(el);
+  float ce = cos(el);
   vec3 d = vec3(ce * cos(az), se, ce * sin(az));
   vec3 o = camPos;
   o.y = min(o.y, BASE - 60.0);
@@ -373,7 +416,9 @@ void main() {
     if (t0 < 70000.0) {
       t1 = min(t1, t0 + 14000.0);
       float dt = (t1 - t0) / float(STEPS);
-      float t = t0 + dt * cloudHash(gl_FragCoord.xy * 1.37);
+      // Interleaved-gradient dither (even, not blotchy), moved on each panorama.
+      float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))) + jitter);
+      float t = t0 + dt * ign;
       float T = 1.0;
       vec3 L = vec3(0.0);
       float tHit = 0.0;
@@ -383,17 +428,17 @@ void main() {
       const float SIG = 0.04;
       for (int i = 0; i < STEPS; i++) {
         vec3 p = o + d * t;
-        vec2 cq = p.xz + shift;
-        float cov = cloudCover(cq);
+        float hh = (p.y - BASE) / (TOP - BASE);
+        float cov = cloudCover(drifted(p.xz, hh));
         if (cov > 0.02) {
-          float dens = density(p, cov, true);
+          float dens = density(p, cov, 1.0 - 0.7 * smoothstep(5000.0, 20000.0, t));
           if (dens > 0.004) {
             float ld = 0.0;
             float ls = 60.0;
             vec3 lp = p;
             for (int j = 0; j < LSTEPS; j++) {
               lp += sunDir * ls;
-              ld += density(lp, cov, false) * ls;
+              ld += density(lp, cov, 0.0) * ls;
               ls *= 1.75;
             }
             float h = clamp((p.y - BASE) / (TOP - BASE), 0.0, 1.0);
@@ -425,7 +470,7 @@ void main() {
     float cov = cloudCover(cq);
     float sh = texture(noiseTex, vec3(cq * (1.0 / 2100.0), 0.3)).r;
     float c = 0.1 + 0.6 * cov;
-    float a = clamp((sh - (1.0 - c)) / c * 2.2, 0.0, 1.0);
+    float a = smoothstep(1.0 - c, 1.0 - c * 0.45, sh);
     float lit = texture(noiseTex, vec3((cq + sunDir.xz * 300.0) * (1.0 / 2100.0), 0.3)).r;
     vec3 col = mix(vec3(0.62, 0.67, 0.76), vec3(1.15, 1.1, 1.02), clamp(0.7 + (sh - lit) * 3.0, 0.0, 1.0));
     float k = exp(-t0 / 24000.0);
@@ -444,7 +489,18 @@ uniform vec3 sunDir;
 uniform sampler2D cloudTex;
 uniform sampler2D cloudPrev;
 uniform float cloudBlend;
+uniform vec2 cloudTexel;
 varying vec3 vDir;
+
+// Four taps half a texel apart: smooths the panorama's texels and the march's dither.
+vec4 clouds(vec2 uv) {
+  vec2 o = cloudTexel * 0.6;
+  vec4 a = texture2D(cloudPrev, uv + vec2(o.x, o.y * 0.4)) + texture2D(cloudPrev, uv - vec2(o.x, o.y * 0.4))
+         + texture2D(cloudPrev, uv + vec2(-o.x * 0.4, o.y)) + texture2D(cloudPrev, uv - vec2(-o.x * 0.4, o.y));
+  vec4 b = texture2D(cloudTex, uv + vec2(o.x, o.y * 0.4)) + texture2D(cloudTex, uv - vec2(o.x, o.y * 0.4))
+         + texture2D(cloudTex, uv + vec2(-o.x * 0.4, o.y)) + texture2D(cloudTex, uv - vec2(-o.x * 0.4, o.y));
+  return mix(a, b, cloudBlend) * 0.25;
+}
 
 void main() {
   vec3 d = normalize(vDir);
@@ -461,8 +517,8 @@ void main() {
 
   float vis = 1.0;
   if (d.y > 0.0) {
-    vec2 puv = vec2(atan(d.z, d.x) / 6.2831853 + 0.5, sqrt(h));
-    vec4 cl = mix(texture2D(cloudPrev, puv), texture2D(cloudTex, puv), cloudBlend);
+    vec2 puv = vec2(atan(d.z, d.x) / 6.2831853 + 0.5, sqrt(asin(min(h, 1.0)) / 1.5707963));
+    vec4 cl = clouds(puv);
     cl = mix(vec4(0.0, 0.0, 0.0, 1.0), cl, smoothstep(0.0, 0.012, h));
     col = col * cl.a + cl.rgb;
     vis = cl.a * cl.a * cl.a;

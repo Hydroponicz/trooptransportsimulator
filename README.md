@@ -471,8 +471,13 @@ A sunny summer day in eastern Europe:
   (taller towers where it is thick), lit by a short march toward the sun, and
   has bright silver edges when the sun is behind it. Bases are flat and grey,
   tops are cauliflower-white, and distant clouds sink into the horizon haze.
-  The clouds drift slowly with the upper wind, and their shadows creep
-  across the land under them. The sky is a deep blue, richest at right angles to the sun,
+  The clouds ride the wind at their own height. Wind strengthens with
+  height (about 2.4 times the surface wind at cloud level) and veers
+  clockwise, so on a breezy day the cumulus sail across at 10 m/s or more,
+  while on a still one they drift. The tops, in faster air, lean downwind of
+  the bases, and the billows boil slowly upward. Their shadows move across
+  the land with them. Cloud edges are soft, and fine detail fades on
+  distant clouds rather than flickering. The sky is a deep blue, richest at right angles to the sun,
   with a soft glow round the sun's disc, which clouds pass in front of.
 - **Haze:** a height fog, thick in the valleys and thin over the peaks, that
   warms toward the sun. Distant ridges read as layers of blue rather than a
@@ -481,7 +486,7 @@ A sunny summer day in eastern Europe:
 - **Smoke:** lit, billowing puffs. They turn as they rise and are shaded by
   the sun, the sky above and the ground below, with fire glow on young
   smoke. Smoke drifts with the wind (stronger with height), swirls, and is
-  driven by the rotor's wake: down through the disc, then out across the
+  driven by the rotor's wake (the wind follows the same height profile as the clouds'): down through the disc, then out across the
   ground or roof below. It slides along the ground and round buildings rather
   than through them, so wash pushes signal smoke off a roof and round the
   stair tower, not into it. Burning wrecks (tanks, downed jets and

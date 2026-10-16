@@ -30,6 +30,18 @@ export const FOG_RANGE = 11000;
 /** The cumulus layer: cloud base and tops (m). */
 export const CLOUD_BASE = 1700;
 export const CLOUD_TOP = 3000;
+/**
+ * The wind's change with height over open country: speed grows as a power of
+ * the height (×1 at 10 m, ×1.3 at 50 m, ×2 at 800 m, ×2.4 at cloud level) and
+ * the direction veers clockwise as surface friction falls away.
+ */
+export function windSpeedAt(h: number): number {
+  return Math.pow(Math.max(h, 1) / 10, 0.16);
+}
+export function windVeerAt(h: number): number {
+  return 0.45 * Math.min(1, Math.max(0, h) / 1500);
+}
+
 /** How far the cloud field has drifted (m), shared by the sky and every lit material's cloud shadows. */
 export const CLOUD_SHIFT = { x: 0, y: 0 };
 

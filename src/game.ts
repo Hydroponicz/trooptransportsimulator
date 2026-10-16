@@ -749,6 +749,7 @@ export class Game {
     const gust = 1 + 0.35 * Math.sin(this.time * 0.37) * Math.sin(this.time * 0.11 + 1);
     this.wind.copy(this.windBase).multiplyScalar(gust);
     this.effects.wind.copy(this.wind);
+    this.env.setWind(this.wind);
 
     const driving = this.mode === 'drive';
     // GTA-style: the climb command flies the collective (flight.ts); sim: the lever is the player's.

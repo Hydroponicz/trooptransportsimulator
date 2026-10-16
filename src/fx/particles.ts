@@ -359,7 +359,8 @@ export class ParticleSystem {
       const agl = y - g;
 
       // The air's velocity here: wind (stronger with height), swirl, rotor wake.
-      const hk = (0.55 + 0.45 * Math.min(1, Math.max(0, agl) / 60)) * (1 + Math.max(0, agl) / 700);
+      // Wind grows with height (look.ts windSpeedAt, a power law; slower right at the ground).
+      const hk = Math.pow(Math.max(agl, 1) * 0.1, 0.16);
       let ax = wx * hk;
       let ay = 0;
       let az = wz * hk;
