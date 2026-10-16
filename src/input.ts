@@ -294,22 +294,29 @@ export class Input {
     if (kbFlight) this.usingPad = false;
     const gp = activePad();
     if (gp && this.enabled) {
-      // Calibrate against the device's resting state: some devices report
-      // triggers or throttles as axes resting at -1, which must not read as input.
+      // Standard pads (Xbox, PlayStation) rest at 0 by definition, so their sticks are
+      // never calibrated: taking the first reading as "centre" turned a stick that was
+      // being wiggled when the pad was found into a permanent deflection (a spinning
+      // camera). Other devices may report triggers or throttles as axes resting at
+      // full ±1; only those are taken as offsets.
       let base = this.padRest.get(gp.id);
       if (!base) {
-        base = gp.axes.slice(0, 4);
+        base = gp.axes.slice(0, 4).map((v) => (gp.mapping !== 'standard' && Math.abs(v) > 0.99 ? v : 0));
         this.padRest.set(gp.id, base);
       }
-      const axis = (i: number) => {
-        const v = (gp.axes[i] ?? 0) - (base![i] ?? 0);
-        const a = Math.abs(v) < 0.15 ? 0 : (v - Math.sign(v) * 0.15) / 0.85;
-        return clamp(a, -1, 1);
+      const raw = (i: number) => (gp.axes[i] ?? 0) - (base![i] ?? 0);
+      // Round deadzone per stick (Microsoft's recommended Xbox values: ~24% left, ~26% right),
+      // rescaled so the output still starts at 0 and reaches 1.
+      const stickXY = (ix: number, iy: number, dz: number): [number, number] => {
+        const x = raw(ix);
+        const y = raw(iy);
+        const m = Math.hypot(x, y);
+        if (m < dz) return [0, 0];
+        const k = Math.min(1, (m - dz) / (1 - dz)) / m;
+        return [clamp(x * k, -1, 1), clamp(y * k, -1, 1)];
       };
-      const lx = axis(0);
-      const ly = axis(1);
-      const rx = axis(2);
-      const ry = axis(3);
+      const [lx, ly] = stickXY(0, 1, 0.24);
+      const [rx, ry] = stickXY(2, 3, 0.26);
       const lt = gp.mapping === 'standard' ? (gp.buttons[6]?.value ?? 0) : 0;
       const rt = gp.mapping === 'standard' ? (gp.buttons[7]?.value ?? 0) : 0;
       const moved = Math.max(Math.abs(lx), Math.abs(ly), Math.abs(rx), Math.abs(ry), lt, rt) > 0.25;
