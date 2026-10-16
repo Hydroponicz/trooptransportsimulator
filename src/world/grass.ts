@@ -62,6 +62,7 @@ export class Grass {
   private streets = new Map<number, Street[]>();
   private plazas: { x: number; z: number; hw: number; hd: number; rot: number }[] = [];
   private urban: { x: number; z: number; r: number }[] = [];
+  private parks: { x: number; z: number; hw: number; hd: number; rot: number }[] = [];
   private key = '';
   /** Drawn ranges and the share of grass tufts drawn, set by the graphics quality. */
   private range = { value: RANGE };
@@ -79,6 +80,7 @@ export class Grass {
   ) {
     // Built-up towns and cities are paved yards, gardens and courtyards, not meadow (villages keep theirs).
     this.urban = towns.filter((t) => t.kind !== 'village').map((t) => ({ x: t.x, z: t.z, r: t.r * 0.95 }));
+    this.parks = towns.flatMap((t) => (t.parks ?? []).map((p) => ({ ...p, rot: t.rot })));
     // Town squares and streets (bucketed) so plants can keep off them.
     this.plazas = towns.filter((t) => t.plaza).map((t) => ({ ...t.plaza!, rot: t.rot }));
     for (const t of towns)
@@ -228,7 +230,15 @@ export class Grass {
     if (y < WATER_LEVEL + 0.8) return false;
     if (this.terrain.normalAt(x, z, _v).y < 0.82) return false;
     if (this.roads.distance(x, z) < 7) return false;
-    for (const u of this.urban) if (Math.abs(x - u.x) < u.r && Math.abs(z - u.z) < u.r && Math.hypot(x - u.x, z - u.z) < u.r) return false;
+    const inPark = this.parks.some((p) => {
+      const dx = x - p.x;
+      const dz = z - p.z;
+      if (Math.abs(dx) > p.hw + p.hd || Math.abs(dz) > p.hw + p.hd) return false;
+      const c = Math.cos(p.rot);
+      const s = Math.sin(p.rot);
+      return Math.abs(dx * c - dz * s) < p.hw && Math.abs(dx * s + dz * c) < p.hd;
+    });
+    if (!inPark) for (const u of this.urban) if (Math.abs(x - u.x) < u.r && Math.abs(z - u.z) < u.r && Math.hypot(x - u.x, z - u.z) < u.r) return false;
     for (const y of this.yards) if (Math.abs(x - y.x) < y.r && Math.abs(z - y.z) < y.r && Math.hypot(x - y.x, z - y.z) < y.r) return false;
     for (const p of this.plazas) {
       const dx = x - p.x;

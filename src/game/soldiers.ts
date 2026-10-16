@@ -445,6 +445,26 @@ export function wave(out: Joints, t: number) {
   return out;
 }
 
+/** Sliding down a fast rope: both hands up on the rope, legs clamped round it, a little sway. */
+export function fastRope(out: Joints, t: number) {
+  stand(out);
+  out.armL = 2.75;
+  out.armR = 2.55;
+  out.armOutL = 0.12;
+  out.armOutR = 0.12;
+  out.elbowL = 0.35;
+  out.elbowR = 0.5;
+  out.thighL = 0.45;
+  out.thighR = 0.25;
+  out.kneeL = 0.7;
+  out.kneeR = 0.45;
+  out.lean = -0.05 + Math.sin(t * 5) * 0.03;
+  out.head = 0.25;
+  out.freeL = 1;
+  out.freeR = 1;
+  return out;
+}
+
 /** Lying flat on a litter (feet toward −Z when body = −π/2 → face up). */
 export function lying(out: Joints, t: number) {
   stand(out);

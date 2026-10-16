@@ -70,6 +70,8 @@ export const BLACKHAWK_CABIN: AirframeCabin = (() => {
     floor: F,
     hinge: new THREE.Vector3(0.95, F, -0.55),
     out: new THREE.Vector3(1, 0, 0),
+    /** Fast ropes from both cabin doors. */
+    ropes: [new THREE.Vector3(1.3, F, -0.55), new THREE.Vector3(-1.3, F, -0.55)],
     seats,
     litters: [new THREE.Vector3(0, F + 0.42, -0.2), new THREE.Vector3(0, F + 1.02, -0.2)],
     pallets: [],

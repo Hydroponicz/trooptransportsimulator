@@ -31,6 +31,18 @@ export interface Town {
   streets: Street[];
   /** The paved town square (world centre, half sizes along the town's axes), if it has one. */
   plaza?: { x: number; z: number; hw: number; hd: number };
+  /** Parks: open lawns ringed with trees (world centre, half sizes along the town's axes). */
+  parks?: { x: number; z: number; hw: number; hd: number }[];
+  /** Open ground for putting troops in from the air: the square, park lawns, wide street junctions. */
+  spots?: InsertSpot[];
+}
+
+/** A place in town a helicopter can put troops into (by fast rope), and how much room it has. */
+export interface InsertSpot {
+  x: number;
+  z: number;
+  r: number;
+  kind: 'plaza' | 'park' | 'street';
 }
 
 export const TOWN_NAMES = [
@@ -86,7 +98,13 @@ function placer(t: Town, props: Props, terrain: Terrain) {
  * same plan, ruined.
  */
 function buildGrid(t: Town, props: Props, terrain: Terrain, rng: RNG) {
-  const { put, street } = placer(t, props, terrain);
+  const { put, street, w } = placer(t, props, terrain);
+  t.spots = [];
+  t.parks = [];
+  const spot = (lx: number, lz: number, r: number, kind: InsertSpot['kind']) => {
+    const [x, z] = w(lx, lz);
+    t.spots!.push({ x, z, r, kind });
+  };
   const city = t.kind === 'city';
   const R = t.r;
   const SX = city ? 110 : 84;
@@ -118,6 +136,13 @@ function buildGrid(t: Town, props: Props, terrain: Terrain, rng: RNG) {
     const cuts = [-h, ...zs.map((q) => q.v).filter((z) => Math.abs(z) < h), h];
     for (let i = 0; i + 1 < cuts.length; i++) street(L.v, cuts[i], L.v, cuts[i + 1], L.w);
   }
+  // Street junctions as insertion points: the avenue crossings give the most room.
+  for (const X of xs)
+    for (const Z of zs) {
+      if (Math.hypot(X.v, Z.v) > R * 0.85) continue;
+      const r = Math.min(X.w, Z.w) / 2;
+      if (r >= 4) spot(X.v, Z.v, r, 'street');
+    }
   // Avenue trees.
   if (!t.contested)
     for (const L of zs.filter((q) => q.w > 12))
@@ -206,6 +231,8 @@ function buildGrid(t: Town, props: Props, terrain: Terrain, rng: RNG) {
           const [px, pz] = placer(t, props, terrain).w(cx, cz);
           t.plaza = { x: px, z: pz, hw: bw / 2, hd: bd / 2 };
         }
+        // Open paving to one side of the memorial, inside the ring of trees.
+        spot(cx + bw * 0.24, cz + bd * 0.05, Math.min(bw * 0.15, bd * 0.26), 'plaza');
         build('monument', cx, cz - bd * 0.15, 0);
         if (city) build('fountain', cx, cz + bd * 0.22, 0);
         for (let k = 0; k < 10; k++) {
@@ -272,10 +299,19 @@ function buildGrid(t: Town, props: Props, terrain: Terrain, rng: RNG) {
         parkCars(6);
         continue;
       }
-      if (city && d < 0.62 && rng.chance(0.12)) {
-        // Park: trees, paths, a fountain or playground.
-        trees(22);
-        build(rng.chance(0.5) ? 'fountain' : 'playground', cx, cz, rng.range(0, 6));
+      if (!industrial && !fringe && d < (city ? 0.62 : 0.7) && rng.chance(city ? 0.18 : 0.15) && (city || t.parks!.length < 2)) {
+        // Park: an open lawn ringed with trees, paths crossing it, a fountain or playground in a corner.
+        const [px, pz] = w(cx, cz);
+        t.parks!.push({ x: px, z: pz, hw: bw / 2, hd: bd / 2 });
+        put('slab', cx, cz, 0, [bw * 0.86, 1, 2.4]);
+        put('slab', cx, cz, 0, [2.4, 1, bd * 0.86]);
+        const nTrees = Math.round((bw + bd) / 9);
+        for (let k = 0; k < nTrees; k++) {
+          const a = (k / nTrees) * Math.PI * 2 + rng.range(-0.1, 0.1);
+          build('streettree', cx + Math.cos(a) * bw * 0.42, cz + Math.sin(a) * bd * 0.41, rng.range(0, 6), undefined, rng.range(0.85, 1.2));
+        }
+        build(rng.chance(0.5) ? 'fountain' : 'playground', cx + bw * 0.3, cz + bd * 0.28, rng.range(0, 6));
+        spot(cx - bw * 0.06, cz - bd * 0.06, Math.min(bw, bd) * 0.27, 'park');
         continue;
       }
       if (city && d < 0.62) {

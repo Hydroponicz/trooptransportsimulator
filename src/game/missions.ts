@@ -11,6 +11,7 @@ import { clamp } from '../util/math';
 import { WORLD_SCALE } from '../world/terrain';
 import type { Town } from '../world/towns';
 import type { Rooftop, Rooftops } from './rooftops';
+import type { InsertPoint, Insertions } from './insertion';
 
 export type CargoKind = 'troops' | 'pallets' | 'casualties' | 'sling';
 
@@ -105,6 +106,30 @@ export const SF_ROOF: CargoType = {
   desc: 'Put a special-forces team on a rooftop. No landing: hover low and steady over the roof and they go off the Little Bird\'s benches, or back the Chinook\'s ramp onto the roof edge. Tight window, and in a battle zone you take fire while you hold the hover.',
 };
 
+/**
+ * Fast-rope insertion: troops slide down ropes from a hover into a town
+ * square, a park, a street junction, a position behind the line or a
+ * landing zone. Any of the three aircraft (with room for the team).
+ */
+export const FAST_ROPE: CargoType = {
+  id: 'fastrope',
+  name: 'Fast-Rope Insertion',
+  kind: 'troops',
+  actor: 'soldier',
+  unitMass: 120,
+  min: 4,
+  max: 10,
+  payMult: 1.5,
+  fragility: 0.5,
+  minRank: 0,
+  urgent: true,
+  from: ['base', 'fob'],
+  to: ['lz'],
+  weight: 0,
+  icon: '🪢',
+  desc: 'Get a team on the ground where there is no room to land: hover 5–20 m up over the smoke, steady, and they slide down the ropes. Hold the hover until the last man is down.',
+};
+
 /** Can this aircraft fly this contract (seats, litters, pallets, hook rating)? */
 export function fitsAircraft(c: Contract, af: { seats: number; litters: number; pallets: boolean; slingKg: number }): boolean {
   if (c.mode !== 'air') return true;
@@ -124,6 +149,8 @@ export interface Contract {
   id: number;
   /** Rooftop insertion target (SF jobs). */
   roof?: Rooftop;
+  /** Fast-rope insertion point. */
+  ropeAt?: InsertPoint;
   type: CargoType;
   count: number;
   mass: number;
@@ -227,6 +254,7 @@ export class MissionSystem {
   active: Mission | null = null;
   /** Rooftop drop points and the towns to find them in (set by the game). */
   rooftops: Rooftops | null = null;
+  insertions: Insertions | null = null;
   towns: Town[] = [];
   battleZone: (t: Town) => boolean = () => false;
   private tmp = new THREE.Vector3();
@@ -364,6 +392,44 @@ export class MissionSystem {
         made++;
       }
     }
+    // Fast-rope insertions from bases and FOBs: into towns (battle zones first), behind the line, or LZs.
+    if (this.insertions && (site.kind === 'base' || site.kind === 'fob')) {
+      const I = this.insertions;
+      const towns = this.towns.filter((t) => t.kind !== 'village' && t.spots?.length && Math.hypot(t.x - site.x, t.z - site.z) > 600 && Math.hypot(t.x - site.x, t.z - site.z) < 5000 * WORLD_SCALE);
+      const townPool = towns.flatMap((t) => Array((this.battleZone(t) ? 4 : 1) * (t.kind === 'city' ? 2 : 1)).fill(t) as Town[]);
+      const lzs = this.sites.filter((s) => s.kind === 'lz' && !s.enemySide && Math.hypot(s.x - site.x, s.z - site.z) < 5000 * WORLD_SCALE);
+      for (let made = 0, tries = 0; made < 2 && tries < 8; tries++) {
+        const roll = rng.next();
+        let p: InsertPoint | null = null;
+        if (roll < 0.5 && townPool.length) p = I.inTown(rng.pick(townPool), () => rng.next());
+        else if (roll < 0.82) p = I.atFront(() => rng.next());
+        else if (lzs.length) p = I.atLz(rng.pick(lzs));
+        if (!p || out.some((c) => c.ropeAt && Math.hypot(c.ropeAt.x - p!.x, c.ropeAt.z - p!.z) < 400)) continue;
+        const to = I.site(p);
+        const count = rng.int(FAST_ROPE.min, FAST_ROPE.max);
+        const distance = dist2(site, to);
+        const risk = p.hot ? 3 : Math.max(1, siteRisk(to));
+        const pay = Math.round(((1600 + (distance / 1000) * 1350) * FAST_ROPE.payMult * (1 + 0.35 * risk)) / 50) * 50;
+        out.push({
+          id: nextId++,
+          type: FAST_ROPE,
+          ropeAt: p,
+          count,
+          mass: count * FAST_ROPE.unitMass,
+          from: site,
+          to,
+          fromPad: rng.int(0, site.pads.length - 1),
+          toPad: 0,
+          distance,
+          pay,
+          timeLimit: Math.round(distance / 45 + 100),
+          risk,
+          xp: Math.round(pay / 40),
+          mode: 'air',
+        });
+        made++;
+      }
+    }
     // Road jobs from here, if this site is on the road network.
     if (site.kind !== 'lz') {
       let made = 0;
@@ -418,7 +484,7 @@ export class MissionSystem {
     this.active = m;
     for (const [, b] of this.boards) b.list = b.list.filter((x) => x !== c);
     if (siteRisk(c.from) >= 2) this.hooks.hotZone(c.from, true);
-    if (siteRisk(c.to) >= 2 || (c.roof && c.risk >= 2)) this.hooks.hotZone(c.to, true);
+    if (siteRisk(c.to) >= 2 || ((c.roof || c.ropeAt) && c.risk >= 2)) this.hooks.hotZone(c.to, true);
     this.hooks.toast(`Contract accepted: ${c.type.name} → ${c.to.name}`, 'good');
     const what = c.type.kind === 'sling' ? `one ${c.type.name.toLowerCase()}, ${(c.mass / 1000).toFixed(1)} tonnes external` : `${c.count} ${noun(c.type, c.count)}, ${(c.mass / 1000).toFixed(1)} tonnes`;
     this.hooks.radio(
@@ -614,8 +680,15 @@ export class MissionSystem {
     }
     if (m.phase === 'transit' && !m.calledDrop && dDrop < 1500) {
       m.calledDrop = true;
-      const hot = siteRisk(c.to) >= 2 || (!!c.roof && c.risk >= 2);
-      if (c.roof)
+      const hot = siteRisk(c.to) >= 2 || ((!!c.roof || !!c.ropeAt) && c.risk >= 2);
+      if (c.ropeAt)
+        this.hooks.radio(
+          'Team leader',
+          hot
+            ? `${CALLSIGN}, insertion point is marked with red smoke, we're taking fire down there. Hover five to twenty metres and hold it, ropes go out as soon as you're steady.`
+            : `${CALLSIGN}, insertion point marked with yellow smoke. Hover five to twenty metres over it and hold steady for the ropes.`,
+        );
+      else if (c.roof)
         this.hooks.radio(
           'Team leader',
           hot
@@ -641,12 +714,14 @@ export class MissionSystem {
       this.effects.removeEmitter(m.pickupSmoke);
       m.pickupSmoke = null;
       const hot = siteRisk(c.to) >= 2;
-      const at = c.roof
+      const at = c.ropeAt
+        ? this.tmp.set(c.ropeAt.x, c.ropeAt.y + 0.3, c.ropeAt.z)
+        : c.roof
         ? this.tmp.set(c.roof.x + c.roof.clear * 0.7, c.roof.y + 0.3, c.roof.z) // on the roof, at the edge of the clear patch
         : c.mode === 'ground'
           ? this.besideRoad(m.dropPos)
           : this.tmp.copy(m.dropPos).add(new THREE.Vector3(16, 0.3, 4));
-      m.dropSmoke = this.effects.addEmitter(at, hot || (c.roof && c.risk >= 2) ? 'red' : 'yellow');
+      m.dropSmoke = this.effects.addEmitter(at, hot || ((c.roof || c.ropeAt) && c.risk >= 2) ? 'red' : 'yellow');
     }
 
     this.wear(m, carrier, dt);
@@ -672,10 +747,12 @@ export class MissionSystem {
         const dest = this.destinationFor(c, m.dropPos);
         if (dest) this.cargo.setDestination(m.group, dest);
       }
-      if (c.roof && m.timeLeft < -45) {
+      if ((c.roof && m.timeLeft < -45) || (c.ropeAt && m.timeLeft < -60)) {
         this.fail('Insertion window missed: the team stood down');
         return;
       }
+      if (c.ropeAt && m.group && rightVehicle && dDrop < 150 && !this.ropeReady(c.ropeAt, carrier) && Math.random() < dt * 0.25)
+        this.hooks.toast(`Fast rope: hover over the smoke, 5–20 m up, under ${c.ropeAt.kind === 'street' || c.ropeAt.kind === 'plaza' ? 'a few' : 'ten'} metres from it, steady`, 'info');
       if (c.roof && m.group && rightVehicle && dDrop < 120 && !this.roofReady(c.roof, carrier) && Math.random() < dt * 0.25)
         this.hooks.toast(
           carrier.cabinLayout.sideBenches
@@ -684,7 +761,11 @@ export class MissionSystem {
           'info',
         );
       if (m.internal && m.group) {
-        const ready = c.roof ? rightVehicle && this.roofReady(c.roof, carrier) : rightVehicle && carrier.loadable && carrier.rampDown && dDrop < (c.mode === 'ground' ? 30 : 70);
+        const ready = c.roof
+          ? rightVehicle && this.roofReady(c.roof, carrier)
+          : c.ropeAt
+            ? rightVehicle && this.ropeReady(c.ropeAt, carrier)
+            : rightVehicle && carrier.loadable && carrier.rampDown && dDrop < (c.mode === 'ground' ? 30 : 70);
         if (ready) {
           m.phase = 'dropoff';
           // Unloading into a hot zone: troops push out into a security perimeter.
@@ -695,6 +776,11 @@ export class MissionSystem {
             if (dest) this.cargo.setDestination(m.group, dest);
           }
           const rally = this.tmp2.copy(m.dropPos);
+          if (c.ropeAt) {
+            this.cargo.setRope(m.group, { x: c.ropeAt.x, z: c.ropeAt.z, r: c.ropeAt.r });
+            this.hooks.toast('Ropes out — hold the hover…', 'info');
+            return;
+          }
           if (c.roof) {
             // On the roof: they fan out round the clear patch and take up a perimeter.
             this.cargo.setRoof(m.group, c.roof);
@@ -736,8 +822,21 @@ export class MissionSystem {
     const rampEnd = carrier.rampEndWorld(this.tmp);
     const ok = carrier.loadable && carrier.rampDown;
     const canLoad = m.phase === 'pickup' && ok && Math.hypot(rampEnd.x - m.pickupPos.x, rampEnd.z - m.pickupPos.z) < (c.mode === 'ground' ? 30 : 75);
-    const canUnload = m.phase === 'dropoff' && (c.roof ? this.roofReady(c.roof, carrier) : ok);
+    const canUnload = m.phase === 'dropoff' && (c.roof ? this.roofReady(c.roof, carrier) : c.ropeAt ? this.ropeReady(c.ropeAt, carrier) : ok);
     return { canLoad, canUnload };
+  }
+
+  /**
+   * Holding a fast-rope hover: slow and steady, within a few metres of the
+   * point (its clear radius, plus a little), gear 3–20 m above the ground there.
+   */
+  ropeReady(p: InsertPoint, carrier: Carrier): boolean {
+    if (carrier.kind !== 'air') return false;
+    const v = carrier.vel;
+    if (Math.hypot(v.x, v.z) > 2.5 || Math.abs(v.y) > 1.5) return false;
+    if (Math.hypot(carrier.pos.x - p.x, carrier.pos.z - p.z) > p.r + 3) return false;
+    const h = carrier.gearBottom - p.y;
+    return h > 3 && h < 20;
   }
 
   /**
@@ -766,12 +865,14 @@ export class MissionSystem {
     const c = m.c;
     const lines: PayoutLine[] = [{ label: `${c.type.name} — ${c.from.name} → ${c.to.name}`, amount: c.pay }];
     const frac = m.timeLeft / c.timeLimit;
-    if (frac > 0.35) lines.push({ label: c.roof ? 'Fast insertion' : c.type.urgent ? 'Golden-hour bonus' : 'Early delivery', amount: Math.round(c.pay * (c.type.urgent ? 0.25 : 0.12)) });
+    if (frac > 0.35) lines.push({ label: c.roof || c.ropeAt ? 'Fast insertion' : c.type.urgent ? 'Golden-hour bonus' : 'Early delivery', amount: Math.round(c.pay * (c.type.urgent ? 0.25 : 0.12)) });
     if (m.timeLeft < 0) lines.push({ label: `Late by ${Math.ceil(-m.timeLeft)}s`, amount: -Math.round(c.pay * Math.min(0.5, -m.timeLeft / c.timeLimit)) });
     const cond = Math.round(m.condition);
     if (cond < 100) lines.push({ label: `Cargo condition ${cond}%`, amount: -Math.round(c.pay * (1 - cond / 100) * 0.9) });
     if (cond >= 99) lines.push({ label: 'Smooth ride', amount: Math.round(c.pay * 0.1) });
-    if (c.roof) {
+    if (c.ropeAt) {
+      if (!m.landing) lines.push({ label: 'Fast-rope insertion, never touched down', amount: Math.round(c.pay * 0.12) });
+    } else if (c.roof) {
       if (!m.landing) lines.push({ label: 'Hover insertion, never touched down', amount: Math.round(c.pay * 0.15) });
     } else if (m.internal) {
       if (m.landing === 'BUTTER') lines.push({ label: 'Butter landing', amount: 300 });

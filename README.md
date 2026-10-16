@@ -91,6 +91,48 @@ takes troop jobs of up to six people (the contract list marks each job
 Passengers walk round to their own seat and climb onto the bench, and hop
 off beside it, landed or from a low hover.
 
+### The Black Hawk
+
+From Chief Warrant Officer 3 the hangar sells a **UH-60 Black Hawk**
+($120,000). It flies with the cabin doors slid open, has two gunners on
+M240s at the gunner windows, and is quicker and nimbler than the Chinook. It
+takes the Chinook's kinds of jobs within its size: 11 troops on seats round
+the cabin walls, 2 litters on the centreline, and sling loads up to its
+4,080 kg hook rating (so not the 4.2 t howitzer), but no pallets, having no
+ramp. People board and leave through the right-hand door. Every contract
+lists the aircraft that can fly it, and the terminal says why yours can't.
+
+### Fast-rope insertions
+
+Bases and FOBs offer urgent **Fast-Rope Insertion** contracts: get a team
+of four to ten onto the ground where there is no room to land, by rope from
+a hover. Any of the three aircraft can do it, if the team fits:
+
+- the Black Hawk ropes from both cabin doors;
+- the Chinook from its centre "hell hole" hatch, and off the ramp too when
+  it's down;
+- the Little Bird's operators slide straight off their benches.
+
+The insertion point is marked with smoke (red when it's hot). It can be a
+**town square**, a **park** lawn, a **street junction** (tight: a few metres
+between the buildings), a **forward position** just behind the friendly line
+in a sector battle (under the battle's machine guns, out of its missiles'
+reach), or a **landing zone**. Each is checked for a column of clear air from
+the ground to rotor height.
+
+Hover within a few metres of the smoke, 5 to 20 m up (skids or wheels above
+the ground), slower than 2.5 m/s: the ropes go out and the team slides down,
+one man at a time per rope near the top, about 4.5 m/s. If you drift, climb
+or speed out of the hover, whoever is on a rope holds on until you're steady
+again. Once down they spread round the point in a perimeter, weapons up.
+The window is tight (a minute late fails it), and a clean insertion without
+touching down earns a bonus. The on-screen prompt gives the distance to the
+smoke and your rope height.
+
+Towns and cities have **parks** now: open lawns ringed with trees, with paths
+crossing them and a fountain or playground in a corner (more of them in
+cities). The parks keep their grass; the rest of the built-up area doesn't.
+
 ### Rooftop insertions
 
 Bases and FOBs offer **Rooftop Insertion (SF)** contracts: put a team of
@@ -518,6 +560,7 @@ src/
   heli/flight.ts     flight model (thrust, drag, control laws, ground contact), tuned per airframe
   heli/airframe.ts   aircraft types (Chinook, Little Bird): model, rotors, gear, cabin, handling, price
   heli/littleBirdModel.ts  procedural MH-6 Little Bird with bench pods, its handling and seats
+  heli/blackHawkModel.ts   procedural UH-60 Black Hawk, its handling and cabin
   heli/heli.ts       aircraft entity: damage, ramp, rotors, collisions
   heli/chinookModel.ts  procedural CH-47: lofted hull with see-through glazing, cockpit, cabin, crew stations
   vehicles/humvee.ts drivable Humvee: suspension, tires, drivetrain, model
@@ -526,6 +569,7 @@ src/
   game/farmwork.ts   tractors and combines working the fields
   game/missions.ts   contracts, pay, mission phases, payouts, rooftop hover drops
   game/rooftops.ts   finds flat roof drop points on town buildings
+  game/insertion.ts  fast-rope insertion points: squares, parks, junctions, the front, LZs
   game/cargo.ts      boarding: troops, litter teams and pallet crews loading, securing and riding in the cabin
   game/soldiers.ts   instanced articulated soldier models and their poses (gait, idle, rifle carries with arm IK, kneel/prone/aim, tasks), with LOD
   game/sling.ts      hook, rope constraint, slung-load physics

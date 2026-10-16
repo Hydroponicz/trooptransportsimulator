@@ -34,6 +34,7 @@ import { enterFullscreen, toggleFullscreen } from './fullscreen';
 import { activePad, padName } from './input';
 import { AIRFRAMES, type AircraftId } from './heli/airframe';
 import { battleZone, Rooftops } from './game/rooftops';
+import { Insertions } from './game/insertion';
 import { AutoScaler, loadSetting, lower, PROFILES, resolve, saveSetting, type GraphicsSetting, type Quality } from './graphics';
 
 const STEP = 1 / 120;
@@ -244,6 +245,11 @@ export class Game {
     };
 
     this.missions.rooftops = new Rooftops(this.world);
+    this.missions.insertions = new Insertions(
+      this.world,
+      (t) => battleZone(this.world, t),
+      (z) => this.battle?.campaign.sectorAt(z).name ?? 'Front line',
+    );
     this.missions.towns = this.world.towns;
     this.missions.battleZone = (t) => battleZone(this.world, t);
     this.heli.setAirframe(AIRFRAMES[career.data.aircraft ?? 'chinook']);
@@ -803,6 +809,7 @@ export class Game {
       layout: carrier.cabinLayout,
       camPos: this.cam.camera.position,
       underFire: this.threats.underFire > 0,
+      rampDown: carrier.rampDown,
       crew: {
         frame: h.parts.exterior,
         chiefSeat: h.airframe.cabin.crewChief,
@@ -1015,6 +1022,17 @@ export class Game {
         if (!h.rampDown) p = h.rampOpen ? 'Ramp lowering…' : `Press ${this.kb('ramp')} to lower the ramp`;
         else if (m.group.aboard < m.group.total) p = `Loading ${m.group.aboard}/${m.group.total} — hold position`;
       } else if (near) p = 'Land near the troops';
+    } else if (m && m.c.ropeAt && (m.phase === 'transit' || m.phase === 'dropoff') && Math.hypot(fm.pos.x - m.c.ropeAt.x, fm.pos.z - m.c.ropeAt.z) < 200) {
+      // Fast rope: talk the pilot into the hover.
+      const r = m.c.ropeAt;
+      const g = m.group;
+      const h2 = h.gearBottom - r.y;
+      const d = Math.hypot(fm.pos.x - r.x, fm.pos.z - r.z);
+      if (m.phase === 'dropoff' && g) p = `Fast rope: ${g.unloadedCount}/${g.total} down — hold the hover (${h2.toFixed(0)} m)`;
+      else if (d > r.r + 3) p = `Over the smoke: ${d.toFixed(0)} m to go (room: ${r.r.toFixed(0)} m)`;
+      else if (h2 > 20) p = `Fast rope: come down, ${h2.toFixed(0)} m — ropes at 20 m and below`;
+      else if (h2 < 3) p = `Fast rope: too low, ${h2.toFixed(1)} m — climb to 5–20 m`;
+      else p = `Fast rope: ${h2.toFixed(0)} m — hold it steady`;
     } else if (m && m.c.roof && (m.phase === 'transit' || m.phase === 'dropoff') && Math.hypot(fm.pos.x - m.c.roof.x, fm.pos.z - m.c.roof.z) < 150) {
       // Rooftop insertion: talk the pilot into the hover.
       const r = m.c.roof;

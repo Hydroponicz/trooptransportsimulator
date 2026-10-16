@@ -735,6 +735,8 @@ export const CABIN = (() => {
     pallets,
     hinge: new THREE.Vector3(0, CABIN_FLOOR, 6.85),
     floor: CABIN_FLOOR,
+    /** Fast rope through the centre ("hell hole") hatch; the ramp end is the other when it's down. */
+    ropes: [new THREE.Vector3(0, CABIN_FLOOR, -1.3)],
     /** Fuselage, sponsons and lowered ramp, for walking around on the ground. */
     hull: { halfWidth: 2.9, front: -10.2, back: 10.1 },
     crewChief: new THREE.Vector3(1.36, CABIN_FLOOR, 5.7),

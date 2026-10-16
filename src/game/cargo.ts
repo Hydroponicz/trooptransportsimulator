@@ -28,6 +28,7 @@ import {
   strap,
   throwOver,
   wave,
+  fastRope,
   type Joints,
   type Outfit,
   type RifleCarry,
@@ -83,6 +84,8 @@ export interface CabinLayout {
   sideBenches?: boolean;
   /** Which way people step off the ramp or out of the door (carrier frame; default aft, +Z). */
   out?: THREE.Vector3;
+  /** Fast-rope anchors (carrier frame, at floor level), besides the ramp end when it's down. */
+  ropes?: THREE.Vector3[];
 }
 
 export interface CrewStation {
@@ -123,6 +126,8 @@ export interface LoadContext {
   camPos?: THREE.Vector3;
   /** The carrier is taking (or just took) fire: everyone hurries. */
   underFire?: boolean;
+  /** The ramp is down (it becomes a fast-rope point too). */
+  rampDown?: boolean;
 }
 
 type Space = 'world' | 'cabin';
@@ -316,7 +321,8 @@ type State =
   | 'waiting' | 'pickup' | 'toRamp' | 'returning' | 'inCabin' | 'settle' | 'buckle' | 'seated'
   | 'lift' | 'secure' | 'toSeats' | 'lower' | 'pullOut' | 'stow' | 'strapping'
   | 'standUp' | 'unstrap' | 'getJack' | 'insert' | 'toLitter' | 'unrack' | 'exitCabin' | 'toRally' | 'arrived'
-  | 'muster' | 'enter' | 'drop' | 'leave' | 'inside';
+  | 'muster' | 'enter' | 'drop' | 'leave' | 'inside'
+  | 'toRope' | 'rope';
 
 export class Actor {
   state: State = 'waiting';
@@ -332,6 +338,9 @@ export class Actor {
   step = 0;
   seats: number[] = [];
   spot = -1;
+  /** Fast rope being used (index into the group's anchors) and its anchor in the carrier frame. */
+  ropeIdx = -1;
+  ropeAnchor = new THREE.Vector3();
   /** Litter or pallet. */
   prop: THREE.Group | null = null;
   propPos = new THREE.Vector3();
@@ -373,6 +382,9 @@ export class CargoGroup {
   urgency = 0;
   /** Put down on a roof (rooftop insertion): they step off only onto it, and hold a perimeter there. */
   roof: Rooftop | null = null;
+  /** Fast-roped in: the insertion point, and who is on each rope (one at a time near the top). */
+  rope: { x: number; z: number; r: number } | null = null;
+  ropeHeld: (Actor | null)[] = [];
   /** Delivered: remove once everyone is indoors (or after a while). */
   retiring = false;
   retireT = 0;
@@ -413,6 +425,11 @@ export class CargoManager {
   onUnboard: ((g: CargoGroup, a: Actor) => void) | null = null;
   /** Structures people can stand on (roofs, docks): set by the game. */
   colliders: ColliderSet | null = null;
+  /** Fast ropes hanging from the aircraft (up to 12). */
+  private ropeLines = new THREE.LineSegments(
+    new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(12 * 6), 3)),
+    new THREE.LineBasicMaterial({ color: 0x2b2a24 }),
+  );
   private renderer = new SoldierRenderer(110);
   private taken = new WeakMap<THREE.Object3D, Set<string>>();
   private chief: Person;
@@ -428,6 +445,8 @@ export class CargoManager {
     private rng: RNG,
   ) {
     this.group.add(this.renderer.group);
+    this.ropeLines.frustumCulled = false;
+    this.group.add(this.ropeLines);
     const rnd = () => this.rng.next();
     this.chief = new Person('crew', 'none', rnd);
     for (let i = 0; i < 2; i++) {
@@ -563,6 +582,30 @@ export class CargoManager {
 
   clear() {
     for (const g of [...this.groups]) this.remove(g);
+  }
+
+  /** Unloading by fast rope at an insertion point: perimeter round it on the ground, weapons up. */
+  setRope(g: CargoGroup, at: { x: number; z: number; r: number }) {
+    g.rope = at;
+    g.hostile = true;
+  }
+
+  /** Fast-rope anchors for this carrier: its rope points, and the ramp end when the ramp is down. */
+  private ropeAnchors(ctx: LoadContext, frame: THREE.Object3D, L: CabinLayout): THREE.Vector3[] {
+    const list = (L.ropes ?? []).map((v) => v.clone());
+    if (ctx.rampDown && !L.out && !L.sideBenches && L.pallets.length) list.push(this.rampLocal(ctx, frame));
+    return list;
+  }
+
+  /** Where a fast-roper goes once down: round the insertion point, on the side he came down. */
+  private ropeSpot(g: CargoGroup, a: Actor, from: THREE.Vector3): THREE.Vector3 {
+    const r = g.rope!;
+    const i = g.actors.indexOf(a);
+    const ang = Math.atan2(from.x - r.x, from.z - r.z) + ((i % 5) - 2) * 0.45;
+    const rad = Math.max(2, Math.min(r.r * 0.85, 12)) * (0.55 + 0.45 * ((i * 7) % 5) / 4);
+    const p = new THREE.Vector3(r.x + Math.sin(ang) * rad, 0, r.z + Math.cos(ang) * rad);
+    p.y = this.groundY(p.x, p.z, from.y);
+    return p;
   }
 
   /** Unloading onto a roof: perimeter positions round the clear patch, weapons up. */
@@ -1041,8 +1084,34 @@ export class CargoManager {
         const a = g.actors.find((x) => x.state === 'waiting');
         if (a && this.dispatchLoad(g, a, ctx)) g.dispatchTimer = a.kind === 'soldier' ? 0.55 : a.kind === 'casualty' ? 2.5 : 5;
       }
+      // Fast rope: the next man to each free rope (his own off a bench), one at a time near the top.
+      if (g.rope && ctx.canUnload && g.dispatchTimer <= 0 && g.layout && g.frame) {
+        const L = g.layout;
+        const seated = g.actors.filter((x) => x.state === 'seated' && x.kind === 'soldier');
+        if (seated.length) {
+          if (L.sideBenches) {
+            const a = seated[0];
+            a.ropeIdx = a.seats[0];
+            a.ropeAnchor.copy(this.benchSide(L.seats[a.seats[0]], 0.75));
+            this.dispatchUnload(g, a);
+            g.dispatchTimer = 0.5;
+          } else {
+            const anchors = this.ropeAnchors(ctx, g.frame, L);
+            const k = anchors.findIndex((_, i) => !g.ropeHeld[i]);
+            if (k >= 0) {
+              const at = anchors[k];
+              const a = seated.reduce((p, q) => (L.seats[q.seats[0]].pos.distanceTo(at) < L.seats[p.seats[0]].pos.distanceTo(at) ? q : p));
+              a.ropeIdx = k;
+              a.ropeAnchor.copy(at);
+              g.ropeHeld[k] = a;
+              this.dispatchUnload(g, a);
+              g.dispatchTimer = 0.35;
+            }
+          }
+        }
+      }
       // Unloading: rear-most first.
-      if (ctx.canUnload && g.dispatchTimer <= 0 && g.layout) {
+      if (!g.rope && ctx.canUnload && g.dispatchTimer <= 0 && g.layout) {
         const seated = g.actors.filter((x) => x.state === 'seated');
         if (seated.length) {
           const pick = seated.reduce((p, q) => (this.rearZ(g, q) > this.rearZ(g, p) ? q : p));
@@ -1070,6 +1139,7 @@ export class CargoManager {
       }
     }
     if (ctx.crew) this.updateCrew(dt, ctx.crew, instances);
+    this.updateRopes(ctx);
     this.renderer.render(instances, ctx.camPos);
   }
 
@@ -1231,7 +1301,15 @@ export class CargoManager {
         a.timer += dt;
         Object.assign(p.target, standJoints());
         p.inst.rifle = 'hands';
-        if (a.timer > 0.6) {
+        if (a.timer > 0.6 && g.rope) {
+          // To his rope: off the bench edge, or along the cabin to the door, hatch or ramp.
+          const at = a.ropeAnchor;
+          a.path = L.sideBenches
+            ? [at.clone()]
+            : [new THREE.Vector3(seat.pos.x * 0.45, L.floor, seat.pos.z), new THREE.Vector3(0, L.floor, (seat.pos.z + at.z) / 2), new THREE.Vector3(at.x * 0.6, L.floor, at.z), at.clone()];
+          a.state = 'toRope';
+          this.release(a, frame);
+        } else if (a.timer > 0.6) {
           a.path = L.sideBenches
             ? [this.benchSide(seat, 0.75)]
             : [new THREE.Vector3(seat.pos.x * 0.45, L.floor, seat.pos.z), new THREE.Vector3(0, L.floor, seat.pos.z), L.hinge.clone(), this.rampLocal(ctx, frame)];
@@ -1253,6 +1331,43 @@ export class CargoManager {
           this.toWorld(a, frame);
           this.offloaded(g, a);
           a.path = this.exitPath(g, a, ctx, frame, L);
+          a.state = 'toRally';
+        }
+        break;
+      }
+      case 'toRope': {
+        p.phase += dt * 2.4 * 2.6;
+        gait(p.target, p.phase, 2.4, 0.5);
+        p.inst.rifle = 'back';
+        if (a.path.length === 0 || this.follow(a, dt, 2.4)) {
+          // At the rope: wait for the hover to settle, then out and down.
+          if (!ctx.canUnload) {
+            idle(p.target, this.time, p.seed);
+            break;
+          }
+          this.toWorld(a, frame);
+          a.state = 'rope';
+          a.timer = 0;
+        }
+        break;
+      }
+      case 'rope': {
+        // Sliding down: the rope hangs from the aircraft, so he moves with it.
+        a.timer += dt;
+        const top = _w.copy(a.ropeAnchor).applyMatrix4(frame.matrixWorld);
+        a.pos.x = top.x;
+        a.pos.z = top.z;
+        const ground = this.groundY(top.x, top.z, a.pos.y);
+        // Steady hover: down at ~4.5 m/s; if the aircraft drifts out of limits he holds on (unless nearly down).
+        if (ctx.canUnload || a.pos.y - ground < 1.2) a.pos.y = Math.max(ground, a.pos.y - 4.5 * dt);
+        fastRope(p.target, this.time + p.seed);
+        p.inst.rifle = 'back';
+        // Clear of the top: the next man can go.
+        if (a.ropeIdx >= 0 && g.ropeHeld[a.ropeIdx] === a && (top.y - a.pos.y > 3 || a.pos.y <= ground)) g.ropeHeld[a.ropeIdx] = null;
+        if (a.pos.y <= ground + 0.01) {
+          if (g.ropeHeld[a.ropeIdx] === a) g.ropeHeld[a.ropeIdx] = null;
+          this.offloaded(g, a);
+          a.path = [this.ropeSpot(g, a, a.pos)];
           a.state = 'toRally';
         }
         break;
@@ -1838,6 +1953,31 @@ export class CargoManager {
         break;
       }
     }
+  }
+
+  /** Ropes out while the hover is good or anyone is on one, each from its anchor down to whatever is below. */
+  private updateRopes(ctx: LoadContext) {
+    const pos = this.ropeLines.geometry.getAttribute('position') as THREE.BufferAttribute;
+    let n = 0;
+    const line = (top: THREE.Vector3) => {
+      if (n >= 12) return;
+      const y = this.groundY(top.x, top.z, top.y - 0.5);
+      pos.setXYZ(n * 2, top.x, top.y + 0.6, top.z);
+      pos.setXYZ(n * 2 + 1, top.x, y, top.z);
+      n++;
+    };
+    for (const g of this.groups) {
+      if (!g.rope || !g.frame || !g.layout) continue;
+      const busy = g.actors.filter((a) => a.state === 'rope' || a.state === 'toRope');
+      if (g.layout.sideBenches) {
+        for (const a of busy) line(_v.copy(a.ropeAnchor).applyMatrix4(g.frame.matrixWorld));
+      } else if (busy.length || (ctx.canUnload && g.aboard > 0)) {
+        for (const at of this.ropeAnchors(ctx, g.frame, g.layout)) line(at.applyMatrix4(g.frame.matrixWorld));
+      }
+    }
+    this.ropeLines.geometry.setDrawRange(0, n * 2);
+    this.ropeLines.visible = n > 0;
+    pos.needsUpdate = true;
   }
 
   // ---------------------------------------------------------------- crew
