@@ -57,7 +57,11 @@ export class Terminal {
     } else if (act === 'accept') {
       const c = this.contracts().find((x) => x.id === Number(b.dataset.id));
       if (c && !fitsAircraft(c, g.heli.airframe)) {
-        g.toast(`Too much for the ${g.heli.airframe.short}: it takes up to ${g.heli.airframe.seats} troops and nothing else. Switch aircraft in a hangar.`, 'bad');
+        const af = g.heli.airframe;
+        g.toast(
+          `The ${af.short} can't take this (${af.seats} seats, ${af.litters} litters, ${af.pallets ? 'pallets' : 'no pallets'}, ${af.slingKg ? `hook ${(af.slingKg / 1000).toFixed(1)} t` : 'no hook'}). Switch aircraft in a hangar.`,
+          'bad',
+        );
         return;
       }
       if (c) {
@@ -180,7 +184,7 @@ export class Terminal {
         <div class="job ${locked ? 'locked' : ''}">
           <div class="ico">${c.type.icon}</div>
           <div>
-            <div class="name">${esc(c.type.name)}${c.mode === 'ground' ? ' <span class="road">🚙 ROAD</span>' : ' <span class="air">🚁 AIR</span>'}${c.type.urgent ? ' <span class="risk r3">URGENT</span>' : ''}${c.mode === 'air' ? (fitsAircraft(c, { id: 'littlebird', seats: 6 }) ? ' <span class="air">LITTLE BIRD OK</span>' : ' <span class="road">CHINOOK ONLY</span>') : ''}</div>
+            <div class="name">${esc(c.type.name)}${c.mode === 'ground' ? ' <span class="road">🚙 ROAD</span>' : ' <span class="air">🚁 AIR</span>'}${c.type.urgent ? ' <span class="risk r3">URGENT</span>' : ''}${c.mode === 'air' ? ` <span class="${fitsAircraft(c, g.heli.airframe) ? 'air' : 'road'}">${Object.values(AIRFRAMES).filter((af) => fitsAircraft(c, af)).map((af) => af.short.toUpperCase()).join(' · ')}</span>` : ''}</div>
             <div class="route">${remote ? `Pickup at <b>${esc(c.from.name)}</b> → ` : ''}${esc(c.to.name)} <span style="color:#8e9a89">(${SITE_KIND_LABEL[c.to.kind]})</span></div>
             <div class="meta"><span>${c.mode === 'ground' ? `${fmtDist(c.route ?? c.distance)} by road` : fmtDist(c.distance)}</span><span>${what}</span><span>⏱ ${fmtTime(c.timeLimit)}</span>
               <span class="risk ${c.risk >= 3 ? 'r3' : ''}">${'●'.repeat(c.risk)}${'○'.repeat(3 - c.risk)}</span></div>
@@ -234,6 +238,7 @@ export class Terminal {
     let html = '<h3 style="color:#9dff9d;font-size:13px;letter-spacing:2px;margin:0 0 6px">AIRCRAFT</h3>';
     const blurb: Record<AircraftId, string> = {
       chinook: 'Tandem-rotor heavy lift: 30 seats, litters, pallets, rear ramp and cargo hook.',
+      blackhawk: 'Medium lift: 11 troops, 2 litters and sling loads up to 4 t, two door gunners, fast. Fast-ropes troops in from a hover. No pallets (no ramp).',
       littlebird: 'Light assault: six operators on outside benches, fast and nimble. Troop jobs of up to six and rooftop special-forces drops. No ramp or hook.',
     };
     for (const af of Object.values(AIRFRAMES)) {

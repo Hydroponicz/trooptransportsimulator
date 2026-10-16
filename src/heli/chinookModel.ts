@@ -750,7 +750,7 @@ export const CABIN = (() => {
   };
 })();
 
-type AddFn = (geo: THREE.BufferGeometry, mat: THREE.Material | THREE.Material[], x?: number, y?: number, z?: number, parent?: THREE.Object3D) => THREE.Mesh;
+export type AddFn = (geo: THREE.BufferGeometry, mat: THREE.Material | THREE.Material[], x?: number, y?: number, z?: number, parent?: THREE.Object3D) => THREE.Mesh;
 
 interface Opening {
   z0: number;
@@ -867,44 +867,7 @@ function buildCabinInterior(add: AddFn, exterior: THREE.Group, liner: THREE.Mate
     // Pintle post, braced to the floor, right under the gun's pivot.
     add(new THREE.CylinderGeometry(0.04, 0.05, 0.86, 6), metal, sx * 1.66, F + 0.47, st.pos.z, g);
     add(new THREE.BoxGeometry(0.3, 0.03, 0.3), metal, sx * 1.66, F + 0.03, st.pos.z, g);
-    const gun = new THREE.Group();
-    gun.position.set(sx * 1.66, F + 0.98, st.pos.z);
-    gun.rotation.order = 'YXZ';
-    const baseYaw = sx > 0 ? -Math.PI / 2 : Math.PI / 2;
-    gun.rotation.y = baseYaw;
-    g.add(gun);
-    // Receiver, feed cover, barrel with its jacket and carry handle, front sight, bipod folded, butt and spade grip.
-    add(new THREE.BoxGeometry(0.1, 0.14, 0.62), dark, 0, 0, -0.04, gun);
-    add(new THREE.BoxGeometry(0.11, 0.04, 0.3), dark, 0, 0.085, -0.05, gun);
-    add(new THREE.CylinderGeometry(0.035, 0.035, 0.3, 8).rotateX(Math.PI / 2), dark, 0, 0.02, -0.48, gun);
-    add(new THREE.CylinderGeometry(0.022, 0.022, 0.55, 6).rotateX(Math.PI / 2), dark, 0, 0.02, -0.82, gun);
-    add(new THREE.CylinderGeometry(0.03, 0.03, 0.08, 8).rotateX(Math.PI / 2), dark, 0, 0.02, -1.1, gun);
-    add(new THREE.BoxGeometry(0.03, 0.08, 0.14), dark, 0, 0.1, -0.5, gun);
-    add(new THREE.BoxGeometry(0.02, 0.09, 0.03), dark, 0, 0.08, -1.04, gun);
-    add(new THREE.BoxGeometry(0.06, 0.03, 0.3), dark, 0, -0.06, -0.7, gun);
-    add(new THREE.BoxGeometry(0.06, 0.12, 0.2), dark, 0, -0.01, 0.34, gun);
-    add(new THREE.BoxGeometry(0.04, 0.13, 0.05), dark, 0.0, -0.12, 0.17, gun);
-    // Ammo box on the left side and the belt feeding in.
-    add(new THREE.BoxGeometry(0.14, 0.16, 0.2), olive, -0.13, -0.07, -0.05, gun);
-    add(new THREE.BoxGeometry(0.06, 0.02, 0.08), olive, -0.06, 0.03, -0.05, gun);
-    // Pivot yoke on the post.
-    add(new THREE.BoxGeometry(0.06, 0.1, 0.1), metal, 0, -0.11, 0, gun);
-    const muzzle = new THREE.Object3D();
-    muzzle.position.set(0, 0.02, -1.16);
-    gun.add(muzzle);
-    const flash = new THREE.Mesh(
-      new THREE.ConeGeometry(0.09, 0.42, 6, 1, true).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide }),
-    );
-    flash.position.set(0, 0.02, -1.38);
-    flash.visible = false;
-    gun.add(flash);
-    const gripR = new THREE.Object3D();
-    gripR.position.set(0.0, -0.13, 0.19);
-    const gripL = new THREE.Object3D();
-    gripL.position.set(-0.07, 0.02, 0.06);
-    gun.add(gripR, gripL);
-    guns.push({ mount: gun, baseYaw, muzzle, flash, gripR, gripL });
+    guns.push(buildM240(add, g, new THREE.Vector3(sx * 1.66, F + 0.98, st.pos.z), sx, dark, olive, metal));
     // Ammo can and the belt feeding the gun.
     add(new THREE.BoxGeometry(0.22, 0.2, 0.3), olive, sx * 1.42, F + 0.6, st.pos.z - 0.35, g);
   }
@@ -915,4 +878,49 @@ function buildCabinInterior(add: AddFn, exterior: THREE.Group, liner: THREE.Mate
   light.position.set(0, 1.3, -1.5);
   g.add(light);
   return { group: g, light, guns };
+}
+
+/**
+ * A pintle-mounted M240 swung out through a door (sx: +1 right side, −1 left),
+ * pivoting at `at`; shared by the Chinook's and Black Hawk's gunners.
+ */
+export function buildM240(add: AddFn, parent: THREE.Object3D, at: THREE.Vector3, sx: number, dark: THREE.Material, olive: THREE.Material, metal: THREE.Material): DoorGunMount {
+  const gun = new THREE.Group();
+  gun.position.copy(at);
+  gun.rotation.order = 'YXZ';
+  const baseYaw = sx > 0 ? -Math.PI / 2 : Math.PI / 2;
+  gun.rotation.y = baseYaw;
+  parent.add(gun);
+  // Receiver, feed cover, barrel with its jacket and carry handle, front sight, bipod folded, butt and spade grip.
+  add(new THREE.BoxGeometry(0.1, 0.14, 0.62), dark, 0, 0, -0.04, gun);
+  add(new THREE.BoxGeometry(0.11, 0.04, 0.3), dark, 0, 0.085, -0.05, gun);
+  add(new THREE.CylinderGeometry(0.035, 0.035, 0.3, 8).rotateX(Math.PI / 2), dark, 0, 0.02, -0.48, gun);
+  add(new THREE.CylinderGeometry(0.022, 0.022, 0.55, 6).rotateX(Math.PI / 2), dark, 0, 0.02, -0.82, gun);
+  add(new THREE.CylinderGeometry(0.03, 0.03, 0.08, 8).rotateX(Math.PI / 2), dark, 0, 0.02, -1.1, gun);
+  add(new THREE.BoxGeometry(0.03, 0.08, 0.14), dark, 0, 0.1, -0.5, gun);
+  add(new THREE.BoxGeometry(0.02, 0.09, 0.03), dark, 0, 0.08, -1.04, gun);
+  add(new THREE.BoxGeometry(0.06, 0.03, 0.3), dark, 0, -0.06, -0.7, gun);
+  add(new THREE.BoxGeometry(0.06, 0.12, 0.2), dark, 0, -0.01, 0.34, gun);
+  add(new THREE.BoxGeometry(0.04, 0.13, 0.05), dark, 0.0, -0.12, 0.17, gun);
+  // Ammo box on the left side and the belt feeding in.
+  add(new THREE.BoxGeometry(0.14, 0.16, 0.2), olive, -0.13, -0.07, -0.05, gun);
+  add(new THREE.BoxGeometry(0.06, 0.02, 0.08), olive, -0.06, 0.03, -0.05, gun);
+  // Pivot yoke on the post.
+  add(new THREE.BoxGeometry(0.06, 0.1, 0.1), metal, 0, -0.11, 0, gun);
+  const muzzle = new THREE.Object3D();
+  muzzle.position.set(0, 0.02, -1.16);
+  gun.add(muzzle);
+  const flash = new THREE.Mesh(
+    new THREE.ConeGeometry(0.09, 0.42, 6, 1, true).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide }),
+  );
+  flash.position.set(0, 0.02, -1.38);
+  flash.visible = false;
+  gun.add(flash);
+  const gripR = new THREE.Object3D();
+  gripR.position.set(0.0, -0.13, 0.19);
+  const gripL = new THREE.Object3D();
+  gripL.position.set(-0.07, 0.02, 0.06);
+  gun.add(gripR, gripL);
+  return { mount: gun, baseYaw, muzzle, flash, gripR, gripL };
 }

@@ -78,7 +78,7 @@ export class Heli implements PlayerTarget {
     // Right door gun and left window gun (Chinook), pointing out through their openings.
     this.doorGuns = af.cabin.gunners.map((g) => {
       const sx = Math.sign(g.pos.x);
-      return { muzzle: new THREE.Vector3(sx * 2.7, g.pos.y + 1.0, g.pos.z), out: new THREE.Vector3(sx, 0, 0), aim: null, aimAge: 99, firing: false, onTarget: false };
+      return { muzzle: new THREE.Vector3(sx * (Math.abs(g.pos.x) + 1.5), g.pos.y + 1.0, g.pos.z), out: new THREE.Vector3(sx, 0, 0), aim: null, aimAge: 99, firing: false, onTarget: false };
     });
     this.gunLay = af.cabin.gunners.map(() => ({ yaw: 0, pitch: -0.2, flashT: 0 }));
     this.maxFlares = af.maxFlares;

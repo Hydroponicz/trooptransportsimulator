@@ -13,8 +13,9 @@ import {
   type DoorGunMount,
 } from './chinookModel';
 import { buildLittleBird, LITTLEBIRD_CABIN, LITTLEBIRD_FLIGHT, LB_COCKPIT_POS, LB_HUB, LB_ROTOR_RADIUS } from './littleBirdModel';
+import { BH_COCKPIT_POS, BH_HUB, BH_ROTOR_RADIUS, BLACKHAWK_CABIN, BLACKHAWK_FLIGHT, buildBlackHawk } from './blackHawkModel';
 
-export type AircraftId = 'chinook' | 'littlebird';
+export type AircraftId = 'chinook' | 'blackhawk' | 'littlebird';
 
 /** A spinning rotor: its group turns about its own Y (main) or X (tail) axis. */
 export interface RotorPart {
@@ -70,8 +71,11 @@ export interface Airframe {
   hitRadius: number;
   hasRamp: boolean;
   hasHook: boolean;
-  /** Most passengers (seats). */
+  /** Most passengers (seats), litters, whether it takes pallets, and its cargo hook rating (kg; 0 = none). */
   seats: number;
+  litters: number;
+  pallets: boolean;
+  slingKg: number;
   maxFlares: number;
   /** Chase-camera distance scale. */
   camScale: number;
@@ -119,6 +123,9 @@ export const CHINOOK: Airframe = {
   hasRamp: true,
   hasHook: true,
   seats: CABIN.seats.length,
+  litters: CABIN.litters.length,
+  pallets: true,
+  slingKg: 12700,
   maxFlares: 30,
   camScale: 1,
   price: 0,
@@ -141,10 +148,38 @@ export const LITTLEBIRD: Airframe = {
   hasRamp: false,
   hasHook: false,
   seats: LITTLEBIRD_CABIN.seats.length,
+  litters: 0,
+  pallets: false,
+  slingKg: 0,
   maxFlares: 12,
   camScale: 0.55,
   price: 60000,
   minRank: 1,
 };
 
-export const AIRFRAMES: Record<AircraftId, Airframe> = { chinook: CHINOOK, littlebird: LITTLEBIRD };
+export const BLACKHAWK: Airframe = {
+  id: 'blackhawk',
+  name: 'UH-60 Black Hawk',
+  short: 'Black Hawk',
+  flight: BLACKHAWK_FLIGHT,
+  build: buildBlackHawk,
+  rotorHubs: [BH_HUB],
+  rotorRadius: BH_ROTOR_RADIUS,
+  hookPos: new THREE.Vector3(0, -1.55, -0.3),
+  cockpitPos: BH_COCKPIT_POS,
+  cabin: BLACKHAWK_CABIN,
+  hitHalfLength: 5,
+  hitRadius: 1.5,
+  hasRamp: false,
+  hasHook: true,
+  seats: BLACKHAWK_CABIN.seats.length,
+  litters: BLACKHAWK_CABIN.litters.length,
+  pallets: false,
+  slingKg: 4080,
+  maxFlares: 24,
+  camScale: 0.78,
+  price: 120000,
+  minRank: 2,
+};
+
+export const AIRFRAMES: Record<AircraftId, Airframe> = { chinook: CHINOOK, blackhawk: BLACKHAWK, littlebird: LITTLEBIRD };

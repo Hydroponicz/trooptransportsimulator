@@ -1,3 +1,4 @@
+import type { AircraftId } from '../heli/airframe';
 export const RANKS = [
   { name: 'Warrant Officer 1', short: 'WO1', xp: 0 },
   { name: 'Chief Warrant Officer 2', short: 'CW2', xp: 1200 },
@@ -71,8 +72,8 @@ export interface SaveData {
   /** Control layout: GTA-style (default) or the original simulator layout. */
   controls?: 'gta' | 'sim';
   /** The aircraft being flown, and the ones owned (the Chinook is issued). */
-  aircraft?: 'chinook' | 'littlebird';
-  owned?: ('chinook' | 'littlebird')[];
+  aircraft?: AircraftId;
+  owned?: AircraftId[];
   /** The state of the war along the front. */
   campaign?: CampaignData;
 }

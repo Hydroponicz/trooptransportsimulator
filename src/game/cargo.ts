@@ -81,6 +81,8 @@ export interface CabinLayout {
    * ramp and an aisle.
    */
   sideBenches?: boolean;
+  /** Which way people step off the ramp or out of the door (carrier frame; default aft, +Z). */
+  out?: THREE.Vector3;
 }
 
 export interface CrewStation {
@@ -926,10 +928,12 @@ export class CargoManager {
     return [...this.around(from, stage, ctx.frame, ctx.layout), ctx.rampEnd.clone()];
   }
 
-  /** A point on the ground a little behind the ramp end, lined up with it. */
+  /** A point on the ground a little beyond the ramp end (or door), lined up with it. */
   private stagePoint(ctx: LoadContext, frame: THREE.Object3D) {
     const p = this.rampLocal(ctx, frame);
-    p.z += 1.6;
+    const out = ctx.layout.out;
+    if (out) p.addScaledVector(out, 1.6);
+    else p.z += 1.6;
     return p.applyMatrix4(frame.matrixWorld);
   }
 

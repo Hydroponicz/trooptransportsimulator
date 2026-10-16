@@ -105,11 +105,19 @@ export const SF_ROOF: CargoType = {
   desc: 'Put a special-forces team on a rooftop. No landing: hover low and steady over the roof and they go off the Little Bird\'s benches, or back the Chinook\'s ramp onto the roof edge. Tight window, and in a battle zone you take fire while you hold the hover.',
 };
 
-/** Can this aircraft fly this contract? The Little Bird only carries a few people on its benches. */
-export function fitsAircraft(c: Contract, af: { id: string; seats: number }): boolean {
+/** Can this aircraft fly this contract (seats, litters, pallets, hook rating)? */
+export function fitsAircraft(c: Contract, af: { seats: number; litters: number; pallets: boolean; slingKg: number }): boolean {
   if (c.mode !== 'air') return true;
-  if (af.id !== 'littlebird') return true;
-  return c.type.kind === 'troops' && c.count <= af.seats;
+  switch (c.type.kind) {
+    case 'troops':
+      return c.count <= af.seats;
+    case 'casualties':
+      return c.count <= af.litters;
+    case 'pallets':
+      return af.pallets;
+    default:
+      return c.mass <= af.slingKg;
+  }
 }
 
 export interface Contract {
