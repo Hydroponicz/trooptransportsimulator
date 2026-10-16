@@ -75,14 +75,14 @@ function launch(career: Career) {
   loading.classList.remove('hidden');
   loadingMsg.textContent = 'Generating theater…';
   // Let the loading screen paint before the heavy generation work.
-  setTimeout(() => {
+  setTimeout(async () => {
     try {
       if (game) {
         game.stop();
         game.renderer.dispose();
         game.renderer.domElement.remove();
       }
-      game = new Game(career, app, (m) => (loadingMsg.textContent = m));
+      game = await Game.create(career, app, (m) => (loadingMsg.textContent = m));
       game.onQuit = () => {
         game?.stop();
         game?.hud.show(false);

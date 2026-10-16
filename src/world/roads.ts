@@ -541,7 +541,28 @@ export class Roads {
       const spans = this.spans[pi];
       return (i: number) => spans.some((sp) => i > sp.a && i + 1 < sp.b);
     });
+    // Cells with a road within reach: a vertex within 32 m of a road is in, or next to,
+    // a cell that road is indexed in (cells are 50 m). Everywhere else nothing changes.
+    const MN = Math.ceil((HALF * 2) / GRID) + 4;
+    const M0 = Math.floor(-HALF / GRID) - 2;
+    const near = new Uint8Array(MN * MN);
+    for (const k of this.grid.keys()) {
+      const cz = Math.floor(k / 3000) - 1000;
+      const cx = (k % 3000) - 1000;
+      for (let dz = -1; dz <= 1; dz++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const i = cx + dx - M0;
+          const j = cz + dz - M0;
+          if (i >= 0 && j >= 0 && i < MN && j < MN) near[j * MN + i] = 1;
+        }
+    }
+    const isNear = (cx: number, cz: number) => {
+      const mi = cx - M0;
+      const mj = cz - M0;
+      return mi >= 0 && mj >= 0 && mi < MN && mj < MN && near[mj * MN + mi] === 1;
+    };
     t.setOverlay((x, z, h) => {
+      if (!isNear(Math.floor(x / GRID), Math.floor(z / GRID))) return h;
       // Segments within reach: each is indexed in every cell its box (grown 12 m) touches,
       // so the cells round (x, z) out to 32 m hold every one that can be in range.
       cand.length = 0;
@@ -586,7 +607,7 @@ export class Roads {
       if (C && h < TGT - 0.5) return h;
       const sm = W * W * (3 - 2 * W);
       return Math.fround(h + (TGT - 0.5 * C - h) * sm);
-    });
+    }, isNear, GRID);
     t.refreshMesh();
   }
 

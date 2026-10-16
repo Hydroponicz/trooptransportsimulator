@@ -94,10 +94,17 @@ export class Game {
   private antialias = PROFILES[this.quality].antialias;
   private autoScale = new AutoScaler();
 
+  /** Generate the theater (yielding so the loading screen keeps up), then the game round it. */
+  static async create(career: Career, container: HTMLElement, progress: (m: string) => void): Promise<Game> {
+    const world = await generateWorld(career.data.seed, progress);
+    return new Game(career, container, progress, world);
+  }
+
   constructor(
     public career: Career,
     container: HTMLElement,
     progress: (m: string) => void,
+    world: World,
   ) {
     this.rng = new RNG(career.data.seed ^ 0xabcdef);
     // Antialiasing can only be chosen when the context is made, so it follows the setting at launch.
@@ -110,7 +117,7 @@ export class Game {
     this.renderer.domElement.className = 'gl';
     container.prepend(this.renderer.domElement);
 
-    this.world = generateWorld(career.data.seed, progress);
+    this.world = world;
     this.scene.add(this.world.group);
     this.grass = new Grass(this.world.terrain, this.world.roads, this.world.colliders, this.world.farmland, this.world.towns, this.world.yards);
     this.scene.add(this.grass.mesh);
@@ -496,6 +503,7 @@ export class Game {
       this.world.rivers.update(0, Infinity);
       this.world.vegetation.stream(this.heli.fm.pos, Infinity);
       this.world.props.stream(this.heli.fm.pos, Infinity);
+      for (let i = 0; i < 20; i++) this.world.signs.stream(this.heli.fm.pos);
       // Build every shader now rather than the first time something (smoke, fire) appears mid-flight.
       this.compiled = true;
       this.renderer.compile(this.scene, this.cam.camera);
@@ -551,6 +559,7 @@ export class Game {
     this.world.terrain.stream(this.cam.camera.position);
     this.world.vegetation.stream(this.cam.camera.position);
     this.world.props.stream(this.cam.camera.position);
+    this.world.signs.stream(this.cam.camera.position);
     this.world.rivers.update(dt);
     {
       // Rotor downwash flattens the grass when the helicopter is low with the rotors turning.

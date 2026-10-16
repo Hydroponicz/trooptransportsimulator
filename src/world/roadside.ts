@@ -398,8 +398,9 @@ export function buildRoadside(
       props.add('signpost', x, y, z, rot);
     }
   });
-  if (signs.length) group.add(signBoards(signs));
-  group.userData.signs = signs;
+  const boards = new SignBoards(signs);
+  group.add(boards.group);
+  group.userData.signs = boards;
   group.userData.yards = yards;
 
   // ---------------------------------------------------------------- Checkpoints and wrecks near the front
@@ -541,6 +542,53 @@ export function buildRoadside(
 
   return group;
 }
+
+type Sign = { x: number; y: number; z: number; rot: number; route: string; to: string; km: number; main: boolean };
+
+/**
+ * Route sign boards, made per 1.6 km cell only while the camera is near
+ * (their lettering is a canvas atlas per cell; one for every sign on a big
+ * map would be far beyond what a GPU takes), freed when it has gone.
+ */
+export class SignBoards {
+  group = new THREE.Group();
+  private cells = new Map<number, { signs: Sign[]; x0: number; z0: number; mesh: THREE.Mesh | null }>();
+
+  constructor(signs: Sign[]) {
+    for (const s of signs) {
+      const cx = Math.floor(s.x / SIGN_CELL);
+      const cz = Math.floor(s.z / SIGN_CELL);
+      const k = (cx + 1000) * 3000 + cz + 1000;
+      let c = this.cells.get(k);
+      if (!c) this.cells.set(k, (c = { signs: [], x0: cx * SIGN_CELL, z0: cz * SIGN_CELL, mesh: null }));
+      c.signs.push(s);
+    }
+  }
+
+  /** Make the boards of cells within reach (a couple a frame) and free the rest. */
+  stream(cam: THREE.Vector3) {
+    let made = 0;
+    for (const c of this.cells.values()) {
+      const dx = Math.max(c.x0 - cam.x, 0, cam.x - (c.x0 + SIGN_CELL));
+      const dz = Math.max(c.z0 - cam.z, 0, cam.z - (c.z0 + SIGN_CELL));
+      const d = Math.hypot(dx, dz);
+      if (!c.mesh && d < 1400 && made < 2) {
+        c.mesh = signBoards(c.signs);
+        this.group.add(c.mesh);
+        made++;
+      } else if (c.mesh && d > 1900) {
+        this.group.remove(c.mesh);
+        c.mesh.geometry.dispose();
+        const m = c.mesh.material as THREE.MeshLambertMaterial;
+        m.map?.dispose();
+        m.dispose();
+        c.mesh = null;
+      }
+    }
+  }
+}
+
+const SIGN_CELL = 1600;
 
 /** Green route signs: destination, distance and route name, drawn into one atlas. */
 function signBoards(signs: { x: number; y: number; z: number; rot: number; route: string; to: string; km: number; main: boolean }[]): THREE.Mesh {

@@ -8,7 +8,7 @@ import { Frontline } from './frontline';
 import { Props } from './props';
 import { circleIndex } from '../util/grid';
 import { Roads, type RoadClass } from './roads';
-import { buildRoadside } from './roadside';
+import { buildRoadside, SignBoards } from './roadside';
 import { buildSite, type Site, type SiteKind, type SiteDecor } from './sites';
 import { BASE_SCALE, PLAY_HALF, Terrain, WORLD_SCALE } from './terrain';
 import { DistanceCuller, splitByCells } from './lod';
@@ -32,6 +32,8 @@ export interface World {
   vegetation: Vegetation;
   /** Buildings and props (drawn per cell near the camera). */
   props: Props;
+  /** Route sign boards (made near the camera). */
+  signs: SignBoards;
   roads: Roads;
   towns: Town[];
   /** Fenced industrial yards beside the roads. */
@@ -69,12 +71,16 @@ const NAMES: Record<SiteKind, string[]> = {
 const RADIUS: Record<SiteKind, number> = { base: 175, fob: 112, cop: 64, lz: 34 };
 const BLEND: Record<SiteKind, number> = { base: 110, fob: 80, cop: 70, lz: 45 };
 
-export function generateWorld(seed: number, report?: (msg: string) => void): World {
+/** Let the browser paint (the loading screen's progress) before carrying on. */
+const breathe = () => new Promise<void>((r) => setTimeout(r, 0));
+
+export async function generateWorld(seed: number, report?: (msg: string) => void): Promise<World> {
   // Time each phase (logged once at the end) so slow generation is easy to pin down.
   const marks: [string, number][] = [['start', performance.now()]];
-  const onProgress = (msg: string) => {
+  const onProgress = async (msg: string) => {
     marks.push([msg, performance.now()]);
     report?.(msg);
+    await breathe();
   };
   const rng = new RNG(seed);
   const n1 = new Noise2D(seed ^ 0x1234);
@@ -170,7 +176,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     return site;
   };
 
-  onProgress?.('Surveying terrain');
+  await onProgress('Surveying terrain');
   // Everything is laid out on the original 6.2 km plan, scaled up to the current map.
   const K = WORLD_SCALE;
   // How many times wider than the original 14.4 km theater: things along the front
@@ -278,12 +284,14 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     terrain.addCrater({ x, z, r: rng.range(6, 17), depth: rng.range(1.2, 3.2) });
   }
 
-  onProgress?.('Raising terrain');
+  await onProgress('Raising terrain');
+  // Every tile's natural heights, worked out in parallel on worker threads.
+  await terrain.precomputeAll(seed);
   const detail = groundDetailTexture();
   const group = new THREE.Group();
   group.add(terrain.build(detail));
 
-  onProgress?.('Building outposts');
+  await onProgress('Building outposts');
   const colliders = new ColliderSet();
   const props = new Props(colliders);
   const decor: SiteDecor = { group: new THREE.Group(), windsocks: [] };
@@ -332,7 +340,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     smokeSpots.push(new THREE.Vector3(x, y + 1.5, z));
   }
 
-  onProgress?.('Grading roads');
+  await onProgress('Laying roads');
   const roads = new Roads(terrain);
   const siteCircles = circleIndex(sites.map((st) => ({ x: st.x, z: st.z, r: st.radius })), 30);
   const nearSiteXZ = (x: number, z: number, m: number) => siteCircles(x, z, m);
@@ -538,6 +546,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
       }
     }
   }
+  await onProgress('Grading roads');
   roads.grade();
   // Clear a lane: walls get gates, and anything else sitting on a road is removed.
   // Large buildings are tested over their whole footprint, not just their center.
@@ -550,13 +559,16 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
       for (let j = 0; j <= nz; j++) if (roads.distance(x0 + ((x1 - x0) * i) / nx, z0 + ((z1 - z0) * j) / nz) < 7.5) return true;
     return false;
   }, ['slab']);
+  await onProgress('Paving roads');
   group.add(roads.build(colliders));
 
   // Power lines, guard rails, fences, lights, signs and checkpoints.
+  await onProgress('Power lines and fences');
   const roadside = buildRoadside(roads, terrain, sites, towns, front, props, rng.fork());
   group.add(roadside);
   const yards = roadside.userData.yards as { x: number; z: number; r: number }[];
 
+  await onProgress('Farmland');
   // Rock outcrops and hay bales.
   for (let i = 0; i < n(3600, A); i++) {
     const x = rng.range(-PLAY_HALF, PLAY_HALF);
@@ -576,7 +588,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
   farmland.prune((x, z) => inTown(x, z, 25) || inYard(x, z, 12) || roads.distance(x, z) < 9 || nearSite(x, z, 60));
   farmland.populate(props, terrain, rng.fork(), (x, z) => nearSite(x, z, 30) || roads.distance(x, z) < 12 || inYard(x, z, 8));
 
-  onProgress?.('Planting forests');
+  await onProgress('Planting forests');
   // No trees on the plots themselves (hedgerow trees along pastures are fine, now and then).
   const inFarmland = (x: number, z: number) => {
     const f = farmland.fieldAt(x, z);
@@ -622,6 +634,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
   console.info(
     `World generated in ${Math.round(marks[marks.length - 1][1] - marks[0][1])} ms:`,
     marks.slice(1).map(([m, t], i) => `${marks[i][0]} ${Math.round(t - marks[i][1])}ms`).join(', '),
+    `(${terrain.tilesMade} terrain tiles worked out)`,
   );
   return {
     seed,
@@ -632,6 +645,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     colliders,
     vegetation,
     props,
+    signs: roadside.userData.signs as SignBoards,
     roads,
     towns,
     enemies,

@@ -376,16 +376,28 @@ export class Terrain {
    * Tiles already worked out are adjusted in place rather than recomputed,
    * and the meshes built so far are refreshed.
    */
-  setOverlay(fn: (x: number, z: number, h: number) => number) {
+  setOverlay(fn: (x: number, z: number, h: number) => number, near?: (cellX: number, cellZ: number) => boolean, cellSize = 50) {
     this.overlay = fn;
+    // Vertices are visited per overlay cell (cellSize m, aligned with the tiles), skipping cells the
+    // overlay can't touch (near() false) without calling it vertex by vertex.
+    const per = cellSize / CELL;
     for (const [key, d] of this.tileData) {
       const tx = key % TILES;
       const tz = (key - tx) / TILES;
-      for (let iz = 0; iz < d.rows; iz++)
-        for (let ix = 0; ix < TV; ix++) {
-          const i = iz * TV + ix;
-          d.h[i] = fn(-HALF + (tx * TILE_CELLS + ix) * CELL, -HALF + (tz * TILE_CELLS + iz) * CELL, d.h[i]);
+      const ox = -HALF + tx * TILE_CELLS * CELL;
+      const oz = -HALF + tz * TILE_CELLS * CELL;
+      const c0x = Math.floor(ox / cellSize);
+      const c0z = Math.floor(oz / cellSize);
+      for (let iz = 0; iz < d.rows; iz++) {
+        const cz = c0z + Math.floor(iz / per);
+        for (let cxo = 0; cxo * per < TV; cxo++) {
+          if (near && !near(c0x + cxo, cz)) continue;
+          for (let ix = cxo * per; ix < Math.min(TV, (cxo + 1) * per); ix++) {
+            const i = iz * TV + ix;
+            d.h[i] = fn(ox + ix * CELL, oz + iz * CELL, d.h[i]);
+          }
         }
+      }
       d.c = null;
       d.crows = 0;
     }
@@ -400,8 +412,89 @@ export class Terrain {
     return this.overlay ? this.overlay(x, z, h) : h;
   }
 
+  /** Tiles whose heights have been worked out (for diagnostics). */
+  tilesMade = 0;
+
   private newData(): TileData {
+    this.tilesMade++;
     return { h: new Float32Array(TV * TV), rows: 0, c: null, crows: 0, used: this.frame };
+  }
+
+  /** Natural heights (before road grading) of a tile's vertices, all of them: the same numbers stepHeights makes. */
+  naturalTile(tx: number, tz: number, out = new Float32Array(TV * TV)): Float32Array {
+    for (let iz = 0; iz < TV; iz++)
+      for (let ix = 0; ix < TV; ix++) {
+        const x = -HALF + (tx * TILE_CELLS + ix) * CELL;
+        const z = -HALF + (tz * TILE_CELLS + iz) * CELL;
+        out[iz * TV + ix] = Math.fround(this.finalHeight(x, z));
+      }
+    return out;
+  }
+
+  /** The river distance grid (built if it isn't yet), to hand to a worker. */
+  riverGrid(): Float32Array {
+    if (!this.riverDist) this.buildRiverDist();
+    return this.riverDist!;
+  }
+
+  /** Use a river distance grid built elsewhere (in a worker, from the main thread's). */
+  useRiverGrid(g: Float32Array) {
+    this.riverDist = g;
+  }
+
+  /**
+   * Work out every tile's natural heights at once, spread over worker threads
+   * (bit for bit what working them out here gives). Call once the sites,
+   * towns and craters are placed and before the roads are graded.
+   */
+  async precomputeAll(seed: number): Promise<void> {
+    const threads = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 1));
+    const keys: number[] = [];
+    for (let k = 0; k < TILES * TILES; k++) if (!this.tileData.get(k)) keys.push(k);
+    if (!keys.length || typeof Worker === 'undefined') return;
+    const river = this.riverGrid();
+    const setup = {
+      seed,
+      flattens: this.flattens,
+      craters: this.craters,
+      river,
+    };
+    const per = Math.ceil(keys.length / threads);
+    const jobs: Promise<void>[] = [];
+    for (let w = 0; w < threads; w++) {
+      const mine = keys.slice(w * per, (w + 1) * per);
+      if (!mine.length) continue;
+      jobs.push(
+        new Promise<void>((resolve, reject) => {
+          const worker = new Worker(new URL('./terrainWorker.ts', import.meta.url), { type: 'module' });
+          worker.onmessage = (e: MessageEvent<{ key: number; h: Float32Array } | { done: true }>) => {
+            const m = e.data;
+            if ('done' in m) {
+              worker.terminate();
+              resolve();
+              return;
+            }
+            const d = this.newData();
+            d.h = m.h;
+            d.rows = TV;
+            this.tileData.set(m.key, d);
+          };
+          worker.onerror = (err) => {
+            worker.terminate();
+            reject(err);
+          };
+          worker.postMessage({ ...setup, keys: mine });
+        }),
+      );
+    }
+    try {
+      await Promise.all(jobs);
+    } catch (err) {
+      // Workers unavailable (or failed): the tiles are simply worked out here as needed.
+      console.warn('Terrain workers failed; working heights out on the main thread.', err);
+    }
+    this.lastKey = -1;
+    this.lastTile = null;
   }
 
   /** Work out more rows of a tile's heights; true once they're all done. */
