@@ -490,6 +490,9 @@ export class Game {
     this.toast(this.input.scheme === 'gta' ? `Welcome to ${this.world.base.name}. Hold W (RT on a controller) to start the engines and lift off.` : `Welcome to ${this.world.base.name}. Press [I] to start the engines.`, 'good');
     this.toast('Open the base terminal with [Tab] to pick up a contract.');
     if (!this.compiled) {
+      // The ground round the player, all of it, before the first frame.
+      this.world.terrain.stream(this.heli.fm.pos, Infinity);
+      this.world.rivers.update(0, Infinity);
       // Build every shader now rather than the first time something (smoke, fire) appears mid-flight.
       this.compiled = true;
       this.renderer.compile(this.scene, this.cam.camera);

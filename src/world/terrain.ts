@@ -25,6 +25,41 @@ const LOD_DIST = [1400, 2800, 5000, 7500];
 const LOD_STRIDE = [1, 2, 4, 8, 16];
 /** Skirts hang below tile edges to hide cracks between LOD levels. */
 const SKIRT = 40;
+/** Full-detail tiles within this distance of the camera (m, to the tile's nearest edge); coarse ones out to FAR_R. */
+const FULL_R = 5600;
+const FAR_R = 12000;
+/** Cells per side of a coarse tile, and how far its skirts hang (deep: its edges don't match a full tile's). */
+const COARSE_CELLS = 16;
+const COARSE_SKIRT = 90;
+/** Tiles' worth of height data kept round (each ~66 kB, plus colours). */
+const KEEP_TILES = 160;
+
+/** Index buffer for a grid of n×n cells at a stride, with skirts round the edge (vertices (n+1)² then 4(n+1)). */
+function gridIndex(n: number, st: number): THREE.BufferAttribute {
+  const T = n + 1;
+  const skirtBase = T * T;
+  const idx: number[] = [];
+  for (let z = 0; z < n; z += st)
+    for (let x = 0; x < n; x += st) {
+      const a = z * T + x;
+      const b = (z + st) * T + x;
+      const c = (z + st) * T + x + st;
+      const d = z * T + x + st;
+      idx.push(a, b, d, b, c, d);
+    }
+  // Skirt vertices: edge e (0 north z=0, 1 east x=max, 2 south z=max, 3 west x=0), position k along it.
+  const edge = (e: number, k: number) => (e === 0 ? k : e === 1 ? k * T + n : e === 2 ? n * T + k : k * T);
+  for (let e = 0; e < 4; e++)
+    for (let k = 0; k < n; k += st) {
+      const a = edge(e, k);
+      const b = edge(e, k + st);
+      const sa = skirtBase + e * T + k;
+      const sb = skirtBase + e * T + k + st;
+      // Both windings, so the skirt shows from either side.
+      idx.push(a, sa, b, b, sa, sb, a, b, sa, b, sb, sa);
+    }
+  return new THREE.BufferAttribute(new Uint32Array(idx), 1);
+}
 
 
 export interface FlattenZone {
@@ -80,7 +115,12 @@ const TV = TILE_CELLS + 1;
 /** One tile's grid: heights, and land-cover colours once something asks for them. */
 interface TileData {
   h: Float32Array;
+  /** Rows of heights worked out so far (they're done a few at a time). */
+  rows: number;
   c: Float32Array | null;
+  crows: number;
+  /** Frame it was last used (the least recently used are forgotten). */
+  used: number;
 }
 
 export class Terrain {
@@ -102,10 +142,19 @@ export class Terrain {
   /** Flatten zones bucketed on a coarse grid (rebuilt when the list grows). */
   private flattenGrid = new Map<number, FlattenZone[]>();
   private flattenCount = -1;
-  /** All terrain tiles. */
+  /** Root of the tile meshes in the scene. */
   mesh!: THREE.Group;
-  private tiles: { mesh: THREE.Mesh; cx: number; cz: number; lod: number }[] = [];
+  /** Tiles with a mesh now, by tz * TILES + tx. */
+  private tiles = new Map<number, { mesh: THREE.Mesh; kind: 'full' | 'coarse'; lod: number }>();
   private lodIndex: THREE.BufferAttribute[] = [];
+  private coarseIndex!: THREE.BufferAttribute;
+  private mat!: THREE.Material;
+  private fullPool: THREE.Mesh[] = [];
+  private coarsePool: THREE.Mesh[] = [];
+  private jobs: { key: number; kind: 'full' | 'coarse'; d: number; mesh?: THREE.Mesh; row?: number }[] = [];
+  private planAt: THREE.Vector3 | null = null;
+  private fieldsAt: THREE.Vector3 | null = null;
+  private frame = 0;
 
   constructor(
     private n1: Noise2D,
@@ -324,38 +373,56 @@ export class Terrain {
 
   /**
    * Set the per-vertex height adjustment (once, after the roads are graded).
-   * Tiles already worked out are adjusted in place rather than recomputed.
+   * Tiles already worked out are adjusted in place rather than recomputed,
+   * and the meshes built so far are refreshed.
    */
   setOverlay(fn: (x: number, z: number, h: number) => number) {
     this.overlay = fn;
     for (const [key, d] of this.tileData) {
       const tx = key % TILES;
       const tz = (key - tx) / TILES;
-      for (let iz = 0; iz < TV; iz++)
+      for (let iz = 0; iz < d.rows; iz++)
         for (let ix = 0; ix < TV; ix++) {
           const i = iz * TV + ix;
           d.h[i] = fn(-HALF + (tx * TILE_CELLS + ix) * CELL, -HALF + (tz * TILE_CELLS + iz) * CELL, d.h[i]);
         }
       d.c = null;
+      d.crows = 0;
     }
+    this.refreshMesh();
   }
 
+  /** The ground height at a grid vertex, worked out directly (nothing cached). */
+  private pointHeight(gx: number, gz: number): number {
+    const x = -HALF + gx * CELL;
+    const z = -HALF + gz * CELL;
+    const h = Math.fround(this.finalHeight(x, z));
+    return this.overlay ? this.overlay(x, z, h) : h;
+  }
+
+  private newData(): TileData {
+    return { h: new Float32Array(TV * TV), rows: 0, c: null, crows: 0, used: this.frame };
+  }
+
+  /** Work out more rows of a tile's heights; true once they're all done. */
+  private stepHeights(tx: number, tz: number, d: TileData, deadline: number): boolean {
+    while (d.rows < TV) {
+      const iz = d.rows;
+      for (let ix = 0; ix < TV; ix++) d.h[iz * TV + ix] = this.pointHeight(tx * TILE_CELLS + ix, tz * TILE_CELLS + iz);
+      d.rows++;
+      if (performance.now() > deadline) break;
+    }
+    return d.rows >= TV;
+  }
+
+  /** A tile's heights, worked out now if they aren't yet. */
   private data(tx: number, tz: number): TileData {
     const key = tz * TILES + tx;
     if (key === this.lastKey) return this.lastTile!;
     let d = this.tileData.get(key);
-    if (!d) {
-      d = { h: new Float32Array(TV * TV), c: null };
-      const ov = this.overlay;
-      for (let iz = 0; iz < TV; iz++)
-        for (let ix = 0; ix < TV; ix++) {
-          const x = -HALF + (tx * TILE_CELLS + ix) * CELL;
-          const z = -HALF + (tz * TILE_CELLS + iz) * CELL;
-          const h = Math.fround(this.finalHeight(x, z));
-          d.h[iz * TV + ix] = ov ? ov(x, z, h) : h;
-        }
-      this.tileData.set(key, d);
-    }
+    if (!d) this.tileData.set(key, (d = this.newData()));
+    if (d.rows < TV) this.stepHeights(tx, tz, d, Infinity);
+    d.used = this.frame;
     this.lastKey = key;
     this.lastTile = d;
     return d;
@@ -368,33 +435,62 @@ export class Terrain {
     return this.data(tx, tz).h[(gz - tz * TILE_CELLS) * TV + (gx - tx * TILE_CELLS)];
   }
 
-  /** Land-cover colours of a tile's vertices (worked out on first use). */
+  /** Height at a grid vertex from the tile if it's ready, else worked out directly (doesn't build the tile). */
+  private softHeight(gx: number, gz: number): number {
+    gx = Math.min(SEGS, Math.max(0, gx));
+    gz = Math.min(SEGS, Math.max(0, gz));
+    const tx = gx >= SEGS ? TILES - 1 : (gx / TILE_CELLS) | 0;
+    const tz = gz >= SEGS ? TILES - 1 : (gz / TILE_CELLS) | 0;
+    const d = this.tileData.get(tz * TILES + tx);
+    if (d && d.rows >= TV) return d.h[(gz - tz * TILE_CELLS) * TV + (gx - tx * TILE_CELLS)];
+    return this.pointHeight(gx, gz);
+  }
+
+  /** Smooth normal at a grid vertex from its neighbours' heights (step apart), without building other tiles. */
+  private softNormal(gx: number, gz: number, step: number, out: THREE.Vector3) {
+    const xl = Math.max(0, gx - step);
+    const xr = Math.min(SEGS, gx + step);
+    const zd = Math.max(0, gz - step);
+    const zu = Math.min(SEGS, gz + step);
+    const hx = (this.softHeight(xr, gz) - this.softHeight(xl, gz)) / ((xr - xl) * CELL);
+    const hz = (this.softHeight(gx, zu) - this.softHeight(gx, zd)) / ((zu - zd) * CELL);
+    return out.set(-hx, 1, -hz).normalize();
+  }
+
+  /** Work out more rows of a tile's colours (heights must be done); true once they're all done. */
+  private stepColors(tx: number, tz: number, d: TileData, deadline: number): boolean {
+    if (!d.c) d.c = new Float32Array(TV * TV * 3);
+    while (d.crows < TV) {
+      const iz = d.crows;
+      for (let ix = 0; ix < TV; ix++) {
+        const gx = tx * TILE_CELLS + ix;
+        const gz = tz * TILE_CELLS + iz;
+        this.colorAt(gx, gz, d.h[iz * TV + ix], this.softNormal(gx, gz, 1, _nrm).y, _col);
+        const i = (iz * TV + ix) * 3;
+        d.c[i] = _col.r;
+        d.c[i + 1] = _col.g;
+        d.c[i + 2] = _col.b;
+      }
+      d.crows++;
+      if (performance.now() > deadline) break;
+    }
+    return d.crows >= TV;
+  }
+
+  /** Land-cover colours of a tile's vertices (worked out now if they aren't yet). */
   private tileColors(tx: number, tz: number): Float32Array {
     const d = this.data(tx, tz);
-    if (d.c) return d.c;
-    const c = new Float32Array(TV * TV * 3);
-    for (let iz = 0; iz < TV; iz++)
-      for (let ix = 0; ix < TV; ix++) {
-        this.vertexColor(tx * TILE_CELLS + ix, tz * TILE_CELLS + iz, _col);
-        const i = (iz * TV + ix) * 3;
-        c[i] = _col.r;
-        c[i + 1] = _col.g;
-        c[i + 2] = _col.b;
-      }
-    // (Computing the colours may have touched neighbouring tiles; this one's record still holds.)
-    d.c = c;
-    return c;
+    if (d.crows < TV) this.stepColors(tx, tz, d, Infinity);
+    return d.c!;
   }
 
   /**
    * Summer in eastern Europe: fresh meadow greens, drier yellow-green on the
    * rises, dark forest floor, grey limestone on the steeps.
    */
-  private vertexColor(gx: number, gz: number, out: THREE.Color): THREE.Color {
+  private colorAt(gx: number, gz: number, h: number, ny: number, out: THREE.Color): THREE.Color {
     const x = -HALF + gx * CELL;
     const z = -HALF + gz * CELL;
-    const h = this.vertexHeight(gx, gz);
-    const ny = this.gridNormal(gx, gz, _nrm).y;
     const n = this.n3.fbm(x * 0.002, z * 0.002, 3) * 0.5 + 0.5;
     const f = this.n1.fbm(x * 0.0012 + 40, z * 0.0012, 2) * 0.5 + 0.5;
     const P = PALETTE;
@@ -424,52 +520,13 @@ export class Terrain {
     return out;
   }
 
+  /** Root of the terrain meshes (tiles come and go as the camera moves). */
   build(detailTex: THREE.Texture) {
     // Shared index buffers: one per LOD stride, the grid plus skirts round the edge.
-    const T = TILE_CELLS + 1;
-    const skirtBase = T * T;
-    for (const st of LOD_STRIDE) {
-      const idx: number[] = [];
-      for (let z = 0; z < TILE_CELLS; z += st)
-        for (let x = 0; x < TILE_CELLS; x += st) {
-          const a = z * T + x;
-          const b = (z + st) * T + x;
-          const c = (z + st) * T + x + st;
-          const d = z * T + x + st;
-          idx.push(a, b, d, b, c, d);
-        }
-      // Skirt vertices: edge e (0 north z=0, 1 east x=max, 2 south z=max, 3 west x=0), position k along it.
-      const edge = (e: number, k: number) => (e === 0 ? k : e === 1 ? k * T + TILE_CELLS : e === 2 ? TILE_CELLS * T + k : k * T);
-      for (let e = 0; e < 4; e++)
-        for (let k = 0; k < TILE_CELLS; k += st) {
-          const a = edge(e, k);
-          const b = edge(e, k + st);
-          const sa = skirtBase + e * T + k;
-          const sb = skirtBase + e * T + k + st;
-          // Both windings, so the skirt shows from either side.
-          idx.push(a, sa, b, b, sa, sb, a, b, sa, b, sb, sa);
-        }
-      this.lodIndex.push(new THREE.BufferAttribute(new Uint32Array(idx), 1));
-    }
-
-    const mat = this.material(detailTex);
+    for (const st of LOD_STRIDE) this.lodIndex.push(gridIndex(TILE_CELLS, st));
+    this.coarseIndex = gridIndex(COARSE_CELLS, 1);
+    this.mat = this.material(detailTex);
     this.mesh = new THREE.Group();
-    for (let cz = 0; cz < TILES; cz++)
-      for (let cx = 0; cx < TILES; cx++) {
-        const nv = T * T + 4 * T;
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
-        geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
-        geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
-        geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(nv * 2), 2));
-        geo.setIndex(this.lodIndex[LOD_STRIDE.length - 1]);
-        const m = new THREE.Mesh(geo, mat);
-        m.receiveShadow = true;
-        m.matrixAutoUpdate = false;
-        this.mesh.add(m);
-        this.tiles.push({ mesh: m, cx, cz, lod: LOD_STRIDE.length - 1 });
-        this.fillTile(this.tiles[this.tiles.length - 1], true);
-      }
     this.mesh.matrixAutoUpdate = false;
     return this.mesh;
   }
@@ -517,48 +574,48 @@ export class Terrain {
     });
   }
 
-  /** Smooth normal at a grid vertex from its neighbours' heights. */
-  private gridNormal(ix: number, iz: number, out: THREE.Vector3) {
-    const xl = Math.max(0, ix - 1);
-    const xr = Math.min(SEGS, ix + 1);
-    const zd = Math.max(0, iz - 1);
-    const zu = Math.min(SEGS, iz + 1);
-    const hx = (this.vertexHeight(xr, iz) - this.vertexHeight(xl, iz)) / ((xr - xl) * CELL);
-    const hz = (this.vertexHeight(ix, zu) - this.vertexHeight(ix, zd)) / ((zu - zd) * CELL);
-    return out.set(-hx, 1, -hz).normalize();
-  }
-
-  /** Copy a tile's heights (and colours, the first time) into its mesh. */
-  private fillTile(t: { mesh: THREE.Mesh; cx: number; cz: number }, colours: boolean) {
-    const T = TILE_CELLS + 1;
-    const C = colours ? this.tileColors(t.cx, t.cz) : null;
-    const geo = t.mesh.geometry;
+  /**
+   * Write rows [r0, r1) of a full tile's heights, normals (and colours, if
+   * given) into its mesh; the last call (r1 = TV) also does the skirts and bounds.
+   */
+  private fillFull(m: THREE.Mesh, tx: number, tz: number, colours: Float32Array | null, r0 = 0, r1 = TV) {
+    const T = TV;
+    const geo = m.geometry;
     const pos = geo.getAttribute('position') as THREE.BufferAttribute;
     const nrm = geo.getAttribute('normal') as THREE.BufferAttribute;
     const col = geo.getAttribute('color') as THREE.BufferAttribute;
     const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
-    const n = new THREE.Vector3();
-    const ox = t.cx * TILE_CELLS;
-    const oz = t.cz * TILE_CELLS;
-    const put = (v: number, gx: number, gz: number, drop: number) => {
+    const H = this.data(tx, tz).h;
+    const ox = tx * TILE_CELLS;
+    const oz = tz * TILE_CELLS;
+    const L = TILE_CELLS;
+    const put = (v: number, lx: number, lz: number, drop: number) => {
+      const gx = ox + lx;
+      const gz = oz + lz;
       const x = -HALF + gx * CELL;
       const z = -HALF + gz * CELL;
-      pos.setXYZ(v, x, this.vertexHeight(gx, gz) - drop, z);
-      this.gridNormal(gx, gz, n);
-      nrm.setXYZ(v, n.x, n.y, n.z);
-      if (C) {
-        const ci = ((gz - oz) * T + (gx - ox)) * 3;
-        col.setXYZ(v, C[ci], C[ci + 1], C[ci + 2]);
+      pos.setXYZ(v, x, H[lz * T + lx] - drop, z);
+      if (lx > 0 && lx < L && lz > 0 && lz < L) {
+        // Inside the tile: neighbours from its own grid.
+        const hx = (H[lz * T + lx + 1] - H[lz * T + lx - 1]) / (2 * CELL);
+        const hz = (H[(lz + 1) * T + lx] - H[(lz - 1) * T + lx]) / (2 * CELL);
+        _nrm.set(-hx, 1, -hz).normalize();
+      } else this.softNormal(gx, gz, 1, _nrm);
+      nrm.setXYZ(v, _nrm.x, _nrm.y, _nrm.z);
+      if (colours) {
+        const ci = (lz * T + lx) * 3;
+        col.setXYZ(v, colours[ci], colours[ci + 1], colours[ci + 2]);
         uv.setXY(v, x / 18, z / 18);
       }
     };
-    for (let z = 0; z < T; z++) for (let x = 0; x < T; x++) put(z * T + x, ox + x, oz + z, 0);
+    for (let z = r0; z < r1; z++) for (let x = 0; x < T; x++) put(z * T + x, x, z, 0);
+    if (r1 < T) return;
     const base = T * T;
     for (let k = 0; k < T; k++) {
-      put(base + k, ox + k, oz, SKIRT);
-      put(base + T + k, ox + TILE_CELLS, oz + k, SKIRT);
-      put(base + 2 * T + k, ox + k, oz + TILE_CELLS, SKIRT);
-      put(base + 3 * T + k, ox, oz + k, SKIRT);
+      put(base + k, k, 0, SKIRT);
+      put(base + T + k, TILE_CELLS, k, SKIRT);
+      put(base + 2 * T + k, k, TILE_CELLS, SKIRT);
+      put(base + 3 * T + k, 0, k, SKIRT);
     }
     pos.needsUpdate = true;
     nrm.needsUpdate = true;
@@ -570,28 +627,215 @@ export class Terrain {
     geo.computeBoundingBox();
   }
 
-  /** Pick each tile's level of detail from its distance to the camera. */
-  updateLod(cam: THREE.Vector3) {
-    this.updateFields(cam);
+  /** A coarse stand-in for a far tile: a 17×17 grid worked out directly (no tile data needed). */
+  private fillCoarse(m: THREE.Mesh, tx: number, tz: number) {
+    const T = COARSE_CELLS + 1;
+    const st = TILE_CELLS / COARSE_CELLS;
+    const geo = m.geometry;
+    const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+    const nrm = geo.getAttribute('normal') as THREE.BufferAttribute;
+    const col = geo.getAttribute('color') as THREE.BufferAttribute;
+    const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+    // Heights one step beyond the edge too, for normals.
+    const W = T + 2;
+    const hs = new Float32Array(W * W);
+    for (let j = 0; j < W; j++)
+      for (let i = 0; i < W; i++) hs[j * W + i] = this.softHeight(tx * TILE_CELLS + (i - 1) * st, tz * TILE_CELLS + (j - 1) * st);
+    const put = (v: number, i: number, j: number, drop: number) => {
+      const gx = tx * TILE_CELLS + i * st;
+      const gz = tz * TILE_CELLS + j * st;
+      const x = -HALF + gx * CELL;
+      const z = -HALF + gz * CELL;
+      const h = hs[(j + 1) * W + i + 1];
+      pos.setXYZ(v, x, h - drop, z);
+      const hx = (hs[(j + 1) * W + i + 2] - hs[(j + 1) * W + i]) / (2 * st * CELL);
+      const hz = (hs[(j + 2) * W + i + 1] - hs[j * W + i + 1]) / (2 * st * CELL);
+      _nrm.set(-hx, 1, -hz).normalize();
+      nrm.setXYZ(v, _nrm.x, _nrm.y, _nrm.z);
+      this.colorAt(gx, gz, h, _nrm.y, _col);
+      col.setXYZ(v, _col.r, _col.g, _col.b);
+      uv.setXY(v, x / 18, z / 18);
+    };
+    for (let j = 0; j < T; j++) for (let i = 0; i < T; i++) put(j * T + i, i, j, 0);
+    const base = T * T;
+    for (let k = 0; k < T; k++) {
+      put(base + k, k, 0, COARSE_SKIRT);
+      put(base + T + k, COARSE_CELLS, k, COARSE_SKIRT);
+      put(base + 2 * T + k, k, COARSE_CELLS, COARSE_SKIRT);
+      put(base + 3 * T + k, 0, k, COARSE_SKIRT);
+    }
+    pos.needsUpdate = true;
+    nrm.needsUpdate = true;
+    col.needsUpdate = true;
+    uv.needsUpdate = true;
+    geo.computeBoundingSphere();
+    geo.computeBoundingBox();
+  }
+
+  private makeMesh(kind: 'full' | 'coarse'): THREE.Mesh {
+    const pool = kind === 'full' ? this.fullPool : this.coarsePool;
+    const m = pool.pop();
+    if (m) return m;
+    const T = (kind === 'full' ? TILE_CELLS : COARSE_CELLS) + 1;
+    const nv = T * T + 4 * T;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(nv * 2), 2));
+    geo.setIndex(kind === 'full' ? this.lodIndex[0] : this.coarseIndex);
+    const mesh = new THREE.Mesh(geo, this.mat);
+    mesh.receiveShadow = kind === 'full';
+    mesh.matrixAutoUpdate = false;
+    return mesh;
+  }
+
+  private drop(key: number) {
+    const t = this.tiles.get(key);
+    if (!t) return;
+    this.mesh.remove(t.mesh);
+    (t.kind === 'full' ? this.fullPool : this.coarsePool).push(t.mesh);
+    this.tiles.delete(key);
+    if (t.kind === 'full') this.onTile?.(key % TILES, Math.floor(key / TILES), false);
+  }
+
+  private place(key: number, kind: 'full' | 'coarse', mesh: THREE.Mesh) {
+    this.drop(key);
+    this.mesh.add(mesh);
+    this.tiles.set(key, { mesh, kind, lod: -1 });
+    if (kind === 'full') this.onTile?.(key % TILES, Math.floor(key / TILES), true);
+  }
+
+  /** Called when a tile gets (true) or loses (false) its full-detail mesh (water follows these). */
+  onTile: ((tx: number, tz: number, full: boolean) => void) | null = null;
+
+  /** Tile distance from the camera (to its nearest edge). */
+  private tileDist(tx: number, tz: number, cam: THREE.Vector3) {
     const size = TILE_CELLS * CELL;
-    for (const t of this.tiles) {
-      const x0 = -HALF + t.cx * size;
-      const z0 = -HALF + t.cz * size;
-      const dx = Math.max(x0 - cam.x, 0, cam.x - (x0 + size));
-      const dz = Math.max(z0 - cam.z, 0, cam.z - (z0 + size));
-      const d = Math.hypot(dx, dz);
+    const x0 = -HALF + tx * size;
+    const z0 = -HALF + tz * size;
+    const dx = Math.max(x0 - cam.x, 0, cam.x - (x0 + size));
+    const dz = Math.max(z0 - cam.z, 0, cam.z - (z0 + size));
+    return Math.hypot(dx, dz);
+  }
+
+  /**
+   * Keep the right tiles round the camera: full detail near, coarse stand-ins
+   * out past the fog, nothing beyond. New tiles are worked out nearest first,
+   * a few milliseconds a frame (budgetMs; Infinity does it all now). Tile
+   * data far from the camera is forgotten (it's worked out again if needed).
+   */
+  stream(cam: THREE.Vector3, budgetMs = 3) {
+    this.frame++;
+    if (!this.fieldsAt || this.fieldsAt.distanceToSquared(cam) > 50 * 50) {
+      this.fieldsAt = (this.fieldsAt ?? new THREE.Vector3()).copy(cam);
+      this.updateFields(cam);
+    }
+    // Just jumped somewhere (respawn, teleport) with no ground under the camera: catch up fast.
+    const size0 = TILE_CELLS * CELL;
+    const camKey =
+      Math.min(TILES - 1, Math.max(0, Math.floor((cam.z + HALF) / size0))) * TILES + Math.min(TILES - 1, Math.max(0, Math.floor((cam.x + HALF) / size0)));
+    if (this.tiles.get(camKey)?.kind !== 'full') budgetMs = Math.max(budgetMs, 40);
+    const deadline = performance.now() + budgetMs;
+    // What each tile should be.
+    if (!this.planAt || this.planAt.distanceToSquared(cam) > 60 * 60 || (this.jobs.length === 0 && this.frame % 30 === 0)) {
+      this.planAt = (this.planAt ?? new THREE.Vector3()).copy(cam);
+      const want = new Map<number, 'full' | 'coarse'>();
+      const size = TILE_CELLS * CELL;
+      const r = Math.ceil(FAR_R / size) + 1;
+      const ctx = Math.floor((cam.x + HALF) / size);
+      const ctz = Math.floor((cam.z + HALF) / size);
+      for (let tz = Math.max(0, ctz - r); tz <= Math.min(TILES - 1, ctz + r); tz++)
+        for (let tx = Math.max(0, ctx - r); tx <= Math.min(TILES - 1, ctx + r); tx++) {
+          const d = this.tileDist(tx, tz, cam);
+          if (d < FULL_R) want.set(tz * TILES + tx, 'full');
+          else if (d < FAR_R) want.set(tz * TILES + tx, 'coarse');
+        }
+      // Drop what's no longer wanted (a full tile stays full until a bit past the line, and
+      // keeps standing in while its replacement is built).
+      for (const [key, t] of this.tiles) {
+        const w = want.get(key);
+        const tx = key % TILES;
+        const tz = (key - tx) / TILES;
+        if (!w && this.tileDist(tx, tz, cam) > FAR_R + 400) this.drop(key);
+        else if (w === 'coarse' && t.kind === 'full' && this.tileDist(tx, tz, cam) > FULL_R + 400) want.set(key, 'coarse');
+        else if (w === 'coarse' && t.kind === 'full') want.delete(key);
+      }
+      for (const j of this.jobs) if (j.mesh) this.fullPool.push(j.mesh);
+      this.jobs = [...want].filter(([key, kind]) => this.tiles.get(key)?.kind !== kind).map(([key, kind]) => {
+        const tx = key % TILES;
+        const tz = (key - tx) / TILES;
+        return { key, kind, d: this.tileDist(tx, tz, cam) };
+      });
+      // Coarse stand-ins first (cheap, and they fill holes), then nearest first.
+      this.jobs.sort((a, b) => (a.kind === b.kind ? b.d - a.d : a.kind === 'coarse' ? 1 : -1));
+    }
+    // Work through the queue (it's sorted so the next job is at the end).
+    while (this.jobs.length && performance.now() < deadline) {
+      const j = this.jobs[this.jobs.length - 1];
+      const tx = j.key % TILES;
+      const tz = (j.key - tx) / TILES;
+      if (j.kind === 'coarse') {
+        const m = this.makeMesh('coarse');
+        this.fillCoarse(m, tx, tz);
+        this.place(j.key, 'coarse', m);
+        this.jobs.pop();
+        continue;
+      }
+      let d = this.tileData.get(j.key);
+      if (!d) this.tileData.set(j.key, (d = this.newData()));
+      d.used = this.frame;
+      if (d.rows < TV && !this.stepHeights(tx, tz, d, deadline)) break;
+      if (d.crows < TV && !this.stepColors(tx, tz, d, deadline)) break;
+      // Fill the mesh a few rows at a time too.
+      j.mesh ??= this.makeMesh('full');
+      j.row ??= 0;
+      while (j.row < TV && performance.now() < deadline) {
+        const r1 = Math.min(TV, j.row + 16);
+        this.fillFull(j.mesh, tx, tz, d.c, j.row, r1);
+        j.row = r1;
+      }
+      if (j.row < TV) break;
+      this.place(j.key, 'full', j.mesh);
+      this.jobs.pop();
+    }
+    // Level of detail of the full tiles.
+    for (const [key, t] of this.tiles) {
+      if (t.kind !== 'full') continue;
+      const tx = key % TILES;
+      const tz = (key - tx) / TILES;
+      const dd = this.tileDist(tx, tz, cam);
       let lod = 0;
-      while (lod < LOD_DIST.length && d >= LOD_DIST[lod]) lod++;
+      while (lod < LOD_DIST.length && dd >= LOD_DIST[lod]) lod++;
       if (lod !== t.lod) {
         t.lod = lod;
         t.mesh.geometry.setIndex(this.lodIndex[lod]);
       }
+      const d = this.tileData.get(key);
+      if (d) d.used = this.frame;
+    }
+    // Forget the least recently used tile data beyond what we keep.
+    if (this.tileData.size > KEEP_TILES && this.frame % 30 === 0) {
+      const old = [...this.tileData].filter(([key]) => this.tiles.get(key)?.kind !== 'full').sort((a, b) => a[1].used - b[1].used);
+      for (let i = 0; i < old.length && this.tileData.size > KEEP_TILES; i++) this.tileData.delete(old[i][0]);
+      this.lastKey = -1;
+      this.lastTile = null;
     }
   }
 
-  /** Push edited heights back into the mesh (after road grading, etc). */
+  /** Back-compat name: stream with the default budget. */
+  updateLod(cam: THREE.Vector3) {
+    this.stream(cam);
+  }
+
+  /** Re-fill the meshes built so far (after the heights changed, e.g. road grading). */
   refreshMesh() {
-    for (const t of this.tiles) this.fillTile(t, false);
+    for (const [key, t] of this.tiles) {
+      const tx = key % TILES;
+      const tz = (key - tx) / TILES;
+      if (t.kind === 'full') this.fillFull(t.mesh, tx, tz, this.tileColors(tx, tz));
+      else this.fillCoarse(t.mesh, tx, tz);
+    }
   }
 
   /** Height exactly matching the rendered triangle mesh. */

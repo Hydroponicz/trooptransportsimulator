@@ -4,7 +4,7 @@ import { FOG_COLOR, SUN_DIR } from './environment';
 
 /**
  * River water: meshes over just the wet cells of the terrain grid (one per
- * terrain tile, so they cull), carrying the water depth and the downstream
+ * full-detail terrain tile near the camera, so they cull and stream), carrying the water depth and the downstream
  * direction per vertex. The shader does the rest: ripples that drift with
  * the current, sky reflection by Fresnel, sun glints, colour that goes from
  * clear over the shallows to dark green-brown in the channel, and foam
@@ -33,62 +33,89 @@ export class Rivers {
       vertexShader: VERT,
       fragmentShader: FRAG,
     });
-    this.build(terrain);
-  }
-
-  private build(terrain: Terrain) {
-    const N = SEGS + 1;
-    const H = (ix: number, iz: number) => terrain.vertexHeight(ix, iz);
-    const wet = (ix: number, iz: number) => H(ix, iz) < WATER_LEVEL + 0.05;
-    for (let tz = 0; tz < TILES; tz++)
-      for (let tx = 0; tx < TILES; tx++) {
-        const pos: number[] = [];
-        const depth: number[] = [];
-        const flow: number[] = [];
-        const index: number[] = [];
-        const ids = new Map<number, number>();
-        const vert = (ix: number, iz: number) => {
-          const k = iz * N + ix;
-          let id = ids.get(k);
-          if (id !== undefined) return id;
-          id = pos.length / 3;
-          ids.set(k, id);
-          const x = -HALF + ix * CELL;
-          const z = -HALF + iz * CELL;
-          pos.push(x, WATER_LEVEL, z);
-          depth.push(WATER_LEVEL - H(ix, iz));
-          const r = terrain.river(x, z);
-          flow.push(r.dist < Infinity ? r.fx : 0, r.dist < Infinity ? r.fz : 0);
-          return id;
-        };
-        for (let cz = tz * TILE_CELLS; cz < (tz + 1) * TILE_CELLS; cz++)
-          for (let cx = tx * TILE_CELLS; cx < (tx + 1) * TILE_CELLS; cx++) {
-            // A cell gets water if any corner is under it (the shader fades it out up the bank).
-            if (!(wet(cx, cz) || wet(cx + 1, cz) || wet(cx, cz + 1) || wet(cx + 1, cz + 1))) continue;
-            const a = vert(cx, cz);
-            const b = vert(cx, cz + 1);
-            const c = vert(cx + 1, cz + 1);
-            const d = vert(cx + 1, cz);
-            index.push(a, b, d, b, c, d);
-          }
-        if (!index.length) continue;
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-        geo.setAttribute('depth', new THREE.Float32BufferAttribute(depth, 1));
-        geo.setAttribute('flow', new THREE.Float32BufferAttribute(flow, 2));
-        geo.setIndex(index);
-        geo.computeBoundingSphere();
-        const mesh = new THREE.Mesh(geo, this.material);
-        mesh.matrixAutoUpdate = false;
-        // Drawn after the terrain and roads so the banks show through the shallows.
-        mesh.renderOrder = 1;
-        this.group.add(mesh);
-      }
+    // Water comes and goes with the full-detail terrain tiles.
+    terrain.onTile = (tx, tz, full) => {
+      this.pending.delete(tz * TILES + tx);
+      if (full) this.pending.set(tz * TILES + tx, this.buildTile(terrain, tx, tz));
+      else this.removeTile(tx, tz);
+    };
     this.group.matrixAutoUpdate = false;
   }
 
-  update(dt: number) {
+  private tileMeshes = new Map<number, THREE.Mesh>();
+  /** Tiles whose water is being built, a few rows a frame. */
+  private pending = new Map<number, Generator<void, void>>();
+
+  private removeTile(tx: number, tz: number) {
+    const m = this.tileMeshes.get(tz * TILES + tx);
+    if (!m) return;
+    this.group.remove(m);
+    m.geometry.dispose();
+    this.tileMeshes.delete(tz * TILES + tx);
+  }
+
+  /** Build the water over one terrain tile's wet cells (none if it's dry), yielding every few rows. */
+  private *buildTile(terrain: Terrain, tx: number, tz: number): Generator<void, void> {
+    const N = SEGS + 1;
+    const H = (ix: number, iz: number) => terrain.vertexHeight(ix, iz);
+    const wet = (ix: number, iz: number) => H(ix, iz) < WATER_LEVEL + 0.05;
+    const pos: number[] = [];
+    const depth: number[] = [];
+    const flow: number[] = [];
+    const index: number[] = [];
+    const ids = new Map<number, number>();
+    const vert = (ix: number, iz: number) => {
+      const k = iz * N + ix;
+      let id = ids.get(k);
+      if (id !== undefined) return id;
+      id = pos.length / 3;
+      ids.set(k, id);
+      const x = -HALF + ix * CELL;
+      const z = -HALF + iz * CELL;
+      pos.push(x, WATER_LEVEL, z);
+      depth.push(WATER_LEVEL - H(ix, iz));
+      const r = terrain.river(x, z);
+      flow.push(r.dist < Infinity ? r.fx : 0, r.dist < Infinity ? r.fz : 0);
+      return id;
+    };
+    for (let cz = tz * TILE_CELLS; cz < (tz + 1) * TILE_CELLS; cz++) {
+      if (cz % 8 === 0) yield;
+      for (let cx = tx * TILE_CELLS; cx < (tx + 1) * TILE_CELLS; cx++) {
+        // A cell gets water if any corner is under it (the shader fades it out up the bank).
+        if (!(wet(cx, cz) || wet(cx + 1, cz) || wet(cx, cz + 1) || wet(cx + 1, cz + 1))) continue;
+        const a = vert(cx, cz);
+        const b = vert(cx, cz + 1);
+        const c = vert(cx + 1, cz + 1);
+        const d = vert(cx + 1, cz);
+        index.push(a, b, d, b, c, d);
+      }
+    }
+    this.removeTile(tx, tz);
+    if (!index.length) return;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('depth', new THREE.Float32BufferAttribute(depth, 1));
+    geo.setAttribute('flow', new THREE.Float32BufferAttribute(flow, 2));
+    geo.setIndex(index);
+    geo.computeBoundingSphere();
+    const mesh = new THREE.Mesh(geo, this.material);
+    mesh.matrixAutoUpdate = false;
+    // Drawn after the terrain and roads so the banks show through the shallows.
+    mesh.renderOrder = 1;
+    this.group.add(mesh);
+    this.tileMeshes.set(tz * TILES + tx, mesh);
+  }
+
+  update(dt: number, budgetMs = 2) {
     this.material.uniforms.time.value += dt;
+    const deadline = performance.now() + budgetMs;
+    for (const [key, gen] of this.pending) {
+      while (performance.now() < deadline) if (gen.next().done) {
+        this.pending.delete(key);
+        break;
+      }
+      if (performance.now() >= deadline) break;
+    }
   }
 }
 
