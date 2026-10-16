@@ -493,6 +493,7 @@ export class Game {
       // The ground round the player, all of it, before the first frame.
       this.world.terrain.stream(this.heli.fm.pos, Infinity);
       this.world.rivers.update(0, Infinity);
+      this.world.vegetation.stream(this.heli.fm.pos, Infinity);
       // Build every shader now rather than the first time something (smoke, fire) appears mid-flight.
       this.compiled = true;
       this.renderer.compile(this.scene, this.cam.camera);
@@ -542,7 +543,8 @@ export class Game {
     else this.cam.update(modal ? 0 : dt, this.heli, this.world.terrain, mouse);
     this.env.follow(this.playerPos, this.cam.camera.position);
     this.world.shadows.update(this.playerPos);
-    this.world.terrain.updateLod(this.cam.camera.position);
+    this.world.terrain.stream(this.cam.camera.position);
+    this.world.vegetation.stream(this.cam.camera.position);
     this.world.rivers.update(dt);
     {
       // Rotor downwash flattens the grass when the helicopter is low with the rotors turning.

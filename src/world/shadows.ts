@@ -45,6 +45,23 @@ export class ShadowCasters {
     }
   }
 
+  /** Stop drawing these instances' shadows (the same matrix objects that were added). */
+  remove(geo: THREE.BufferGeometry, matrices: THREE.Matrix4[]) {
+    const src = this.sources.find((s) => s.geo === geo);
+    if (!src || !matrices.length) return;
+    const gone = new Set(matrices);
+    for (const m of matrices) {
+      const e = m.elements;
+      const k = Math.floor(e[12] / CELL) * 100003 + Math.floor(e[14] / CELL);
+      const arr = src.cells.get(k);
+      if (!arr) continue;
+      const kept = arr.filter((x) => !gone.has(x));
+      if (kept.length) src.cells.set(k, kept);
+      else src.cells.delete(k);
+    }
+    this.invalidate();
+  }
+
   /** Rebuild on the next update (after a radius change). */
   invalidate() {
     this.at.set(1e9, 0, 1e9);

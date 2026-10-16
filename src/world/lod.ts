@@ -22,14 +22,19 @@ export type ScaleKind = 'lod' | 'clutter' | 'far';
  * still draw everything ahead out to the far plane.
  */
 export class DistanceCuller {
-  private entries: Entry[] = [];
+  private entries = new Map<THREE.Object3D, Entry>();
   private frame = 0;
   /** Multipliers on the tagged distances, set from the graphics quality. */
   scales: Record<ScaleKind, number> = { lod: 1, clutter: 1, far: 1 };
 
   /** Show `obj` when the camera is between `near` and `far` metres from its bounds. */
   add(obj: THREE.Object3D, center: THREE.Vector3, radius: number, far: number, near = 0, farK?: ScaleKind, nearK?: ScaleKind) {
-    this.entries.push({ obj, x: center.x, z: center.z, r: radius, near, far, nearK, farK });
+    this.entries.set(obj, { obj, x: center.x, z: center.z, r: radius, near, far, nearK, farK });
+  }
+
+  /** Stop managing an object (it's being taken out of the world). */
+  remove(obj: THREE.Object3D) {
+    this.entries.delete(obj);
   }
 
   /** Register a mesh by its own bounding sphere. */
@@ -49,7 +54,7 @@ export class DistanceCuller {
     // A few times a second is plenty for kilometre-scale rings.
     if (!force && this.frame++ % 6) return;
     const sc = this.scales;
-    for (const e of this.entries) {
+    for (const e of this.entries.values()) {
       const d = Math.max(0, Math.hypot(cam.x - e.x, cam.z - e.z) - e.r);
       const far = e.farK ? e.far * sc[e.farK] : e.far;
       const near = e.nearK ? e.near * sc[e.nearK] : e.near;

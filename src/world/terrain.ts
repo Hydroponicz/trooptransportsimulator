@@ -838,6 +838,25 @@ export class Terrain {
     }
   }
 
+  /**
+   * Ground height at any point worked out directly, without building a tile:
+   * the natural height plus road grading at that exact spot (heightAt
+   * interpolates the 12.5 m grid instead, so the two differ by centimetres).
+   */
+  groundAt(x: number, z: number): number {
+    const h = Math.fround(this.finalHeight(x, z));
+    return this.overlay ? this.overlay(x, z, h) : h;
+  }
+
+  /** heightAt where that tile's heights are ready, else groundAt (never builds a tile). */
+  heightIfReady(x: number, z: number): number {
+    const size = TILE_CELLS * CELL;
+    const tx = Math.min(TILES - 1, Math.max(0, Math.floor((x + HALF) / size)));
+    const tz = Math.min(TILES - 1, Math.max(0, Math.floor((z + HALF) / size)));
+    const d = this.tileData.get(tz * TILES + tx);
+    return d && d.rows >= TV ? this.heightAt(x, z) : this.groundAt(x, z);
+  }
+
   /** Height exactly matching the rendered triangle mesh. */
   heightAt(x: number, z: number): number {
     let gx = (x + HALF) / CELL;

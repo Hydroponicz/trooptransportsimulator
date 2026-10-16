@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Noise2D, RNG } from '../util/noise';
+import { RNG, type Noise2D } from '../util/noise';
 import { smoothstep } from '../util/math';
 import { merge, part } from './props';
 import { surf, withSurfaces } from './surfaces';
@@ -78,99 +78,294 @@ function farTree() {
 /** Stand-in colours: spruce, broadleaf, dead, birch. */
 const LO_TINT = [new THREE.Color(0x2f4c2c), new THREE.Color(0x52702e), new THREE.Color(0x3a352c), new THREE.Color(0x6a8634)];
 
-/** Instanced forests, chunked for culling, with a point-vs-tree hit test for rotor strikes. */
+/** A tree as generated: where, what, and how it's drawn. */
+interface TreeRec extends Tree {
+  kind: number;
+  s: number;
+  sy: number;
+  rot: number;
+  tint: number;
+  tintG: number;
+}
+
+/** One chunk's trees (generated a few rows at a time), and its rotor/vehicle hit grid. */
+interface ChunkData {
+  trees: TreeRec[];
+  grid: Map<number, TreeRec[]>;
+  /** Rows of the placement grid done so far (of ROWS). */
+  row: number;
+  gen: Generator<void, void> | null;
+  used: number;
+}
+
+/** What's drawn for a chunk now. */
+interface Shown {
+  state: 'hi' | 'lo';
+  hi: THREE.InstancedMesh[];
+  /** Per kind, the matrices handed to the shadow casters (to take back later). */
+  shadowMats: THREE.Matrix4[][];
+  lo: THREE.InstancedMesh | null;
+}
+
+const SPACING = 19;
+const CHUNK = (HALF * 2) / CHUNKS;
+const ROWS = Math.ceil(CHUNK / SPACING);
+/** Chunks' worth of tree data kept round (generated again if needed). */
+const KEEP_CHUNKS = 260;
+
+/**
+ * Forests, generated per 1.2 km chunk round the camera and forgotten far
+ * from it. A chunk's trees come from its own seed, so it is the same every
+ * time it's generated. Near chunks draw full trees (one instanced mesh per
+ * kind, casting shadows through the near-caster copies), farther ones a
+ * single stand-in per tree, out to the fog; nothing beyond. Hit tests
+ * (rotor strikes, vehicles) generate the chunk's trees if they need to.
+ */
 export class Vegetation {
   group = new THREE.Group();
-  private grid = new Map<number, Tree[]>();
+  /** Trees in the chunks generated so far. */
   count = 0;
+  private data = new Map<number, ChunkData>();
+  private shown = new Map<number, Shown>();
+  private kinds: THREE.BufferGeometry[];
+  private loGeo: THREE.BufferGeometry;
+  private material: THREE.Material;
+  private jobs: { key: number; want: 'hi' | 'lo'; d: number }[] = [];
+  private planAt: THREE.Vector3 | null = null;
+  private frame = 0;
+  private seed: number;
 
-  constructor(terrain: Terrain, noise: Noise2D, rng: RNG, blocked: (x: number, z: number) => boolean, culler: DistanceCuller, shadows?: ShadowCasters) {
-    const kinds = [pineGeo(), broadGeo(), deadGeo(), birchGeo()];
-    const loGeo = farTree();
-    const material = withSurfaces(new THREE.MeshLambertMaterial({ vertexColors: true }));
-    const buckets: THREE.Matrix4[][][] = [];
-    // Per chunk, per kind (spruce, broadleaf, dead, birch).
-    const colors: THREE.Color[][][] = [];
-    for (let c = 0; c < CHUNKS * CHUNKS; c++) {
-      buckets.push([[], [], [], []]);
-      colors.push([[], [], [], []]);
-    }
-    const spacing = 19;
-    const q = new THREE.Quaternion();
-    const up = new THREE.Vector3(0, 1, 0);
-    const nrm = new THREE.Vector3();
-    for (let gz = -HALF + 50; gz < HALF - 50; gz += spacing) {
-      for (let gx = -HALF + 50; gx < HALF - 50; gx += spacing) {
-        const x = gx + rng.range(-spacing * 0.45, spacing * 0.45);
-        const z = gz + rng.range(-spacing * 0.45, spacing * 0.45);
+  constructor(
+    private terrain: Terrain,
+    private noise: Noise2D,
+    rng: RNG,
+    private blocked: (x: number, z: number) => boolean,
+    private culler: DistanceCuller,
+    private shadows?: ShadowCasters,
+  ) {
+    this.kinds = [pineGeo(), broadGeo(), deadGeo(), birchGeo()];
+    this.loGeo = farTree();
+    this.material = withSurfaces(new THREE.MeshLambertMaterial({ vertexColors: true }));
+    this.seed = rng.int(0, 1e9);
+  }
+
+  private chunkOf(x: number, z: number) {
+    const cx = Math.min(CHUNKS - 1, Math.max(0, Math.floor((x + HALF) / CHUNK)));
+    const cz = Math.min(CHUNKS - 1, Math.max(0, Math.floor((z + HALF) / CHUNK)));
+    return cz * CHUNKS + cx;
+  }
+
+  /** Lay out a chunk's trees, a row of the placement grid at a time. */
+  private *generate(key: number, d: ChunkData): Generator<void, void> {
+    const cx = key % CHUNKS;
+    const cz = (key - cx) / CHUNKS;
+    const rng = new RNG((this.seed ^ Math.imul(cx + 1, 73856093) ^ Math.imul(cz + 1, 19349663)) >>> 0);
+    const terrain = this.terrain;
+    const noise = this.noise;
+    const x0 = -HALF + cx * CHUNK;
+    const z0 = -HALF + cz * CHUNK;
+    for (let row = d.row; row < ROWS; row++) {
+      const gz = z0 + (row + 0.5) * SPACING;
+      for (let col = 0; col < ROWS; col++) {
+        const gx = x0 + (col + 0.5) * SPACING;
+        const x = gx + rng.range(-SPACING * 0.45, SPACING * 0.45);
+        const z = gz + rng.range(-SPACING * 0.45, SPACING * 0.45);
+        const pick = rng.next();
+        const r1 = rng.next();
+        const r2 = rng.next();
+        const r3 = rng.next();
+        const r4 = rng.next();
+        if (x < x0 || x >= x0 + CHUNK || z < z0 || z >= z0 + CHUNK) continue;
+        if (Math.abs(x) > HALF - 50 || Math.abs(z) > HALF - 50) continue;
         const forest = noise.fbm(x * 0.0011 + 40, z * 0.0011, 3) * 0.5 + 0.5;
         const sd = terrain.front.side(x, z);
         const nearFront = 1 - smoothstep(80, 450, Math.abs(sd));
         let p = smoothstep(0.5, 0.72, forest) * 0.8 + 0.015;
         p *= 1 - nearFront * 0.55;
-        if (!rng.chance(p)) continue;
-        const y = terrain.heightAt(x, z);
+        if (pick >= p) continue;
+        // Heights worked out directly (so a chunk comes out the same whatever terrain is loaded).
+        const y = terrain.groundAt(x, z);
         if (y < 2.5 || y > 520) continue;
-        terrain.normalAt(x, z, nrm);
-        if (nrm.y < 0.78) continue;
-        if (blocked(x, z)) continue;
-        const dead = rng.chance(nearFront * 0.85);
+        const e = 1.5;
+        const hx = terrain.groundAt(x + e, z) - terrain.groundAt(x - e, z);
+        const hz = terrain.groundAt(x, z + e) - terrain.groundAt(x, z - e);
+        if (2 * e / Math.hypot(hx, 2 * e, hz) < 0.78) continue;
+        if (this.blocked(x, z)) continue;
+        const dead = r1 < nearFront * 0.85;
         // Spruce in the deep forest and up the hills; oak, lime and birch in the open country.
-        const kind = dead ? 2 : forest > 0.62 || y > 150 ? (rng.chance(0.8) ? 0 : rng.chance(0.5) ? 1 : 3) : rng.chance(0.3) ? 0 : rng.chance(0.3) ? 3 : 1;
-        const s = rng.range(0.8, 1.55) * (kind === 2 ? 0.9 : 1);
-        q.setFromAxisAngle(up, rng.range(0, Math.PI * 2));
-        const m = new THREE.Matrix4().compose(new THREE.Vector3(x, y - 0.2, z), q, new THREE.Vector3(s, s * rng.range(0.9, 1.15), s));
-        const cx = Math.min(CHUNKS - 1, Math.floor(((x + HALF) / (HALF * 2)) * CHUNKS));
-        const cz = Math.min(CHUNKS - 1, Math.floor(((z + HALF) / (HALF * 2)) * CHUNKS));
-        const ci = cz * CHUNKS + cx;
-        buckets[ci][kind].push(m);
-        const v = rng.range(0.82, 1.12);
-        colors[ci][kind].push(new THREE.Color(v, v * rng.range(0.96, 1.04), v * 0.95));
+        const kind = dead ? 2 : forest > 0.62 || y > 150 ? (r2 < 0.8 ? 0 : r3 < 0.5 ? 1 : 3) : r2 < 0.3 ? 0 : r3 < 0.3 ? 3 : 1;
+        const s = (0.8 + r4 * 0.75) * (kind === 2 ? 0.9 : 1);
         const h = (kind === 2 ? 6 : kind === 0 ? 10 : kind === 3 ? 8.2 : 7) * s;
         const r = (kind === 2 ? 0.8 : kind === 0 ? 2.4 : kind === 3 ? 1.6 : 2.6) * s;
-        this.insert({ x, z, y, h, r, tr: TRUNK[kind] * s, cb: CROWN_BASE[kind] * s });
+        const t: TreeRec = {
+          x,
+          z,
+          y,
+          h,
+          r,
+          tr: TRUNK[kind] * s,
+          cb: CROWN_BASE[kind] * s,
+          kind,
+          s,
+          sy: s * rng.range(0.9, 1.15),
+          rot: rng.range(0, Math.PI * 2),
+          tint: rng.range(0.82, 1.12),
+          tintG: rng.range(0.96, 1.04),
+        };
+        d.trees.push(t);
+        const gk = Math.floor(x / GRID) + 1000 + (Math.floor(z / GRID) + 1000) * 3000;
+        let arr = d.grid.get(gk);
+        if (!arr) d.grid.set(gk, (arr = []));
+        arr.push(t);
       }
-    }
-    for (let ci = 0; ci < CHUNKS * CHUNKS; ci++) {
-      // Full trees: one mesh per kind.
-      let sphere: THREE.Sphere | null = null;
-      for (let k = 0; k < 4; k++) {
-        const list = buckets[ci][k];
-        if (!list.length) continue;
-        const mesh = new THREE.InstancedMesh(kinds[k], material, list.length);
-        list.forEach((m, i) => {
-          mesh.setMatrixAt(i, m);
-          mesh.setColorAt(i, colors[ci][k][i]);
-        });
-        // Shadows come from the near-caster copies (see shadows.ts) when those are in use.
-        mesh.castShadow = !shadows;
-        shadows?.add(kinds[k], list);
-        mesh.receiveShadow = true;
-        mesh.computeBoundingSphere();
-        this.group.add(mesh);
-        culler.add(mesh, mesh.boundingSphere!.center, mesh.boundingSphere!.radius + 30, HI_DIST, 0, 'lod');
-        sphere = sphere ? sphere.union(mesh.boundingSphere!) : mesh.boundingSphere!.clone();
-      }
-      if (!sphere) continue;
-      // Far away: every tree in the chunk is one simple stand-in, tinted by kind, in a single draw call.
-      const all = [0, 1, 2, 3].flatMap((k) => buckets[ci][k].map((m, i) => ({ m, c: colors[ci][k][i].clone().multiply(LO_TINT[k]) })));
-      const lo = new THREE.InstancedMesh(loGeo, material, all.length);
-      all.forEach(({ m, c }, i) => {
-        lo.setMatrixAt(i, m);
-        lo.setColorAt(i, c);
-      });
-      lo.computeBoundingSphere();
-      this.group.add(lo);
-      culler.add(lo, sphere.center, sphere.radius + 30, LO_DIST, HI_DIST, 'far', 'lod');
+      d.row = row + 1;
+      yield;
     }
   }
 
-  private insert(t: Tree) {
-    this.count++;
-    const k = Math.floor(t.x / GRID) + 1000 + (Math.floor(t.z / GRID) + 1000) * 3000;
-    let arr = this.grid.get(k);
-    if (!arr) this.grid.set(k, (arr = []));
-    arr.push(t);
+  /** A chunk's trees, generated now if they aren't yet (or continued a little, given a deadline). */
+  private chunk(key: number, deadline = Infinity): ChunkData | null {
+    let d = this.data.get(key);
+    if (!d) {
+      d = { trees: [], grid: new Map(), row: 0, gen: null, used: this.frame };
+      this.data.set(key, d);
+    }
+    d.used = this.frame;
+    if (d.row < ROWS) {
+      d.gen ??= this.generate(key, d);
+      while (d.row < ROWS) {
+        if (d.gen.next().done) break;
+        if (performance.now() > deadline) return null;
+      }
+      d.gen = null;
+      this.count += d.trees.length;
+    }
+    return d;
+  }
+
+  private matrix(t: TreeRec, y: number) {
+    _q.setFromAxisAngle(_up, t.rot);
+    return new THREE.Matrix4().compose(_v.set(t.x, y - 0.2, t.z), _q, _s.set(t.s, t.sy, t.s));
+  }
+
+  private hide(key: number) {
+    const sh = this.shown.get(key);
+    if (!sh) return;
+    for (const m of sh.hi) {
+      this.group.remove(m);
+      m.dispose();
+    }
+    sh.shadowMats.forEach((mats, k) => this.shadows?.remove(this.kinds[k], mats));
+    if (sh.lo) {
+      this.group.remove(sh.lo);
+      sh.lo.dispose();
+    }
+    this.shown.delete(key);
+  }
+
+  /** Draw a chunk's trees: full trees (hi) or stand-ins (lo). */
+  private show(key: number, state: 'hi' | 'lo', d: ChunkData) {
+    this.hide(key);
+    const sh: Shown = { state, hi: [], shadowMats: [[], [], [], []], lo: null };
+    const c = new THREE.Color();
+    if (state === 'hi') {
+      for (let k = 0; k < 4; k++) {
+        const list = d.trees.filter((t) => t.kind === k);
+        if (!list.length) continue;
+        const mesh = new THREE.InstancedMesh(this.kinds[k], this.material, list.length);
+        const mats = list.map((t) => this.matrix(t, this.terrain.heightAt(t.x, t.z)));
+        mats.forEach((m, i) => {
+          mesh.setMatrixAt(i, m);
+          const t = list[i];
+          mesh.setColorAt(i, c.setRGB(t.tint, t.tint * t.tintG, t.tint * 0.95));
+        });
+        // Shadows come from the near-caster copies (see shadows.ts) when those are in use.
+        mesh.castShadow = !this.shadows;
+        this.shadows?.add(this.kinds[k], mats);
+        sh.shadowMats[k] = mats;
+        mesh.receiveShadow = true;
+        mesh.computeBoundingSphere();
+        this.group.add(mesh);
+        sh.hi.push(mesh);
+      }
+    } else if (d.trees.length) {
+      // Far away: every tree is one simple stand-in, tinted by kind, in a single draw call.
+      const lo = new THREE.InstancedMesh(this.loGeo, this.material, d.trees.length);
+      d.trees.forEach((t, i) => {
+        lo.setMatrixAt(i, this.matrix(t, this.terrain.heightIfReady(t.x, t.z)));
+        lo.setColorAt(i, c.setRGB(t.tint, t.tint * t.tintG, t.tint * 0.95).multiply(LO_TINT[t.kind]));
+      });
+      lo.computeBoundingSphere();
+      this.group.add(lo);
+      sh.lo = lo;
+    }
+    this.shown.set(key, sh);
+  }
+
+  /** Distance from the camera to a chunk's nearest point. */
+  private chunkDist(key: number, cam: THREE.Vector3) {
+    const cx = key % CHUNKS;
+    const cz = (key - cx) / CHUNKS;
+    const x0 = -HALF + cx * CHUNK;
+    const z0 = -HALF + cz * CHUNK;
+    const dx = Math.max(x0 - cam.x, 0, cam.x - (x0 + CHUNK));
+    const dz = Math.max(z0 - cam.z, 0, cam.z - (z0 + CHUNK));
+    return Math.hypot(dx, dz);
+  }
+
+  /**
+   * Keep the right chunks round the camera (full trees near, stand-ins out to
+   * the fog, both scaled by the graphics setting), working nearest first a
+   * few milliseconds a frame (budgetMs; Infinity does it all now).
+   */
+  stream(cam: THREE.Vector3, budgetMs = 3) {
+    this.frame++;
+    const hiR = HI_DIST * this.culler.scales.lod;
+    const loR = LO_DIST * this.culler.scales.far;
+    if (!this.planAt || this.planAt.distanceToSquared(cam) > 40 * 40 || (this.jobs.length === 0 && this.frame % 30 === 0)) {
+      this.planAt = (this.planAt ?? new THREE.Vector3()).copy(cam);
+      const want = new Map<number, 'hi' | 'lo'>();
+      const r = Math.ceil(loR / CHUNK) + 1;
+      const c = this.chunkOf(cam.x, cam.z);
+      const ccx = c % CHUNKS;
+      const ccz = (c - ccx) / CHUNKS;
+      for (let cz = Math.max(0, ccz - r); cz <= Math.min(CHUNKS - 1, ccz + r); cz++)
+        for (let cx = Math.max(0, ccx - r); cx <= Math.min(CHUNKS - 1, ccx + r); cx++) {
+          const key = cz * CHUNKS + cx;
+          const d = this.chunkDist(key, cam);
+          if (d < hiR) want.set(key, 'hi');
+          else if (d < loR) want.set(key, 'lo');
+        }
+      // Hide what's no longer wanted (with a margin, so a chunk on the line doesn't flicker).
+      for (const [key, sh] of this.shown) {
+        const w = want.get(key);
+        const d = this.chunkDist(key, cam);
+        if (!w && d > loR + 200) this.hide(key);
+        else if (!w || (w === 'lo' && sh.state === 'hi' && d < hiR + 150)) want.delete(key);
+      }
+      this.jobs = [...want].filter(([key, w]) => this.shown.get(key)?.state !== w).map(([key, w]) => ({ key, want: w, d: this.chunkDist(key, cam) }));
+      this.jobs.sort((a, b) => b.d - a.d);
+    }
+    const deadline = performance.now() + budgetMs;
+    while (this.jobs.length && performance.now() < deadline) {
+      const j = this.jobs[this.jobs.length - 1];
+      const d = this.chunk(j.key, deadline);
+      if (!d) break;
+      this.show(j.key, j.want, d);
+      this.jobs.pop();
+    }
+    for (const key of this.shown.keys()) {
+      const d = this.data.get(key);
+      if (d) d.used = this.frame;
+    }
+    // Forget the least recently used chunks' trees beyond what we keep.
+    if (this.data.size > KEEP_CHUNKS && this.frame % 60 === 0) {
+      const old = [...this.data].filter(([key, d]) => !this.shown.has(key) && d.row >= ROWS).sort((a, b) => a[1].used - b[1].used);
+      for (let i = 0; i < old.length && this.data.size > KEEP_CHUNKS; i++) {
+        this.count -= old[i][1].trees.length;
+        this.data.delete(old[i][0]);
+      }
+    }
   }
 
   /** Is a world point inside a tree's crown/trunk volume? */
@@ -179,7 +374,9 @@ export class Vegetation {
     const gz = Math.floor(p.z / GRID);
     for (let dz = -1; dz <= 1; dz++)
       for (let dx = -1; dx <= 1; dx++) {
-        const arr = this.grid.get(gx + dx + 1000 + (gz + dz + 1000) * 3000);
+        const cxw = (gx + dx + 0.5) * GRID;
+        const czw = (gz + dz + 0.5) * GRID;
+        const arr = this.chunk(this.chunkOf(cxw, czw))!.grid.get(gx + dx + 1000 + (gz + dz + 1000) * 3000);
         if (!arr) continue;
         for (const t of arr) {
           const ddx = p.x - t.x;
@@ -200,10 +397,15 @@ export class Vegetation {
     const span = Math.ceil(radius / GRID);
     for (let dz = -span; dz <= span; dz++)
       for (let dx = -span; dx <= span; dx++) {
-        const arr = this.grid.get(gx + dx + 1000 + (gz + dz + 1000) * 3000);
+        const arr = this.chunk(this.chunkOf((gx + dx + 0.5) * GRID, (gz + dz + 0.5) * GRID))!.grid.get(gx + dx + 1000 + (gz + dz + 1000) * 3000);
         if (!arr) continue;
         for (const t of arr) if (Math.hypot(x - t.x, z - t.z) < radius) return true;
       }
     return false;
   }
 }
+
+const _q = new THREE.Quaternion();
+const _up = new THREE.Vector3(0, 1, 0);
+const _v = new THREE.Vector3();
+const _s = new THREE.Vector3();
