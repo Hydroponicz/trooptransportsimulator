@@ -963,7 +963,8 @@ export class Battle {
       const dh = sh.at.distanceTo(player.pos);
       if (dh < 45) this.threats.underFire = Math.max(this.threats.underFire, 3);
       if (dh < 18) {
-        const dmg = (1 - dh / 18) * 18 * sh.scale;
+        // Splash and fragments from a near miss (direct RPG and tank hits are above).
+        const dmg = (1 - dh / 18) * 7 * sh.scale * (player.kind === 'air' ? 0.5 : 1);
         player.damage(dmg, 'Shellfire');
         this.hooks.onHeliHit(dmg);
       }

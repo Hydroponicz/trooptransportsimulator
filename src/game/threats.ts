@@ -297,24 +297,26 @@ export class Threats {
   shootAt(from: THREE.Vector3, player: PlayerTarget, kind: 'mg' | 'aa') {
     if (player.destroyed) return;
     const s = { pos: from, kind } as Shooter;
-    this.fire(s, player, from.distanceTo(player.pos));
+    // Riflemen in a firefight loosing off at an aircraft overhead: far less accurate than a sited gun.
+    this.fire(s, player, from.distanceTo(player.pos), player.kind === 'air' ? 2.5 : 1);
   }
 
-  private fire(s: Shooter, player: PlayerTarget, dist: number) {
+  private fire(s: Shooter, player: PlayerTarget, dist: number, scatter = 1) {
     const speed = s.kind === 'aa' ? 950 : 820;
     const tof = dist / speed;
     const aim = player.pos.clone().addScaledVector(player.vel, tof * this.rng.range(0.75, 1.1));
     if (player.kind === 'ground') aim.y += 1.0;
     const dir = aim.sub(s.pos).normalize();
     // Harder to hit fast, low movers; easier to hit a hovering target.
-    const spread = (s.kind === 'aa' ? 0.011 : 0.017) * (1 + player.groundSpeed / 30) + 0.004 + (player.agl < 25 ? 0.006 : 0);
+    const spread = ((s.kind === 'aa' ? 0.011 : 0.017) * (1 + player.groundSpeed / 30) + 0.004 + (player.agl < 25 ? 0.006 : 0)) * scatter;
     dir.x += this.rng.gauss() * spread;
     dir.y += this.rng.gauss() * spread + 0.002;
     dir.z += this.rng.gauss() * spread;
     dir.normalize();
     const v = dir.multiplyScalar(speed);
     const p = s.pos.clone();
-    this.bullets.push({ p, v, life: 3, dmg: s.kind === 'aa' ? 3.2 : 0.8 });
+    // Hull damage per round hit: rifles and machine guns chip at it, heavy AA guns hurt.
+    this.bullets.push({ p, v, life: 3, dmg: s.kind === 'aa' ? 1.6 : 0.2 });
     this.effects.tracer(p, v, 3, s.kind === 'aa' ? 0xffb050 : 0x7dff6a);
     this.effects.fire.emit({ x: p.x, y: p.y, z: p.z, life: 0.06, size0: 2, size1: 1, r: 2, g: 1.6, b: 0.6, alpha: 1, fadeIn: 0.01 });
   }

@@ -464,6 +464,12 @@ sometimes one gets shot down.
 Enemy machine guns, AA guns and MANPADS hold the far side of the line. Low
 and fast is harder to hit, and terrain blocks line of sight. Missiles can be
 decoyed with flares. Hot LZs bring extra gun positions and mortar fire.
+Small-arms fire chips at the hull (a fifth of a percent per hit; heavy AA
+rounds 1.6%), and riflemen in a firefight are far less accurate against an
+aircraft overhead than a sited gun. A minute's hover over a roof in the
+middle of a city battle costs a Chinook roughly half its hull and a Little
+Bird about a fifth; a quick drop much less. RPGs, tank rounds and missiles
+still hit hard.
 
 Progress (money, rank, upgrades, stats, seed) is saved in `localStorage`.
 
