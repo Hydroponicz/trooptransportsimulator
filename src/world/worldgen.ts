@@ -45,6 +45,31 @@ export interface World {
   shadows: ShadowCasters;
 }
 
+/**
+ * Circles (towns, yards...) bucketed in a 250 m grid: is (x, z) within r + m of
+ * one? m may be up to `pad`. `test` replaces the round test (it must stay within r + pad).
+ */
+function circleIndex<T extends { x: number; z: number; r: number }>(items: T[], pad: number, test?: (o: T, x: number, z: number, m: number) => boolean) {
+  const G = 250;
+  const grid = new Map<number, T[]>();
+  for (const o of items) {
+    const R = o.r + pad;
+    for (let cx = Math.floor((o.x - R) / G); cx <= Math.floor((o.x + R) / G); cx++)
+      for (let cz = Math.floor((o.z - R) / G); cz <= Math.floor((o.z + R) / G); cz++) {
+        const k = cx + 1000 + (cz + 1000) * 3000;
+        let arr = grid.get(k);
+        if (!arr) grid.set(k, (arr = []));
+        arr.push(o);
+      }
+  }
+  return (x: number, z: number, m: number) => {
+    const arr = grid.get(Math.floor(x / G) + 1000 + (Math.floor(z / G) + 1000) * 3000);
+    if (!arr) return false;
+    for (const o of arr) if (test ? test(o, x, z, m) : Math.hypot(o.x - x, o.z - z) < o.r + m) return true;
+    return false;
+  };
+}
+
 const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
 /** Parts for making up more town names on a big map. */
 const NAME_HEADS = ['Novo', 'Staro', 'Verkhnyo', 'Nyzhnyo', 'Krasno', 'Bilo', 'Cherno', 'Zeleno', 'Sosno', 'Dubo', 'Lypo', 'Kamiano', 'Bereza', 'Vyshno', 'Ozerno', 'Hlyno', 'Zoloto', 'Pisko', 'Tern', 'Zaliz'];
@@ -567,14 +592,10 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
   }
   // No fields in towns, industrial yards, on roads or by military sites (the plots were laid
   // out before the roads and yards existed).
-  farmland.prune(
-    (x, z) =>
-      towns.some((t) => Math.hypot(t.x - x, t.z - z) < t.r + 25) ||
-      yards.some((q) => Math.hypot(q.x - x, q.z - z) < q.r + 12) ||
-      roads.distance(x, z) < 9 ||
-      nearSite(x, z, 60),
-  );
-  farmland.populate(props, terrain, rng.fork(), (x, z) => nearSite(x, z, 30) || roads.distance(x, z) < 12 || yards.some((q) => Math.hypot(q.x - x, q.z - z) < q.r + 8));
+  const inTown = circleIndex(towns, 25);
+  const inYard = circleIndex(yards, 12);
+  farmland.prune((x, z) => inTown(x, z, 25) || inYard(x, z, 12) || roads.distance(x, z) < 9 || nearSite(x, z, 60));
+  farmland.populate(props, terrain, rng.fork(), (x, z) => nearSite(x, z, 30) || roads.distance(x, z) < 12 || inYard(x, z, 8));
 
   onProgress?.('Planting forests');
   // No trees on the plots themselves (hedgerow trees along pastures are fine, now and then).
@@ -582,12 +603,17 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     const f = farmland.fieldAt(x, z);
     return !!f && (f.kind !== Crop.Pasture || n3.noise(x * 0.02, z * 0.02) > -0.7);
   };
+  const nearEnemy = circleIndex(
+    enemies.map((e) => ({ x: e.pos.x, z: e.pos.z, r: 20 })),
+    0,
+    (o, x, z) => Math.abs(o.x - x) < 14 && Math.abs(o.z - z) < 14,
+  );
   const blocked = (x: number, z: number) =>
     nearSite(x, z, 28) ||
     roads.distance(x, z) < 14 ||
-    yards.some((q) => Math.hypot(q.x - x, q.z - z) < q.r) ||
+    inYard(x, z, 0) ||
     inFarmland(x, z) ||
-    enemies.some((e) => Math.abs(e.pos.x - x) < 14 && Math.abs(e.pos.z - z) < 14);
+    nearEnemy(x, z, 0);
   const culler = new DistanceCuller();
   const shadows = new ShadowCasters();
   group.add(shadows.group);

@@ -44,6 +44,9 @@ interface Seg {
   i: number;
 }
 
+const NO_DECKS: Roads['decks'] = [];
+const NO_PADS: never[] = [];
+
 /** Dirt roads connecting sites. Also answers "how far is this point from a road". */
 export class Roads {
   readonly paths: THREE.Vector2[][] = [];
@@ -145,10 +148,14 @@ export class Roads {
     if (this.freeEnds.has(pi)) this.freeEnds.add(tail);
     this.freeEnds.add(pi);
     this.freeStarts.add(tail);
-    this.grid.clear();
-    this.paths.forEach((pts, p) => {
-      for (let i = 1; i < pts.length; i++) this.index({ ax: pts[i - 1].x, az: pts[i - 1].y, bx: pts[i].x, bz: pts[i].y, path: p, i: i - 1 });
-    });
+    // Segments from sample k on now belong to the tail (each is one object shared by its cells).
+    for (let i = k; i < path.length - 1; i++) {
+      const seg = this.findSeg(path[i], pi, i);
+      if (seg) {
+        seg.path = tail;
+        seg.i = i - k;
+      }
+    }
     return this.paths.length - 1;
   }
 
@@ -166,14 +173,29 @@ export class Roads {
   /** Undo the most recent add() (used when a candidate road is rejected). */
   removeLast() {
     const pi = this.paths.length - 1;
-    this.paths.pop();
+    const pts = this.paths.pop()!;
     this.classes.pop();
     this.freeEnds.delete(pi);
     this.freeStarts.delete(pi);
-    this.grid.clear();
-    this.paths.forEach((pts, p) => {
-      for (let i = 1; i < pts.length; i++) this.index({ ax: pts[i - 1].x, az: pts[i - 1].y, bx: pts[i].x, bz: pts[i].y, path: p, i: i - 1 });
-    });
+    // Its segments were the last indexed: drop them from just the cells they were put in.
+    const done = new Set<number>();
+    for (let i = 1; i < pts.length; i++)
+      this.forCells(pts[i - 1].x, pts[i - 1].y, pts[i].x, pts[i].y, (k) => {
+        if (done.has(k)) return;
+        done.add(k);
+        const arr = this.grid.get(k);
+        if (!arr) return;
+        let n = arr.length;
+        while (n > 0 && arr[n - 1].path === pi) n--;
+        if (n < arr.length) arr.length = n;
+        if (!n) this.grid.delete(k);
+      });
+  }
+
+  /** The indexed segment of road pi starting at sample i (at point a). */
+  private findSeg(a: THREE.Vector2, pi: number, i: number): Seg | null {
+    const arr = this.grid.get(Math.floor(a.x / GRID) + 1000 + (Math.floor(a.y / GRID) + 1000) * 3000);
+    return arr?.find((g) => g.path === pi && g.i === i) ?? null;
   }
 
   /** How many samples of road `pi` (away from its ends) run alongside another road. */
@@ -187,15 +209,19 @@ export class Roads {
   /** Extra paved pads at T-junctions. */
   readonly junctionPads: THREE.Vector2[] = [];
 
-  private index(s: Seg) {
+  /** Each grid cell a segment is indexed into (its box, grown by 12 m). */
+  private forCells(ax: number, az: number, bx: number, bz: number, fn: (k: number) => void) {
     const m = 12;
-    for (let cx = Math.floor((Math.min(s.ax, s.bx) - m) / GRID); cx <= Math.floor((Math.max(s.ax, s.bx) + m) / GRID); cx++)
-      for (let cz = Math.floor((Math.min(s.az, s.bz) - m) / GRID); cz <= Math.floor((Math.max(s.az, s.bz) + m) / GRID); cz++) {
-        const k = cx + 1000 + (cz + 1000) * 3000;
-        let arr = this.grid.get(k);
-        if (!arr) this.grid.set(k, (arr = []));
-        arr.push(s);
-      }
+    for (let cx = Math.floor((Math.min(ax, bx) - m) / GRID); cx <= Math.floor((Math.max(ax, bx) + m) / GRID); cx++)
+      for (let cz = Math.floor((Math.min(az, bz) - m) / GRID); cz <= Math.floor((Math.max(az, bz) + m) / GRID); cz++) fn(cx + 1000 + (cz + 1000) * 3000);
+  }
+
+  private index(s: Seg) {
+    this.forCells(s.ax, s.az, s.bx, s.bz, (k) => {
+      let arr = this.grid.get(k);
+      if (!arr) this.grid.set(k, (arr = []));
+      arr.push(s);
+    });
   }
 
   distance(x: number, z: number): number {
@@ -610,7 +636,7 @@ export class Roads {
       if (y > best && y <= below) best = y;
     });
     if (best === -Infinity)
-      for (const pd of this.padSurf)
+      for (const pd of this.padsNear(x, z))
         if (Math.hypot(x - pd.x, z - pd.z) < 30 && pd.y + 0.12 <= below && pd.fillets.some((f) => inPolygon(f, x, z))) best = Math.max(best, pd.y + 0.12);
     return best;
   }
@@ -619,8 +645,8 @@ export class Roads {
   bridgeRail(p: THREE.Vector3): boolean {
     // Where another road joins, its lane is open.
     if (this.surfaceAt(p.x, p.z, p.y + 1.6) > p.y - 2.2) return false;
-    if (this.padSurf.some((pd) => Math.hypot(pd.x - p.x, pd.z - p.z) < Roads.PAD_R + 4)) return false;
-    for (const d of this.decks) {
+    if (this.padsNear(p.x, p.z).some((pd) => Math.hypot(pd.x - p.x, pd.z - p.z) < Roads.PAD_R + 4)) return false;
+    for (const d of this.decksNear(p.x, p.z)) {
       const dx = d.x1 - d.x0;
       const dz = d.z1 - d.z0;
       const l2 = dx * dx + dz * dz || 1;
@@ -646,10 +672,55 @@ export class Roads {
   }
 
 
+  /** Junction pads bucketed by grid cell, each in every cell within 30 m (rebuilt if they change). */
+  private padGrid = new Map<number, Roads['padSurf']>();
+  private padGridOf: Roads['padSurf'] | null = null;
+  private padGridCount = -1;
+
+  private padsNear(x: number, z: number): Roads['padSurf'] {
+    if (this.padGridOf !== this.padSurf || this.padGridCount !== this.padSurf.length) {
+      this.padGridOf = this.padSurf;
+      this.padGridCount = this.padSurf.length;
+      this.padGrid.clear();
+      for (const pd of this.padSurf)
+        for (let cx = Math.floor((pd.x - 30) / GRID); cx <= Math.floor((pd.x + 30) / GRID); cx++)
+          for (let cz = Math.floor((pd.z - 30) / GRID); cz <= Math.floor((pd.z + 30) / GRID); cz++) {
+            const k = cx + 1000 + (cz + 1000) * 3000;
+            let arr = this.padGrid.get(k);
+            if (!arr) this.padGrid.set(k, (arr = []));
+            arr.push(pd);
+          }
+    }
+    return this.padGrid.get(Math.floor(x / GRID) + 1000 + (Math.floor(z / GRID) + 1000) * 3000) ?? NO_PADS;
+  }
+
+  /** Decks bucketed by grid cell (rebuilt if more are added). */
+  private deckGrid = new Map<number, Roads['decks']>();
+  private deckCount = -1;
+
+  /** Decks near (x, z). */
+  private decksNear(x: number, z: number): Roads['decks'] {
+    if (this.deckCount !== this.decks.length) {
+      this.deckCount = this.decks.length;
+      this.deckGrid.clear();
+      for (const d of this.decks) {
+        const m = d.w + 2;
+        for (let cx = Math.floor((Math.min(d.x0, d.x1) - m) / GRID); cx <= Math.floor((Math.max(d.x0, d.x1) + m) / GRID); cx++)
+          for (let cz = Math.floor((Math.min(d.z0, d.z1) - m) / GRID); cz <= Math.floor((Math.max(d.z0, d.z1) + m) / GRID); cz++) {
+            const k = cx + 1000 + (cz + 1000) * 3000;
+            let arr = this.deckGrid.get(k);
+            if (!arr) this.deckGrid.set(k, (arr = []));
+            arr.push(d);
+          }
+      }
+    }
+    return this.deckGrid.get(Math.floor(x / GRID) + 1000 + (Math.floor(z / GRID) + 1000) * 3000) ?? NO_DECKS;
+  }
+
   /** Deck height if (x, z) is on a bridge, else −Infinity. */
   bridgeHeightAt(x: number, z: number): number {
     let best = -Infinity;
-    for (const d of this.decks) {
+    for (const d of this.decksNear(x, z)) {
       const dx = d.x1 - d.x0;
       const dz = d.z1 - d.z0;
       const l2 = dx * dx + dz * dz || 1;
@@ -966,7 +1037,7 @@ export class Roads {
       };
       place(new THREE.BoxGeometry(len, 0.8, deckW), 0, -0.35, 0);
       // Parapets with a kerb inside them (left open where roads meet).
-      const atPad = this.padSurf.some((pd) => Math.hypot(pd.x - cx, pd.z - cz) < Roads.PAD_R + 6);
+      const atPad = this.padsNear(cx, cz).some((pd) => Math.hypot(pd.x - cx, pd.z - cz) < Roads.PAD_R + 6);
       if (!atPad)
         for (const sd of [1, -1]) {
           place(new THREE.BoxGeometry(len, 0.95, 0.3), 0, 0.5, sd * (half + 0.25));
