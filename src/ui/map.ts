@@ -1,4 +1,5 @@
 import type { World } from '../world/worldgen';
+import { pointAt, type Route } from '../game/gps';
 import { HALF, WORLD_SIZE } from '../world/terrain';
 import type { Site } from '../world/sites';
 
@@ -44,6 +45,15 @@ export interface AirMarker {
   z: number;
   heading: number;
   friendly: boolean;
+}
+
+/** The GPS route to draw, from how far along it the vehicle has got. */
+export interface RouteDraw {
+  route: Route;
+  progress: number;
+  /** Where the vehicle is (for the dashed leg onto the road). */
+  x: number;
+  z: number;
 }
 
 export interface MapMarker {
@@ -311,9 +321,16 @@ export class MapRenderer {
   }
 
   /** North-up local map centered on the helicopter. */
-  drawMini(g: CanvasRenderingContext2D, size: number, hx: number, hz: number, heading: number, range: number, markers: MapMarker[], air: AirMarker[] = []) {
+  drawMini(g: CanvasRenderingContext2D, size: number, hx: number, hz: number, heading: number, range: number, markers: MapMarker[], air: AirMarker[] = [], route?: RouteDraw, headingUp = false) {
     g.fillStyle = '#222';
     g.fillRect(0, 0, size, size);
+    // Heading-up (the GPS view while driving): turn the whole map round the centre.
+    g.save();
+    if (headingUp) {
+      g.translate(size / 2, size / 2);
+      g.rotate(-heading);
+      g.translate(-size / 2, -size / 2);
+    }
     this.updateMini(hx, hz);
     if (this.mini && range * 2 <= MINI_SPAN) {
       const px = MINI_SPAN / MINI_IMG;
@@ -332,6 +349,7 @@ export class MapRenderer {
       if (x < -20 || y < -20 || x > size + 20 || y > size + 20) continue;
       this.siteDot(g, s, x, y, 0.8, false);
     }
+    if (route) this.drawRoute(g, route, toS, Math.max(2.5, size / 50));
     for (const a of air) {
       const [x, y] = toS(a.x, a.z);
       if (x < 0 || y < 0 || x > size || y > size) continue;
@@ -370,7 +388,8 @@ export class MapRenderer {
       g.fill();
       g.stroke();
     }
-    this.heliArrow(g, size / 2, size / 2, heading, 1);
+    g.restore();
+    this.heliArrow(g, size / 2, size / 2, headingUp ? 0 : heading, 1);
     // Range ring.
     g.strokeStyle = 'rgba(157,255,157,0.25)';
     g.beginPath();
@@ -378,7 +397,57 @@ export class MapRenderer {
     g.stroke();
     g.fillStyle = 'rgba(157,255,157,0.7)';
     g.font = '10px ui-monospace, monospace';
-    g.fillText('N', size / 2 - 3, 12);
+    const na = headingUp ? -heading : 0;
+    const nr = size / 2 - 9;
+    g.textAlign = 'center';
+    g.fillText('N', size / 2 + Math.sin(na) * nr, size / 2 - Math.cos(na) * nr + 4);
+    g.textAlign = 'left';
+  }
+
+  /** The GPS route still ahead: a bold line along the roads, dashed where it leaves them. */
+  private drawRoute(g: CanvasRenderingContext2D, rd: RouteDraw, toS: (x: number, z: number) => [number, number], width: number) {
+    const r = rd.route;
+    const start = pointAt(r, rd.progress);
+    const line = () => {
+      g.beginPath();
+      let [a, c] = toS(start.x, start.z);
+      g.moveTo(a, c);
+      for (let i = 0; i < r.cum.length; i++) {
+        if (r.cum[i] <= rd.progress) continue;
+        [a, c] = toS(r.pts[i * 2], r.pts[i * 2 + 1]);
+        g.lineTo(a, c);
+      }
+    };
+    g.lineJoin = 'round';
+    g.lineCap = 'round';
+    line();
+    g.strokeStyle = 'rgba(60, 0, 0, 0.85)';
+    g.lineWidth = width + 2.5;
+    g.stroke();
+    g.strokeStyle = '#ff3b30';
+    g.lineWidth = width;
+    g.stroke();
+    // Off-road legs: from the vehicle to the road, and from the road to the destination.
+    g.setLineDash([4, 4]);
+    g.strokeStyle = '#ff3b30';
+    g.lineWidth = Math.max(1.5, width * 0.5);
+    g.beginPath();
+    if (rd.progress < 1) {
+      g.moveTo(...toS(rd.x, rd.z));
+      g.lineTo(...toS(r.pts[0], r.pts[1]));
+    }
+    const end = pointAt(r, r.length);
+    g.moveTo(...toS(end.x, end.z));
+    g.lineTo(...toS(r.to.x, r.to.z));
+    g.stroke();
+    g.setLineDash([]);
+    g.lineCap = 'butt';
+  }
+
+  /** World position of a point on the full map (u, v from 0 to 1 across it). */
+  toWorld(u: number, v: number): { x: number; z: number } {
+    const V = this.view;
+    return { x: V.x - V.span / 2 + u * V.span, z: V.z - V.span / 2 + v * V.span };
   }
 
   /** The full map's view: centre and width shown (m). */
@@ -424,7 +493,7 @@ export class MapRenderer {
    * villages and landing zones as you zoom in), and a name that would overlap
    * one already placed is left out.
    */
-  drawBig(g: CanvasRenderingContext2D, size: number, hx: number, hz: number, heading: number, markers: MapMarker[], sectors: SectorMarker[] = []) {
+  drawBig(g: CanvasRenderingContext2D, size: number, hx: number, hz: number, heading: number, markers: MapMarker[], sectors: SectorMarker[] = [], route?: RouteDraw, crosshair = false) {
     const V = this.view;
     const mpp = V.span / size;
     const x0 = V.x - V.span / 2;
@@ -524,6 +593,7 @@ export class MapRenderer {
       const show = s.kind === 'base' || (s.kind === 'fob' && mpp < 70) || (s.kind === 'cop' && mpp < 35) || (s.kind === 'lz' && mpp < 12);
       if (show) labels.push({ text: s.name, x: x + 8, y: y + 4, pri: pri[s.kind], color: '#fff', font: `${s.kind === 'base' ? 'bold ' : ''}11px ui-monospace, monospace` });
     }
+    if (route) this.drawRoute(g, route, toS, Math.max(3, 10 / mpp));
     // The objective: ring, and its label above everything else.
     for (const m of markers) {
       let [x, y] = toS(m.x, m.z);
@@ -557,6 +627,21 @@ export class MapRenderer {
     }
     const [x, y] = toS(hx, hz);
     if (x > -20 && y > -20 && x < size + 20 && y < size + 20) this.heliArrow(g, x, y, heading, 1.4);
+    // Controller crosshair (A drops a waypoint there).
+    if (crosshair) {
+      g.strokeStyle = 'rgba(255,255,255,0.85)';
+      g.lineWidth = 1.5;
+      g.beginPath();
+      g.moveTo(size / 2 - 12, size / 2);
+      g.lineTo(size / 2 - 4, size / 2);
+      g.moveTo(size / 2 + 4, size / 2);
+      g.lineTo(size / 2 + 12, size / 2);
+      g.moveTo(size / 2, size / 2 - 12);
+      g.lineTo(size / 2, size / 2 - 4);
+      g.moveTo(size / 2, size / 2 + 4);
+      g.lineTo(size / 2, size / 2 + 12);
+      g.stroke();
+    }
     // Scale and help.
     g.fillStyle = 'rgba(255,255,255,0.7)';
     g.font = '12px ui-monospace, monospace';

@@ -5,7 +5,8 @@ import { fmtDist, fmtMoney, fmtTime, clamp } from '../util/math';
 import { RANKS } from '../game/career';
 import { SAS_NAMES } from '../heli/flight';
 import { noun, siteRisk } from '../game/missions';
-import type { MapMarker } from './map';
+import type { MapMarker, RouteDraw } from './map';
+import type { Maneuver } from '../game/gps';
 import { SITE_COLOR } from './map';
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -87,10 +88,73 @@ export class Hud {
   }
 
   markers(game: Game): MapMarker[] {
+    const out: MapMarker[] = [];
+    const w = game.waypoint;
+    if (w) out.push({ x: w.x, z: w.z, color: '#4fd1ff', label: 'WAYPOINT' });
     const m = game.missions.active;
-    if (!m) return [];
+    if (!m) return out;
     const t = m.target;
-    return [{ x: t.x, z: t.z, color: '#ff9a2e', label: m.phase === 'pickup' ? `PICKUP ${m.c.from.name}` : `DROP ${m.c.to.name}` }];
+    out.push({ x: t.x, z: t.z, color: '#ff9a2e', label: m.phase === 'pickup' ? `PICKUP ${m.c.from.name}` : `DROP ${m.c.to.name}` });
+    return out;
+  }
+
+  /** The GPS route to draw on the maps (while driving). */
+  private routeDraw(game: Game): RouteDraw | undefined {
+    const r = game.gps.route;
+    if (!r || game.mode !== 'drive') return undefined;
+    return { route: r, progress: game.gps.progress, x: game.playerPos.x, z: game.playerPos.z };
+  }
+
+  /** What the GPS is taking the player to. */
+  private gpsLabel(game: Game): string {
+    if (game.waypoint) return 'your waypoint';
+    const m = game.missions.active;
+    if (m?.c.mode === 'ground') return m.targetSite.name;
+    return 'the helicopter';
+  }
+
+  private gpsArrow = (document.getElementById('gps-arrow') as HTMLCanvasElement | null)?.getContext('2d') ?? null;
+
+  /** The satnav panel above the minimap: next turn, how far to it, and what's left. */
+  private updateGpsPanel(game: Game) {
+    const panel = $('gps-panel');
+    const gps = game.gps;
+    const on = game.mode === 'drive' && !!gps.destination;
+    panel.classList.toggle('hidden', !on);
+    if (!on) return;
+    const e = this.els;
+    const g = this.gpsArrow;
+    const r = gps.route;
+    let dist = '';
+    let instr = '';
+    let total = '';
+    let draw: Maneuver | 'arrive' | 'none' = 'none';
+    if (!r) {
+      instr = 'No road route';
+    } else if (gps.recalculating) {
+      instr = 'Recalculating…';
+    } else {
+      const next = gps.next;
+      const left = gps.remaining;
+      if (next) {
+        draw = next;
+        dist = fmtDist(Math.max(0, next.s - gps.progress));
+        instr = MANEUVER_TEXT[next.kind];
+        const then = gps.after(next);
+        if (then) instr += `, then ${MANEUVER_TEXT[then.kind].toLowerCase()}`;
+      } else {
+        draw = 'arrive';
+        dist = fmtDist(left);
+        instr = `Arrive at ${this.gpsLabel(game)}`;
+      }
+      const v = Math.max(8, game.humvee.groundSpeed);
+      total = `${fmtDist(left)} · ${fmtTime(left / v)}`;
+      if (gps.progress < 1 && gps.offRoute > 40) instr = `Head for the road (${fmtDist(gps.offRoute)})`;
+    }
+    (e['gps-dist'] ??= $('gps-dist')).textContent = dist;
+    (e['gps-instr'] ??= $('gps-instr')).textContent = instr;
+    (e['gps-total'] ??= $('gps-total')).textContent = total;
+    if (g) drawTurnIcon(g, 64, draw);
   }
 
   update(dt: number, game: Game) {
@@ -103,7 +167,7 @@ export class Hud {
       this.bigT -= dt;
       if (this.bigT <= 0) {
         this.bigT = 0.25;
-        game.map.drawBig(this.big, 900, game.playerPos.x, game.playerPos.z, game.playerHeading, this.markers(game), game.battle.sectorInfo().map((i) => ({ x: i.x, z: i.z, name: i.s.name, control: i.control, active: i.active })));
+        game.map.drawBig(this.big, 900, game.playerPos.x, game.playerPos.z, game.playerHeading, this.markers(game), game.battle.sectorInfo().map((i) => ({ x: i.x, z: i.z, name: i.s.name, control: i.control, active: i.active })), this.routeDraw(game), !!game.input.pad);
       }
     }
 
@@ -151,7 +215,8 @@ export class Hud {
       e['m-title'].textContent = `${ct.type.icon} ${ct.type.name}${ct.type.kind !== 'sling' ? ` ×${ct.count}` : ''} — ${fmtMoney(ct.pay)}`;
       const tgt = m.target;
       const pp = game.playerPos;
-      const dist = Math.hypot(tgt.x - pp.x, tgt.z - pp.z);
+      const roadLeft = game.mode === 'drive' && game.gps.route ? game.gps.remaining : Infinity;
+      const dist = isFinite(roadLeft) ? roadLeft : Math.hypot(tgt.x - pp.x, tgt.z - pp.z);
       const ground = ct.mode === 'ground';
       let obj = '';
       if (ground && game.mode !== 'drive') {
@@ -182,7 +247,7 @@ export class Hud {
       const tl = m.timeLeft;
       const cond = Math.round(m.condition);
       const spd = game.mode === 'drive' ? game.humvee.groundSpeed : fm.groundSpeed;
-      const eta = spd > 4 ? fmtTime((dist * (game.mode === 'drive' ? 1.3 : 1)) / spd) : '--:--';
+      const eta = spd > 4 ? fmtTime((dist * (game.mode === 'drive' && !isFinite(roadLeft) ? 1.3 : 1)) / spd) : '--:--';
       e['m-stats'].innerHTML =
         `<span>DIST ${fmtDist(dist)}</span><span>ETA ${eta}</span>` +
         `<span class="${tl < 0 ? 'bad' : tl < 60 ? 'warn' : ''}">${tl < 0 ? 'LATE ' + fmtTime(-tl) : 'TIME ' + fmtTime(tl)}</span>` +
@@ -238,8 +303,12 @@ export class Hud {
     this.mini.beginPath();
     this.mini.arc(100, 100, 100, 0, Math.PI * 2);
     this.mini.clip();
-    game.map.drawMini(this.mini, 200, game.playerPos.x, game.playerPos.z, game.playerHeading, 1500, this.markers(game), game.air.jets.filter((j) => j.mesh.visible).map((j) => ({ x: j.pos.x, z: j.pos.z, heading: Math.atan2(j.dir.x, -j.dir.z), friendly: j.side === 'blue' })));
+    // Driving with a route: a closer, heading-up view like a satnav, zooming out with speed.
+    const rd = this.routeDraw(game);
+    const range = rd ? clamp(320 + game.humvee.groundSpeed * 16, 320, 900) : 1500;
+    game.map.drawMini(this.mini, 200, game.playerPos.x, game.playerPos.z, game.playerHeading, range, this.markers(game), game.air.jets.filter((j) => j.mesh.visible).map((j) => ({ x: j.pos.x, z: j.pos.z, heading: Math.atan2(j.dir.x, -j.dir.z), friendly: j.side === 'blue' })), rd, !!rd);
     this.mini.restore();
+    this.updateGpsPanel(game);
 
   }
 
@@ -365,6 +434,30 @@ export class Hud {
       }
     }
 
+    // GPS: the next turn, floating over its junction once it's close.
+    if (game.mode === 'drive') {
+      const next = game.gps.next;
+      const ahead = next ? next.s - game.gps.progress : Infinity;
+      if (next && ahead < 350 && !game.gps.recalculating) {
+        const y = game.world.terrain.heightIfReady(next.x, next.z);
+        const p = this.project(this.tmp.set(next.x, (isFinite(y) ? y : game.humvee.pos.y) + 6, next.z), cam, W, H);
+        if (!p.behind && p.x > 0 && p.x < W && p.y > 0 && p.y < H) {
+          const sz = clamp(64 - ahead / 10, 34, 60);
+          g.save();
+          g.globalAlpha = 0.9;
+          g.fillStyle = 'rgba(160, 20, 15, 0.75)';
+          g.beginPath();
+          g.arc(p.x, p.y, sz * 0.62, 0, Math.PI * 2);
+          g.fill();
+          g.translate(p.x - sz / 2, p.y - sz / 2);
+          drawTurnIcon(g, sz, next, false);
+          g.restore();
+          g.fillStyle = '#fff';
+          g.fillText(fmtDist(ahead), p.x, p.y + sz * 0.62 + 14);
+        }
+      }
+    }
+
     // Hover / drift indicator (also shows the sling load under the hook).
     const R = 62;
     const ix = W / 2;
@@ -459,4 +552,68 @@ export class Hud {
     g.fillStyle = 'rgba(157,255,157,0.7)';
     g.fillText(game.input.controlMode === 'virtual' ? 'STICK' : 'STICK (DIRECT)', cx, cy - S - 6);
   }
+}
+
+const MANEUVER_TEXT: Record<Maneuver['kind'], string> = {
+  straight: 'Continue straight',
+  'slight-left': 'Keep left',
+  'slight-right': 'Keep right',
+  left: 'Turn left',
+  right: 'Turn right',
+  'sharp-left': 'Sharp left',
+  'sharp-right': 'Sharp right',
+};
+
+/** A satnav turn arrow (or a destination flag) on a small square canvas. */
+export function drawTurnIcon(g: CanvasRenderingContext2D, size: number, m: Maneuver | 'arrive' | 'none', clear = true) {
+  if (clear) g.clearRect(0, 0, size, size);
+  if (m === 'none') return;
+  const s = size / 64;
+  g.save();
+  g.scale(s, s);
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  if (m === 'arrive') {
+    // Chequered flag.
+    g.fillStyle = '#fff';
+    g.fillRect(20, 10, 4, 44);
+    for (let i = 0; i < 4; i++)
+      for (let j = 0; j < 3; j++) {
+        g.fillStyle = (i + j) % 2 ? '#222' : '#fff';
+        g.fillRect(24 + i * 6, 10 + j * 6, 6, 6);
+      }
+    g.restore();
+    return;
+  }
+  const turn = Math.max(-2.6, Math.min(2.6, m.turn));
+  const mx = 32;
+  const my = 36;
+  const len = 20;
+  const ex = mx + Math.sin(turn) * len;
+  const ey = my - Math.cos(turn) * len;
+  const path = () => {
+    g.beginPath();
+    g.moveTo(mx, 58);
+    g.lineTo(mx, my);
+    g.lineTo(ex, ey);
+  };
+  path();
+  g.strokeStyle = 'rgba(0,0,0,0.6)';
+  g.lineWidth = 11;
+  g.stroke();
+  path();
+  g.strokeStyle = '#fff';
+  g.lineWidth = 7;
+  g.stroke();
+  // Head.
+  g.translate(ex, ey);
+  g.rotate(turn);
+  g.beginPath();
+  g.moveTo(0, -9);
+  g.lineTo(9, 3);
+  g.lineTo(-9, 3);
+  g.closePath();
+  g.fillStyle = '#fff';
+  g.fill();
+  g.restore();
 }

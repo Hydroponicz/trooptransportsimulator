@@ -209,6 +209,22 @@ away, rooftop and fast-rope insertions up to 15 km, and road jobs up to
 30 km of road (about half an hour at convoy speed). Timers and pay grow with
 the distance.
 
+### GPS
+
+Driving, a satnav takes you by road, like a truck sim's. It routes to the
+job's pickup or drop-off, back to the helicopter on a helicopter job, or to
+a **waypoint** of your own: click anywhere on the theater map to put one
+there (click it again, right-click or press `Delete` to clear it; on a
+controller, `A` drops one at the crosshair in the middle). The route is a
+red line on the theater map and the minimap, which turns heading-up while
+you drive and zooms out as you speed up. A panel above the minimap shows
+the next turn and how far it is ("Turn left, 160 m", and "then keep right"
+when two come close together), with the distance and time left, and a
+turn arrow floats over the junction as you get near. Turn off the route and
+it works out a new one within a couple of seconds. It prefers main roads a
+little and avoids turning round on the spot. Roads that stop at a town's
+edge carry on through its streets, so routes cross towns too.
+
 The truck has 4-wheel drive with independent suspension. Roads are graded
 and grip better than grass, and bridges have guard rails. Deep water stalls
 the engine. If you roll it or get stuck, `T` calls a recovery truck ($400)
@@ -633,6 +649,7 @@ src/
   heli/chinookModel.ts  procedural CH-47: lofted hull with see-through glazing, cockpit, cabin, crew stations
   vehicles/humvee.ts drivable Humvee: suspension, tires, drivetrain, model
   vehicles/models.ts AI vehicle models (truck, tanker, HMMWV, MRAP) with animated wheels
+  game/gps.ts        road network graph, shortest routes and turn-by-turn guidance for the satnav
   game/traffic.ts    AI supply convoys and civilian traffic: routing, steering, following, braking
   game/farmwork.ts   tractors and combines working the fields
   game/missions.ts   contracts, pay, mission phases, payouts, rooftop hover drops

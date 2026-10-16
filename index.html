@@ -46,6 +46,14 @@
           <div class="m-stats" id="m-stats"></div>
         </div>
         <div class="minimap"><canvas id="minimap" width="200" height="200"></canvas></div>
+        <div class="panel hidden" id="gps-panel">
+          <canvas id="gps-arrow" width="64" height="64"></canvas>
+          <div class="gps-text">
+            <b id="gps-dist"></b>
+            <span id="gps-instr"></span>
+            <small id="gps-total"></small>
+          </div>
+        </div>
         <div id="warnings"></div>
         <div id="status-line"></div>
         <div id="prompt"></div>
@@ -63,7 +71,9 @@
             <div><span class="sw lz"></span> Landing zone</div>
             <div><span class="sw red"></span> Enemy territory</div>
             <div><span class="sw obj"></span> Objective</div>
-            <p>Wheel / [+] [−] zoom<br />Drag / arrows pan<br />[C] centre on you<br />Pad: stick pans, triggers zoom, R3 centres<br />[M] close</p>
+            <div><span class="sw wpt"></span> Your waypoint</div>
+            <div><span class="sw route"></span> GPS route (driving)</div>
+            <p>Wheel / [+] [−] zoom<br />Drag / arrows pan<br />[C] centre on you<br />Click: set GPS waypoint<br />Click it again / right-click / [Del]: clear<br />Pad: stick pans, triggers zoom, R3 centres, A sets a waypoint at the crosshair<br />[M] close</p>
           </div>
         </div>
       </div>

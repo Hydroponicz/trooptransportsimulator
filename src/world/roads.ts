@@ -239,6 +239,66 @@ export class Roads {
     return best;
   }
 
+  /** The nearest point on any road within `maxR` m: which road, the segment and how far along it. */
+  nearest(x: number, z: number, maxR: number, accept?: (pi: number) => boolean): { pi: number; i: number; t: number; d: number; x: number; z: number } | null {
+    let best: { pi: number; i: number; t: number; d: number; x: number; z: number } | null = null;
+    const r = Math.ceil(maxR / GRID);
+    const cx0 = Math.floor(x / GRID);
+    const cz0 = Math.floor(z / GRID);
+    // Rings outward, stopping once the ring is farther than the best hit.
+    for (let ring = 0; ring <= r; ring++) {
+      if (best && (ring - 1) * GRID > best.d) break;
+      for (let cx = cx0 - ring; cx <= cx0 + ring; cx++)
+        for (let cz = cz0 - ring; cz <= cz0 + ring; cz++) {
+          if (Math.max(Math.abs(cx - cx0), Math.abs(cz - cz0)) !== ring) continue;
+          const arr = this.grid.get(cx + 1000 + (cz + 1000) * 3000);
+          if (!arr) continue;
+          for (const s of arr) {
+            if (accept && !accept(s.path)) continue;
+            const dx = s.bx - s.ax;
+            const dz = s.bz - s.az;
+            const l2 = dx * dx + dz * dz || 1;
+            const t = Math.max(0, Math.min(1, ((x - s.ax) * dx + (z - s.az) * dz) / l2));
+            const px = s.ax + dx * t;
+            const pz = s.az + dz * t;
+            const d = Math.hypot(x - px, z - pz);
+            if (d <= maxR && (!best || d < best.d)) best = { pi: s.path, i: s.i, t, d, x: px, z: pz };
+          }
+        }
+    }
+    return best;
+  }
+
+  /** Where two different roads cross mid-way (an at-grade crossing): each road's segment there and the point. */
+  crossings(): { pa: number; ia: number; pb: number; ib: number; x: number; z: number }[] {
+    const out: { pa: number; ia: number; pb: number; ib: number; x: number; z: number }[] = [];
+    for (const [key, arr] of this.grid)
+      for (let u = 0; u < arr.length; u++) {
+        const a = arr[u];
+        const rx = a.bx - a.ax;
+        const rz = a.bz - a.az;
+        for (let w = u + 1; w < arr.length; w++) {
+          const b = arr[w];
+          if (a.path === b.path) continue;
+          if (Math.max(a.ax, a.bx) < Math.min(b.ax, b.bx) || Math.min(a.ax, a.bx) > Math.max(b.ax, b.bx)) continue;
+          if (Math.max(a.az, a.bz) < Math.min(b.az, b.bz) || Math.min(a.az, a.bz) > Math.max(b.az, b.bz)) continue;
+          const sx = b.bx - b.ax;
+          const sz = b.bz - b.az;
+          const den = rx * sz - rz * sx;
+          if (Math.abs(den) < 1e-6) continue;
+          const t = ((b.ax - a.ax) * sz - (b.az - a.az) * sx) / den;
+          const v = ((b.ax - a.ax) * rz - (b.az - a.az) * rx) / den;
+          if (t < 0 || t > 1 || v < 0 || v > 1) continue;
+          const x = a.ax + rx * t;
+          const z = a.az + rz * t;
+          // Both segments are in every cell the point is in: count it once, in its own cell.
+          if (Math.floor(x / GRID) + 1000 + (Math.floor(z / GRID) + 1000) * 3000 !== key) continue;
+          out.push({ pa: a.path, ia: a.i, pb: b.path, ib: b.i, x, z });
+        }
+      }
+    return out;
+  }
+
   /** Distance to the nearest road other than `skip` (for gaps at junctions). */
   distanceExcept(x: number, z: number, skip: number): number {
     const arr = this.grid.get(Math.floor(x / GRID) + 1000 + (Math.floor(z / GRID) + 1000) * 3000);

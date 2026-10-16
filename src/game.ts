@@ -20,6 +20,7 @@ import { AirOps } from './battle/air';
 import * as soldierKit from './game/soldiers';
 import type { PlayerTarget } from './game/target';
 import { Humvee, type GroundEnv } from './vehicles/humvee';
+import { Gps } from './game/gps';
 import type { Carrier } from './game/missions';
 import { Career, RANKS } from './game/career';
 import { Hud } from './ui/hud';
@@ -70,6 +71,10 @@ export class Game {
   private flipT = 0;
   hud: Hud;
   map: MapRenderer;
+  /** Satnav for the ground vehicle. */
+  gps: Gps;
+  /** A destination the player marked on the map (the GPS routes to it). */
+  waypoint: { x: number; z: number } | null = null;
   terminal: Terminal;
   rng: RNG;
   wind = new THREE.Vector3();
@@ -144,6 +149,7 @@ export class Game {
     this.scene.add(this.sling.group);
     this.hud = new Hud();
     this.map = new MapRenderer(this.world);
+    this.gps = new Gps(this.world.roads, this.world.towns);
     this.mapControls();
     this.terminal = new Terminal(this);
 
@@ -589,6 +595,7 @@ export class Game {
       },
       dt,
     );
+    this.updateGps(dt);
     // Map tiles: the coarse level fills in from the start, finer ones while the map is open.
     this.map.update(this.mapOpen ? 6 : 1.5);
     this.hud.update(dt, this);
@@ -621,6 +628,8 @@ export class Game {
       return;
     }
     if (inp.take('map')) this.toggleMap();
+    // Controller on the map: A sets (or removes) a waypoint at the crosshair in the middle.
+    if (this.mapOpen && inp.take('ramp')) this.placeWaypoint(this.map.view.x, this.map.view.z, (this.map.view.span / 900) * 20);
     if (inp.take('camera')) {
       this.cam.next();
       this.audio.click();
@@ -765,6 +774,39 @@ export class Game {
     }
   }
 
+  /** Where the GPS should take the ground vehicle: the player's own waypoint, else the job. */
+  private gpsDestination(): { x: number; z: number } | null {
+    if (this.mode !== 'drive') return null;
+    if (this.waypoint) return this.waypoint;
+    const m = this.missions.active;
+    if (!m) return null;
+    if (m.c.mode === 'ground') return m.target;
+    // A helicopter job: back to the helicopter.
+    if (m.phase === 'pickup' || m.phase === 'transit') return this.heli.fm.pos;
+    return null;
+  }
+
+  private updateGps(dt: number) {
+    const dest = this.gpsDestination();
+    this.gps.setDestination(dest);
+    if (!dest) return;
+    const v = this.humvee;
+    this.gps.update(dt, v.pos.x, v.pos.z, v.heading, v.groundSpeed);
+    // Arrived at the player's own waypoint: clear it.
+    if (this.waypoint && Math.hypot(v.pos.x - this.waypoint.x, v.pos.z - this.waypoint.z) < 40) {
+      this.waypoint = null;
+      this.toast('You have reached your waypoint', 'info');
+    }
+  }
+
+  /** Set the map waypoint, or clear it when it's put back on top of the old one. */
+  private placeWaypoint(x: number, z: number, near: number) {
+    const w = this.waypoint;
+    if (w && Math.hypot(w.x - x, w.z - z) < near) this.waypoint = null;
+    else this.waypoint = { x, z };
+    this.hud.redrawMap();
+  }
+
   /** Zoom and pan for the theater map: wheel and drag on it, keys and the controller while it's open. */
   private mapControls() {
     const cv = document.getElementById('bigmap') as HTMLCanvasElement;
@@ -783,8 +825,27 @@ export class Game {
       { passive: false },
     );
     let drag: [number, number] | null = null;
-    cv.addEventListener('mousedown', (e) => (drag = rel(e) as [number, number]));
-    window.addEventListener('mouseup', () => (drag = null));
+    // A click without a drag puts a GPS waypoint there (or takes it away); right-click clears it.
+    let down: [number, number] | null = null;
+    cv.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      drag = rel(e) as [number, number];
+      down = [e.clientX, e.clientY];
+    });
+    window.addEventListener('mouseup', (e) => {
+      if (down && this.mapOpen && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 5) {
+        const [u, v] = rel(e);
+        const w = this.map.toWorld(u, v);
+        this.placeWaypoint(w.x, w.z, (this.map.view.span / 900) * 14);
+      }
+      drag = null;
+      down = null;
+    });
+    cv.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      this.waypoint = null;
+      this.hud.redrawMap();
+    });
     window.addEventListener('mousemove', (e) => {
       if (!drag || !this.mapOpen) return;
       const [u, v] = rel(e);
@@ -803,6 +864,7 @@ export class Game {
         else if (k === 'Equal' || k === 'NumpadAdd' || k === 'PageUp') this.map.zoom(0.8);
         else if (k === 'Minus' || k === 'NumpadSubtract' || k === 'PageDown') this.map.zoom(1.25);
         else if (k === 'KeyC') this.map.centre(this.playerPos.x, this.playerPos.z);
+        else if (k === 'Delete' || k === 'Backspace') this.waypoint = null;
         else return;
         e.preventDefault();
         e.stopPropagation();

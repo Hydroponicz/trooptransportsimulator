@@ -39,6 +39,13 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #111; color:
 .m-stats .bad { color: var(--bad); }
 .m-stats .warn { color: var(--warn); }
 .minimap { position: absolute; right: 12px; bottom: 12px; width: 200px; height: 200px; border-radius: 50%; overflow: hidden; border: 2px solid rgba(157,255,157,0.35); box-shadow: 0 0 12px rgba(0,0,0,0.6); }
+#gps-panel { right: 12px; bottom: 226px; width: 204px; box-sizing: border-box; display: flex; gap: 8px; align-items: center; padding: 6px 8px; }
+#gps-panel.hidden { display: none; }
+#gps-arrow { width: 56px; height: 56px; flex: none; }
+.gps-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.gps-text b { font-size: 20px; color: #fff; }
+.gps-text span { font-size: 12px; color: var(--hud); }
+.gps-text small { font-size: 11px; color: var(--hud-dim); margin-top: 2px; }
 #warnings { position: absolute; top: 74px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; }
 #warnings div { background: rgba(60, 0, 0, 0.7); color: #ff6a5a; border: 1px solid #ff5a4a; padding: 4px 10px; font-weight: 700; font-size: 14px; border-radius: 3px; letter-spacing: 1px; animation: blink 0.6s steps(2) infinite; }
 #warnings div.caution { background: rgba(60, 45, 0, 0.7); color: var(--warn); border-color: var(--warn); animation: none; }
@@ -140,10 +147,12 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .sw { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: middle; margin-right: 6px; }
 .sw.base { background: #6fb0ff; } .sw.fob { background: #8fe08f; } .sw.cop { background: #f2e9a6; } .sw.lz { background: #fff; border: 1px solid #333; }
 .sw.red { background: rgba(255, 60, 40, 0.5); border-radius: 2px; } .sw.obj { background: #ff9a2e; }
+.sw.wpt { background: transparent; border: 3px solid #4fd1ff; box-sizing: border-box; } .sw.route { background: #ff3b30; height: 4px; border-radius: 2px; }
 
 @media (max-width: 720px) {
   .left, .right { transform: translateY(-50%) scale(0.8); }
   .minimap { width: 140px; height: 140px; }
+  #gps-panel { bottom: 164px; width: 150px; }
 }
 
 /* Controller focus in menus (ui/padnav.ts). */
