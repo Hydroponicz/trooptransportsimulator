@@ -137,6 +137,7 @@ export class Game {
     this.scene.add(this.sling.group);
     this.hud = new Hud();
     this.map = new MapRenderer(this.world);
+    this.mapControls();
     this.terminal = new Terminal(this);
 
     this.threats = new Threats(this.world, this.rng.fork(), this.effects, this.audio, {
@@ -532,7 +533,10 @@ export class Game {
     this.input.update(dt);
     this.handleActions();
     const modal = this.paused || this.terminal.isOpen || this.terminal.dialogOpen;
-    this.input.enabled = !modal;
+    // On the open map a controller's sticks and triggers drive the map, not the aircraft.
+    const padOnMap = this.mapOpen && !!this.input.pad;
+    if (padOnMap) this.padMap(dt);
+    this.input.enabled = !modal && !padOnMap;
     // Fullscreen mouse look while playing; menus and dialogs get the cursor back.
     this.input.lookAllowed = this.running && !modal;
     this.input.updatePointer();
@@ -576,6 +580,8 @@ export class Game {
       },
       dt,
     );
+    // Map tiles: the coarse level fills in from the start, finer ones while the map is open.
+    this.map.update(this.mapOpen ? 6 : 1.5);
     this.hud.update(dt, this);
     this.renderer.render(this.scene, this.cam.camera);
   }
@@ -744,6 +750,77 @@ export class Game {
   toggleMap() {
     this.mapOpen = !this.mapOpen;
     document.getElementById('mapview')!.classList.toggle('hidden', !this.mapOpen);
+    if (this.mapOpen) {
+      this.map.centre(this.playerPos.x, this.playerPos.z);
+      this.hud.redrawMap();
+    }
+  }
+
+  /** Zoom and pan for the theater map: wheel and drag on it, keys and the controller while it's open. */
+  private mapControls() {
+    const cv = document.getElementById('bigmap') as HTMLCanvasElement;
+    const rel = (e: MouseEvent) => {
+      const r = cv.getBoundingClientRect();
+      return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+    };
+    cv.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        const [u, v] = rel(e);
+        this.map.zoom(e.deltaY > 0 ? 1.25 : 0.8, u, v);
+        this.hud.redrawMap();
+      },
+      { passive: false },
+    );
+    let drag: [number, number] | null = null;
+    cv.addEventListener('mousedown', (e) => (drag = rel(e) as [number, number]));
+    window.addEventListener('mouseup', () => (drag = null));
+    window.addEventListener('mousemove', (e) => {
+      if (!drag || !this.mapOpen) return;
+      const [u, v] = rel(e);
+      this.map.pan(drag[0] - u, drag[1] - v);
+      drag = [u, v];
+      this.hud.redrawMap();
+    });
+    // Keys while the map is open (taken before the flight controls see them).
+    document.addEventListener(
+      'keydown',
+      (e) => {
+        if (!this.mapOpen) return;
+        const k = e.code;
+        const pan: Record<string, [number, number]> = { ArrowLeft: [-0.15, 0], ArrowRight: [0.15, 0], ArrowUp: [0, -0.15], ArrowDown: [0, 0.15] };
+        if (pan[k]) this.map.pan(...pan[k]);
+        else if (k === 'Equal' || k === 'NumpadAdd' || k === 'PageUp') this.map.zoom(0.8);
+        else if (k === 'Minus' || k === 'NumpadSubtract' || k === 'PageDown') this.map.zoom(1.25);
+        else if (k === 'KeyC') this.map.centre(this.playerPos.x, this.playerPos.z);
+        else return;
+        e.preventDefault();
+        e.stopPropagation();
+        this.hud.redrawMap();
+      },
+      true,
+    );
+  }
+
+  /** Controller on the open map: left stick pans, triggers zoom, right stick click centres. */
+  private padMap(dt: number) {
+    const p = this.input.pad;
+    if (!p) return;
+    let moved = false;
+    if (Math.abs(p.lx) > 0.15 || Math.abs(p.ly) > 0.15) {
+      this.map.pan(p.lx * dt * 0.6, p.ly * dt * 0.6);
+      moved = true;
+    }
+    if (p.rt > 0.1 || p.lt > 0.1) {
+      this.map.zoom(Math.pow(0.35, (p.rt - p.lt) * dt));
+      moved = true;
+    }
+    if (p.r3) {
+      this.map.centre(this.playerPos.x, this.playerPos.z);
+      moved = true;
+    }
+    if (moved) this.hud.redrawMap();
   }
 
   private simulate(dt: number) {

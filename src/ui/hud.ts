@@ -81,6 +81,11 @@ export class Hud {
     if (this.els.prompt.innerHTML !== html) this.els.prompt.innerHTML = html;
   }
 
+  /** Draw the theater map again on the next update (after a zoom or pan). */
+  redrawMap() {
+    this.bigT = 0;
+  }
+
   markers(game: Game): MapMarker[] {
     const m = game.missions.active;
     if (!m) return [];
@@ -93,6 +98,14 @@ export class Hud {
     this.bigTextTimer -= dt;
     if (this.bigTextTimer <= 0) this.els.bigtext.classList.remove('show');
     this.drawCanvas(game);
+    // The theater map: right away after a zoom or pan, otherwise a few times a second.
+    if (game.mapOpen) {
+      this.bigT -= dt;
+      if (this.bigT <= 0) {
+        this.bigT = 0.25;
+        game.map.drawBig(this.big, 900, game.playerPos.x, game.playerPos.z, game.playerHeading, this.markers(game), game.battle.sectorInfo().map((i) => ({ x: i.x, z: i.z, name: i.s.name, control: i.control, active: i.active })));
+      }
+    }
 
     this.domT -= dt;
     if (this.domT > 0) return;
@@ -228,17 +241,16 @@ export class Hud {
     game.map.drawMini(this.mini, 200, game.playerPos.x, game.playerPos.z, game.playerHeading, 1500, this.markers(game), game.air.jets.filter((j) => j.mesh.visible).map((j) => ({ x: j.pos.x, z: j.pos.z, heading: Math.atan2(j.dir.x, -j.dir.z), friendly: j.side === 'blue' })));
     this.mini.restore();
 
-    if (game.mapOpen) {
-      this.bigT -= 1 / 12;
-      if (this.bigT <= 0) {
-        this.bigT = 0.25;
-        game.map.drawBig(this.big, 900, game.playerPos.x, game.playerPos.z, game.playerHeading, this.markers(game), game.battle.sectorInfo().map((i) => ({ x: i.x, z: i.z, name: i.s.name, control: i.control, active: i.active })));
-      }
-    }
   }
 
   private project(p: THREE.Vector3, cam: THREE.Camera, W: number, H: number): { x: number; y: number; behind: boolean } {
-    const v = this.tmp.copy(p).project(cam);
+    // Far targets (past the camera's far plane, a dozen km out) would project as if behind
+    // the camera: project a point in the same direction, well inside it, instead.
+    const c = cam.position;
+    const d = Math.hypot(p.x - c.x, p.y - c.y, p.z - c.z);
+    if (d > 2000) this.tmp.set(c.x + ((p.x - c.x) / d) * 2000, c.y + ((p.y - c.y) / d) * 2000, c.z + ((p.z - c.z) / d) * 2000);
+    else this.tmp.copy(p);
+    const v = this.tmp.project(cam);
     const behind = v.z > 1;
     let x = (v.x * 0.5 + 0.5) * W;
     let y = (-v.y * 0.5 + 0.5) * H;
