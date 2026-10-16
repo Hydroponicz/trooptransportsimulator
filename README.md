@@ -485,9 +485,10 @@ A sunny summer day in eastern Europe:
   map.
 - **Smoke:** lit, billowing puffs. They turn as they rise and are shaded by
   the sun, the sky above and the ground below, with fire glow on young
-  smoke. Smoke drifts with the wind (stronger with height), swirls, and is
-  driven by the rotor's wake (the wind follows the same height profile as the clouds'): down through the disc, then out across the
-  ground or roof below. It slides along the ground and round buildings rather
+  smoke. Smoke drifts with the wind, which strengthens with height on the
+  same profile that carries the clouds. It swirls, and it is driven by the
+  rotor's wake: down through the disc, then out across the ground or roof
+  below. It slides along the ground and round buildings rather
   than through them, so wash pushes signal smoke off a roof and round the
   stair tower, not into it. Burning wrecks (tanks, downed jets and
   helicopters, the Humvee) have flames at the base and a column of black,
