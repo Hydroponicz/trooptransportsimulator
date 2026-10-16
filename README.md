@@ -564,15 +564,21 @@ The theater is big, so most of it is drawn cheaply or not at all:
   disappears past
   4 km. Static parts of the helicopter and Humvee are merged by material.
 - **Clouds** are raymarched into a sky panorama, not for every screen pixel
-  every frame: one band of it per frame (all of it within a fraction of a
-  second, four bands a frame after a teleport). High uses 4096×1024 and 48
-  steps, Medium 2048×512 and 28 steps. Low paints the same cloud field flat
-  instead of marching through it.
+  every frame. Each frame redraws one vertical strip of it, from horizon to
+  zenith, so every frame costs the same. The whole panorama is redrawn in
+  under a second, or four strips a frame after a teleport. High uses
+  2048×512 and 36 steps, Medium 1536×384 and 22 steps. Low paints the same
+  cloud field flat instead. Cloud shadows are worked out per vertex.
 - **Smoke** is one draw call, sorted back to front with a counting sort.
-  Only particles within 900 m of the camera (less on lower settings) test
-  for buildings, and only below the tallest roof in their 64 m cell. Ground
-  heights are cached per particle. Only the 12 nearest burning wrecks smoke,
-  and those past 3 km use fewer, bigger puffs.
+  Live particles are kept packed at the front of the pool, so only those are
+  updated and uploaded. Puffs the camera is inside are dropped, and none
+  draws bigger than about half the screen. Only particles within 450 m of
+  the camera (less on lower settings) test for buildings, and only below the
+  tallest roof in their 64 m cell. Ground heights are cached per particle.
+  Only the 10 nearest burning wrecks smoke, and those past 3 km use fewer,
+  bigger puffs.
+- Every shader is compiled when the game starts, so the first explosion
+  or smoke doesn't hitch.
 - The camera's far plane stops just past the fog.
 
 World generation logs its phase timings to the console.

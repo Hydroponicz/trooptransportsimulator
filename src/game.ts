@@ -335,7 +335,7 @@ export class Game {
     this.world.culler.scales.clutter = p.clutterScale;
     this.world.culler.scales.far = p.farScale;
     this.effects.density = p.smoke;
-    this.effects.smoke.collideRange = 900 * p.smoke;
+    this.effects.smoke.collideRange = 450 * p.smoke;
     this.env.setCloudQuality(p.cloudSteps);
     this.world.culler.update(this.cam.camera.position, true);
     this.resize();
@@ -479,6 +479,8 @@ export class Game {
     this.hud.toast(msg, kind);
   }
 
+  private compiled = false;
+
   start() {
     this.running = true;
     this.input.active = true;
@@ -487,6 +489,11 @@ export class Game {
     this.last = performance.now();
     this.toast(this.input.scheme === 'gta' ? `Welcome to ${this.world.base.name}. Hold W (RT on a controller) to start the engines and lift off.` : `Welcome to ${this.world.base.name}. Press [I] to start the engines.`, 'good');
     this.toast('Open the base terminal with [Tab] to pick up a contract.');
+    if (!this.compiled) {
+      // Build every shader now rather than the first time something (smoke, fire) appears mid-flight.
+      this.compiled = true;
+      this.renderer.compile(this.scene, this.cam.camera);
+    }
     const loop = (ts: number) => {
       if (!this.running) return;
       requestAnimationFrame(loop);

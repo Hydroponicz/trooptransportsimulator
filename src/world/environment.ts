@@ -141,16 +141,16 @@ export class Environment {
   setCloudQuality(steps: number) {
     if (steps === this.steps) return;
     this.steps = steps;
-    const [w, h] = steps >= 40 ? [4096, 1024] : steps > 0 ? [2048, 512] : [1024, 256];
+    const [w, h] = steps >= 32 ? [2048, 512] : steps > 0 ? [1536, 384] : [1024, 256];
     if (this.cloudRT.width !== w) {
       this.cloudRT.dispose();
       this.cloudRT = this.makeRT(w, h);
     }
     this.skyMat.uniforms.cloudTex.value = this.cloudRT.texture;
     this.cloudMat.defines.STEPS = steps;
-    this.cloudMat.defines.LSTEPS = steps >= 40 ? 6 : 4;
+    this.cloudMat.defines.LSTEPS = steps >= 32 ? 4 : 3;
     this.cloudMat.needsUpdate = true;
-    this.slices = steps >= 40 ? 16 : steps > 0 ? 8 : 2;
+    this.slices = steps >= 32 ? 48 : steps > 0 ? 32 : 4;
     this.slice = 0;
     this.blank = true;
     this.redraw();
@@ -161,7 +161,7 @@ export class Environment {
     this.restart = this.slice;
   }
 
-  /** Drift the clouds and refresh a band of the cloud panorama (four a frame while it is redrawn). */
+  /** Drift the clouds and refresh a strip of the cloud panorama (four a frame while it is redrawn). */
   update(dt: number, renderer?: THREE.WebGLRenderer) {
     this.time += dt;
     // The cumulus drift with the upper wind.
@@ -184,11 +184,12 @@ export class Environment {
       renderer.clear(true, false, false);
       renderer.setClearColor(cc, ca);
     }
-    // After a jump a few bands a frame (the GPU never gets the whole march at once), otherwise one.
+    // One strip of azimuth a frame, horizon to zenith, so every frame costs the same
+    // (rows near the horizon march far further than those overhead). After a jump, a few.
     const per = this.fresh ? 1 : 4;
-    const band = Math.ceil(rt.height / this.slices);
+    const strip = Math.ceil(rt.width / this.slices);
     for (let n = 0; n < per; n++) {
-      rt.scissor.set(0, this.slice * band, rt.width, band);
+      rt.scissor.set(this.slice * strip, 0, strip, rt.height);
       rt.viewport.set(0, 0, rt.width, rt.height);
       renderer.setRenderTarget(rt);
       renderer.render(this.cloudScene, this.cloudCam);

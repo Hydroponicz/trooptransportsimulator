@@ -52,7 +52,7 @@ float cloudVNoise(vec2 p) {
 }
 float cloudCover(vec2 q) {
   vec2 p = q * (1.0 / 3800.0);
-  float n = cloudVNoise(p) * 0.55 + cloudVNoise(p * 2.13 + 7.1) * 0.3 + cloudVNoise(p * 4.37 + 3.3) * 0.15;
+  float n = cloudVNoise(p) * 0.62 + cloudVNoise(p * 2.13 + 7.1) * 0.38;
   return smoothstep(0.36, 0.74, n);
 }
 `;
@@ -113,22 +113,34 @@ for (const k of Object.keys(THREE.ShaderLib)) {
   const u = (THREE.ShaderLib as Record<string, { uniforms: Record<string, THREE.IUniform> }>)[k].uniforms;
   if (u.fogColor) u.cloudShift = cloudShadowUniform;
 }
-chunks.fog_pars_fragment += /* glsl */ `
+// Worked out per vertex: the shadows are kilometres across.
+chunks.fog_pars_vertex += /* glsl */ `
 #ifdef USE_FOG
   uniform vec2 cloudShift;
+  varying float vCloudShade;
   ${CLOUD_COVER_GLSL}
-  float cloudShadow(vec3 wp) {
+#endif
+`;
+chunks.fog_vertex += /* glsl */ `
+#ifdef USE_FOG
+  {
+    vec3 wp = cameraPosition + vFogRay;
     float mid = ${((CLOUD_BASE + CLOUD_TOP) / 2).toFixed(1)};
     vec2 q = wp.xz + ${v3(SUN_DIR)}.xz * ((mid - wp.y) / ${SUN_DIR.y.toFixed(5)}) + cloudShift;
-    return 1.0 - 0.62 * smoothstep(0.08, 0.55, cloudCover(q));
+    vCloudShade = 1.0 - 0.62 * smoothstep(0.08, 0.55, cloudCover(q));
   }
+#endif
+`;
+chunks.fog_pars_fragment += /* glsl */ `
+#ifdef USE_FOG
+  varying float vCloudShade;
 #endif
 `;
 chunks.lights_fragment_begin = chunks.lights_fragment_begin.replace(
   'getDirectionalLightInfo( directionalLight, directLight );',
   /* glsl */ `getDirectionalLightInfo( directionalLight, directLight );
     #ifdef USE_FOG
-      if ( UNROLLED_LOOP_INDEX == 0 ) directLight.color *= cloudShadow( cameraPosition + vFogRay );
+      if ( UNROLLED_LOOP_INDEX == 0 ) directLight.color *= vCloudShade;
     #endif`,
 );
 

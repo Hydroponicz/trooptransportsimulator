@@ -22,7 +22,7 @@ const SMOKE_COLORS: Record<string, [number, number, number]> = {
   white: [0.9, 0.9, 0.88],
 };
 /** Most burning wrecks smoking at once (the nearest). */
-const MAX_PLUMES = 12;
+const MAX_PLUMES = 10;
 
 export type SmokeColor = keyof typeof SMOKE_COLORS;
 
@@ -66,7 +66,7 @@ export class Effects {
   private livePlumes = new Set<SmokeEmitter>();
 
   constructor(private rng: RNG) {
-    this.smoke = new ParticleSystem(9000, smokeAtlasTexture(), false, { lit: true, cells: 2, collide: true });
+    this.smoke = new ParticleSystem(6000, smokeAtlasTexture(), false, { lit: true, cells: 2, collide: true });
     this.fire = new ParticleSystem(2500, softSpriteTexture(), true);
     this.smoke.sunDir.copy(SUN_DIR);
     this.smoke.points.renderOrder = 5;
@@ -229,7 +229,7 @@ export class Effects {
     const base = { pos: pos.clone(), acc: 0, last: null };
     const e: SmokeEmitter =
       kind === 'burning'
-        ?{ ...base, kind: 'plume', rate: 4.5, color: [0.1, 0.092, 0.085], size: 5, life: 85, rise: 8, dark: true, scale: THREE.MathUtils.clamp((rate ?? 6) / 7, 0.45, 1.6) }
+        ? { ...base, kind: 'plume', rate: 3.2, color: [0.1, 0.092, 0.085], size: 6, life: 70, rise: 8, dark: true, scale: THREE.MathUtils.clamp((rate ?? 6) / 7, 0.45, 1.6) }
         : kind === 'trail'
           ? { ...base, kind: 'trail', rate: rate ?? 40, color: [0.08, 0.075, 0.07], size: 3.5, life: 14, rise: 1, dark: true, scale: 1 }
           : { ...base, kind: 'signal', rate: rate ?? 22, color: SMOKE_COLORS[kind], size: 2, life: 15, rise: 1.6, dark: false, scale: 1 };

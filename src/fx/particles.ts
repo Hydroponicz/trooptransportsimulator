@@ -127,8 +127,12 @@ export class ParticleSystem {
   private counts = new Uint32Array(BUCKETS);
   private cursor = 0;
   private material: THREE.ShaderMaterial;
+  private attrs: THREE.BufferAttribute[];
   private collideDefault: boolean;
   alive = 0;
+  /** Live particles, and one past the highest live slot. */
+  private live = 0;
+  private top = 0;
   /** Scale on how far from the camera particles collide (graphics quality). */
   collideRange = COLLIDE_RANGE;
 
@@ -166,6 +170,7 @@ export class ParticleSystem {
     geo.setAttribute('size', new THREE.BufferAttribute(this.size, 1).setUsage(THREE.DynamicDrawUsage));
     geo.setAttribute('pdata', new THREE.BufferAttribute(this.data, 4).setUsage(THREE.DynamicDrawUsage));
     geo.setIndex(new THREE.BufferAttribute(this.index, 1).setUsage(THREE.DynamicDrawUsage));
+    this.attrs = ['position', 'pcolor', 'size', 'pdata'].map((n) => geo.getAttribute(n) as THREE.BufferAttribute);
     geo.setDrawRange(0, 0);
     const cells = opts.cells ?? 1;
     this.material = new THREE.ShaderMaterial({
@@ -176,6 +181,7 @@ export class ParticleSystem {
       uniforms: {
         map: { value: texture },
         scale: { value: 600 },
+        maxPx: { value: 400 },
         fogColor: { value: new THREE.Color() },
         fogNear: { value: 900 },
         fogFar: { value: 7500 },
@@ -189,7 +195,7 @@ export class ParticleSystem {
       },
       vertexShader: /* glsl */ `
         attribute float size; attribute vec4 pcolor; attribute vec4 pdata;
-        uniform float scale;
+        uniform float scale; uniform float maxPx;
         varying vec4 vColor; varying vec4 vData; varying float vDepth; varying float vSize;
         void main() {
           vColor = pcolor;
@@ -197,8 +203,10 @@ export class ParticleSystem {
           vSize = size;
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
           vDepth = -mv.z;
-          gl_PointSize = size * scale / max(0.5, -mv.z);
           gl_Position = projectionMatrix * mv;
+          // Puffs the camera is in would cover the screen many times over: drop them
+          // (they fade out before this), and cap the rest at about half the screen.
+          gl_PointSize = -mv.z < size * 0.15 ? 0.0 : min(size * scale / max(0.5, -mv.z), maxPx);
         }`,
       fragmentShader: /* glsl */ `
         uniform sampler2D map; uniform vec3 fogColor; uniform float fogNear; uniform float fogFar; uniform float additive;
@@ -246,6 +254,7 @@ export class ParticleSystem {
 
   setView(viewportHeight: number, fovDeg: number, fog: THREE.Fog) {
     this.material.uniforms.scale.value = viewportHeight / (2 * Math.tan((fovDeg * Math.PI) / 360));
+    this.material.uniforms.maxPx.value = viewportHeight * 0.55;
     this.material.uniforms.fogColor.value.copy(fog.color);
     // The scene fog is a height fog (see world/look.ts); particles use a simple linear fade.
     this.material.uniforms.fogNear.value = 900;
@@ -257,6 +266,9 @@ export class ParticleSystem {
 
   emit(o: EmitOpts) {
     // Find a dead slot near the cursor; overwrite the oldest if full.
+    // Keep the live particles packed at the front of the pool (less to loop over
+    // and upload): start again from the bottom once the cursor runs well past them.
+    if (this.cursor > this.live * 1.25 + 128) this.cursor = 0;
     let i = this.cursor;
     for (let k = 0; k < 64; k++) {
       const j = (this.cursor + k) % this.n;
@@ -266,6 +278,8 @@ export class ParticleSystem {
       }
     }
     this.cursor = (i + 1) % this.n;
+    if (this.life[i] <= 0) this.live++;
+    if (i >= this.top) this.top = i + 1;
     const p = i * 3;
     this.pos[p] = o.x;
     this.pos[p + 1] = o.y;
@@ -316,7 +330,10 @@ export class ParticleSystem {
     const keys = this.depthKey;
     let maxD = 1;
     const frame = this.frame++;
-    for (let i = 0; i < this.n; i++) {
+    const top = this.top;
+    let hi = -1;
+    let live = 0;
+    for (let i = 0; i < top; i++) {
       if (life[i] <= 0) continue;
       life[i] -= dt;
       const p = i * 3;
@@ -325,6 +342,8 @@ export class ParticleSystem {
         col[i * 4 + 3] = 0;
         continue;
       }
+      live++;
+      hi = i;
       const t = 1 - life[i] / this.maxLife[i];
       const sz = this.s0[i] + (this.s1[i] - this.s0[i]) * Math.sqrt(t);
       let x = pos[p];
@@ -507,6 +526,8 @@ export class ParticleSystem {
       alive++;
     }
     this.alive = alive;
+    this.live = live;
+    this.top = hi + 1;
 
     // Back to front: counting sort on sqrt(depth).
     const counts = this.counts;
@@ -528,11 +549,18 @@ export class ParticleSystem {
 
     const geo = this.points.geometry;
     geo.setDrawRange(0, alive);
-    for (const name of ['position', 'pcolor', 'size', 'pdata']) {
-      const at = geo.getAttribute(name) as THREE.BufferAttribute;
-      at.needsUpdate = true;
+    // Upload only the slots in use.
+    if (top > 0) {
+      for (const at of this.attrs) {
+        at.clearUpdateRanges();
+        at.addUpdateRange(0, top * at.itemSize);
+        at.needsUpdate = true;
+      }
+      const ix = geo.index!;
+      ix.clearUpdateRanges();
+      ix.addUpdateRange(0, Math.max(1, alive));
+      ix.needsUpdate = true;
     }
-    geo.index!.needsUpdate = true;
 
     // Lighting in view space.
     const u = this.material.uniforms;

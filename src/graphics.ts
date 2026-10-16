@@ -45,7 +45,7 @@ export const PROFILES: Record<Quality, Profile> = {
     clutterScale: 1,
     farScale: 1,
     smoke: 1,
-    cloudSteps: 48,
+    cloudSteps: 36,
   },
   medium: {
     pixelRatio: 1,
@@ -61,7 +61,7 @@ export const PROFILES: Record<Quality, Profile> = {
     clutterScale: 0.7,
     farScale: 0.85,
     smoke: 0.75,
-    cloudSteps: 28,
+    cloudSteps: 22,
   },
   low: {
     pixelRatio: 0.75,
