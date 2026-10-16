@@ -280,6 +280,10 @@ export class Humvee implements PlayerTarget {
   get onGround() {
     return this.contacts >= 3;
   }
+  /** World height of the wheels' contact plane (for the Carrier interface). */
+  get gearBottom() {
+    return this.pos.y;
+  }
   get loadable() {
     return this.contacts >= 3 && this.groundSpeed < 0.6;
   }

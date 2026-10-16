@@ -1,12 +1,12 @@
 import * as THREE from 'three';
 import { approach, clamp, smoothstep } from '../util/math';
-import { GEAR_Y, HULL_POINTS, WHEELS } from './chinookModel';
 
 export const G = 9.81;
 
 export interface FlightEnv {
-  surfaceAt(x: number, z: number): number;
-  normalAt(x: number, z: number, out: THREE.Vector3): THREE.Vector3;
+  /** Ground height, or the top of a structure (a roof) no higher than `y` when given. */
+  surfaceAt(x: number, z: number, y?: number): number;
+  normalAt(x: number, z: number, out: THREE.Vector3, y?: number): THREE.Vector3;
   wind: THREE.Vector3;
 }
 
@@ -19,6 +19,27 @@ export interface FlightInput {
 }
 
 export const SAS_NAMES = ['RATE (manual)', 'ATTITUDE HOLD', 'HOVER HOLD'];
+
+/** What makes one airframe fly differently from another. */
+export interface FlightSpec {
+  emptyMass: number;
+  fuelCapacity: number;
+  /** Rotor thrust at full collective and RPM, sea level (kg). */
+  maxThrustKg: number;
+  /** Pitch, yaw, roll inertia (kg m²) at `refMass`, scaled with mass. */
+  inertia: [number, number, number];
+  refMass: number;
+  /** Quadratic fuselage drag along body x, y, z. */
+  drag: [number, number, number];
+  /** Fuel flow scale (1 = the Chinook's twin turbines). */
+  fuelBurn: number;
+  /** Control rate and authority scale (1 = Chinook). */
+  agility: number;
+  /** Gear contact plane, wheel or skid contact points, hull scrape points (body frame). */
+  gearY: number;
+  wheels: THREE.Vector3[];
+  hull: THREE.Vector3[];
+}
 
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -33,6 +54,18 @@ const UP = new THREE.Vector3(0, 1, 0);
  * Linear state in world frame, angular velocity in body frame.
  */
 export class FlightModel {
+  constructor(public spec: FlightSpec) {
+    this.setSpec(spec);
+  }
+
+  /** Change airframe (aircraft swap): mass, tanks and handling. */
+  setSpec(spec: FlightSpec) {
+    this.spec = spec;
+    this.emptyMass = spec.emptyMass;
+    this.fuelCapacity = spec.fuelCapacity;
+    this.fuel = Math.min(this.fuel, spec.fuelCapacity);
+  }
+
   pos = new THREE.Vector3();
   vel = new THREE.Vector3();
   quat = new THREE.Quaternion();
@@ -92,7 +125,7 @@ export class FlightModel {
   }
 
   get maxThrust() {
-    return 25000 * G * this.thrustScale;
+    return this.spec.maxThrustKg * G * this.thrustScale;
   }
 
   get landed() {
@@ -101,8 +134,9 @@ export class FlightModel {
 
   /** Inertia (body x = pitch, y = yaw, z = roll), scaled with mass. */
   inertia(out: THREE.Vector3) {
-    const s = this.mass / 12500;
-    return out.set(2.6e5 * s, 2.4e5 * s, 6.5e4 * s);
+    const s = this.mass / this.spec.refMass;
+    const I = this.spec.inertia;
+    return out.set(I[0] * s, I[1] * s, I[2] * s);
   }
 
   /** Apply a world-space impulse at a world-space point. */
@@ -166,8 +200,9 @@ export class FlightModel {
     this.airspeed = va.length();
     this.groundSpeed = Math.hypot(this.vel.x, this.vel.z);
     this.vs = this.vel.y;
-    const ground = env.surfaceAt(this.pos.x, this.pos.z);
-    this.agl = this.pos.y + GEAR_Y - ground;
+    // Height above whatever is below the gear: the ground, or a roof.
+    const ground = env.surfaceAt(this.pos.x, this.pos.z, this.pos.y + this.spec.gearY + 0.6);
+    this.agl = this.pos.y + this.spec.gearY - ground;
 
     // --- Engines & rotor RPM ------------------------------------------
     const fuelOk = this.fuel > 0;
@@ -185,7 +220,7 @@ export class FlightModel {
       this.rpm = Math.max(rpmTarget, this.rpm + (windmill * (1.06 - this.rpm) * 2.2 - decay * this.rpm) * dt);
     }
     this.rpm = clamp(this.rpm, 0, 1.1);
-    if (this.engineSpool > 0.02 && fuelOk) this.fuel = Math.max(0, this.fuel - (0.25 + 1.1 * inp.collective) * this.engineSpool * dt);
+    if (this.engineSpool > 0.02 && fuelOk) this.fuel = Math.max(0, this.fuel - (0.25 + 1.1 * inp.collective) * this.spec.fuelBurn * this.engineSpool * dt);
     this.torquePct = (inp.collective / 0.9) * 100 * drive;
 
     // --- Rotor thrust ---------------------------------------------------
@@ -207,9 +242,9 @@ export class FlightModel {
     F.y -= m * G;
     // Fuselage drag (body frame, quadratic) + rotor damping.
     const db = new THREE.Vector3(
-      -28 * Math.abs(vaBody.x) * vaBody.x - m * 0.05 * vaBody.x * this.rpm,
-      -22 * Math.abs(vaBody.y) * vaBody.y,
-      -7 * Math.abs(vaBody.z) * vaBody.z - m * 0.025 * vaBody.z * this.rpm,
+      -this.spec.drag[0] * Math.abs(vaBody.x) * vaBody.x - m * 0.05 * vaBody.x * this.rpm,
+      -this.spec.drag[1] * Math.abs(vaBody.y) * vaBody.y,
+      -this.spec.drag[2] * Math.abs(vaBody.z) * vaBody.z - m * 0.025 * vaBody.z * this.rpm,
     ).applyQuaternion(q);
     F.add(db);
     F.y -= m * 0.26 * va.y * this.rpm;
@@ -227,8 +262,8 @@ export class FlightModel {
         const hfw = _v3.set(fwd.x, 0, fwd.z).normalize();
         const wf = env.wind.x * hfw.x + env.wind.z * hfw.z;
         const wr = env.wind.x * -hfw.z + env.wind.z * hfw.x;
-        const af = (0.025 * this.rpm * wf + (7 * Math.abs(wf) * wf) / m) / G;
-        const ar = (0.05 * this.rpm * wr + (28 * Math.abs(wr) * wr) / m) / G;
+        const af = (0.025 * this.rpm * wf + (this.spec.drag[2] * Math.abs(wf) * wf) / m) / G;
+        const ar = (0.05 * this.rpm * wr + (this.spec.drag[0] * Math.abs(wr) * wr) / m) / G;
         tp += Math.atan(af) * trimF;
         tr -= Math.atan(ar) * trimF;
       }
@@ -242,14 +277,15 @@ export class FlightModel {
         tp = clamp(vf * 0.05, -0.18, 0.18);
         tr = clamp(-vr * 0.05, -0.18, 0.18);
       }
-      wDes.x = clamp(1.6 * (tp - this.pitch), -0.42, 0.42);
-      wDes.z = clamp(-1.7 * (tr - this.roll), -0.6, 0.6);
+      const ag = this.spec.agility;
+      wDes.x = clamp(1.6 * ag * (tp - this.pitch), -0.42 * ag, 0.42 * ag);
+      wDes.z = clamp(-1.7 * ag * (tr - this.roll), -0.6 * ag, 0.6 * ag);
     } else {
       wDes.x = -inp.pitch * 0.45 - this.pitch * 0.12;
       wDes.z = -inp.roll * 0.7 + this.roll * 0.12;
     }
     // Yaw about the world vertical: pedals, coordinated turns and weathervaning.
-    let yawW = -inp.yaw * 0.55 * (1 - 0.45 * hsF);
+    let yawW = -inp.yaw * 0.55 * this.spec.agility * (1 - 0.45 * hsF);
     yawW += ((-G * Math.tan(clamp(this.roll, -1.1, 1.1))) / Math.max(hs, 12)) * hsF * (this.sas >= 1 ? 1 : 0.6);
     yawW += -clamp(vaBody.x / Math.max(hs, 8), -1, 1) * 0.7 * hsF;
     const worldUpB = _v3.copy(UP).applyQuaternion(_qi);
@@ -257,7 +293,7 @@ export class FlightModel {
 
     const hoverRatio = T / (m * G);
     const auth = this.rpm * this.rpm * clamp(0.18 + hoverRatio * 0.9, 0.18, 1.15);
-    const iscale = Math.sqrt(m / 12500);
+    const iscale = Math.sqrt(m / this.spec.refMass) / this.spec.agility;
     const aMax = [1.5 * auth / iscale, 1.0 * auth / iscale, 2.0 * auth / iscale];
     const kR = 4.5;
     const w = this.angVel;
@@ -287,10 +323,10 @@ export class FlightModel {
       const px = this.pos.x + r.x;
       const py = this.pos.y + r.y;
       const pz = this.pos.z + r.z;
-      const h = env.surfaceAt(px, pz);
+      const h = env.surfaceAt(px, pz, py + 0.6);
       const d = h - py;
       if (d <= 0) return;
-      env.normalAt(px, pz, _n);
+      env.normalAt(px, pz, _n, py + 0.6);
       const vp = new THREE.Vector3().crossVectors(omegaW, r).add(this.vel);
       const vn = vp.dot(_n);
       const kk = isWheel ? k : k * 2.5;
@@ -312,8 +348,8 @@ export class FlightModel {
       else hull++;
       worstVn = Math.min(worstVn, vn);
     };
-    for (const wl of WHEELS) doContact(wl, true);
-    for (const hp of HULL_POINTS) doContact(hp, false);
+    for (const wl of this.spec.wheels) doContact(wl, true);
+    for (const hp of this.spec.hull) doContact(hp, false);
     this.contacts = contacts;
     this.hullContact = hull;
     if (contacts > 0 && this.prevContacts === 0) this.onTouchdown?.(this.vel.y);

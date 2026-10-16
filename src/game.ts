@@ -17,7 +17,6 @@ import { FarmWork } from './game/farmwork';
 import { Campaign, CAMPAIGN_VERSION, SECTOR_COUNT } from './battle/campaign';
 import { Battle } from './battle/battle';
 import { AirOps } from './battle/air';
-import { CABIN } from './heli/chinookModel';
 import * as soldierKit from './game/soldiers';
 import type { PlayerTarget } from './game/target';
 import { Humvee, type GroundEnv } from './vehicles/humvee';
@@ -33,6 +32,8 @@ import type { Site } from './world/sites';
 import { WATER_LEVEL } from './world/terrain';
 import { enterFullscreen, toggleFullscreen } from './fullscreen';
 import { activePad, padName } from './input';
+import { AIRFRAMES, type AircraftId } from './heli/airframe';
+import { battleZone, Rooftops } from './game/rooftops';
 import { AutoScaler, loadSetting, lower, PROFILES, resolve, saveSetting, type GraphicsSetting, type Quality } from './graphics';
 
 const STEP = 1 / 120;
@@ -129,6 +130,7 @@ export class Game {
     this.scene.add(this.heli.root);
 
     this.cargo = new CargoManager(this.world.terrain, this.rng.fork());
+    this.cargo.colliders = this.world.colliders;
     this.scene.add(this.cargo.group);
     this.sling = new SlingSystem(this.world.terrain);
     this.scene.add(this.sling.group);
@@ -229,11 +231,22 @@ export class Game {
 
     const terrain = this.world.terrain;
     this.flightEnv = {
-      surfaceAt: (x, z) => terrain.surfaceAt(x, z),
-      normalAt: (x, z, o) => (terrain.heightAt(x, z) < WATER_LEVEL ? o.set(0, 1, 0) : terrain.normalAt(x, z, o)),
+      // Roofs and other flat structure tops below the gear count as ground (rooftop landings).
+      surfaceAt: (x, z, y) => {
+        const t = terrain.surfaceAt(x, z);
+        return y === undefined ? t : Math.max(t, this.world.colliders.topAt(x, z, y));
+      },
+      normalAt: (x, z, o, y) => {
+        if (y !== undefined && this.world.colliders.topAt(x, z, y) > terrain.surfaceAt(x, z)) return o.set(0, 1, 0);
+        return terrain.heightAt(x, z) < WATER_LEVEL ? o.set(0, 1, 0) : terrain.normalAt(x, z, o);
+      },
       wind: this.wind,
     };
 
+    this.missions.rooftops = new Rooftops(this.world);
+    this.missions.towns = this.world.towns;
+    this.missions.battleZone = (t) => battleZone(this.world, t);
+    this.heli.setAirframe(AIRFRAMES[career.data.aircraft ?? 'chinook']);
     this.heli.fm.sas = career.data.sas;
     this.input.controlMode = career.data.controlMode ?? 'virtual';
     if (!career.data.controls) {
@@ -313,16 +326,44 @@ export class Game {
     this.resize();
   }
 
+  /**
+   * Change aircraft at a hangar: the new one is wheeled out onto the same
+   * spot, fuelled to the same fraction, engines off.
+   */
+  switchAircraft(id: AircraftId): string | null {
+    const h = this.heli;
+    const af = AIRFRAMES[id];
+    if (h.airframe === af) return null;
+    if (this.mode !== 'fly' || !h.onGround || h.fm.groundSpeed > 0.5) return 'Land and stop first';
+    if (this.missions.active) return 'Finish or abandon your contract first';
+    const frac = h.fm.fuel / h.fm.fuelCapacity;
+    const at = h.fm.pos.clone();
+    const heading = h.fm.heading;
+    h.setAirframe(af);
+    this.applyUpgrades();
+    h.spawn(at, heading);
+    h.fm.fuel = frac * h.fm.fuelCapacity;
+    h.flares = h.maxFlares;
+    this.input.collective = 0;
+    this.career.data.aircraft = id;
+    this.career.save();
+    this.cam.snap();
+    this.toast(`${af.name} ready — ${id === 'littlebird' ? 'six operators on the pods, no cargo hook or ramp' : 'cabin for 30, ramp and cargo hook'}`, 'good');
+    return null;
+  }
+
   applyUpgrades() {
     const u = this.career.data.upgrades;
     const fm = this.heli.fm;
+    const af = this.heli.airframe;
     fm.thrustScale = 1 + 0.06 * u.engine;
     this.heli.armor = 0.2 * u.armor;
-    fm.extraMass = 350 * u.armor;
+    // Armor plate weighs in proportion to the airframe it covers.
+    fm.extraMass = 350 * u.armor * (af.flight.emptyMass / 10400);
     const frac = fm.fuel / fm.fuelCapacity;
-    fm.fuelCapacity = 2400 * (1 + 0.3 * u.fuel);
+    fm.fuelCapacity = af.flight.fuelCapacity * (1 + 0.3 * u.fuel);
     fm.fuel = Math.min(fm.fuelCapacity, frac * fm.fuelCapacity);
-    this.heli.maxFlares = 30 + 16 * u.flares;
+    this.heli.maxFlares = Math.round(af.maxFlares * (1 + 0.53 * u.flares));
   }
 
   respawn(initial = false) {
@@ -565,8 +606,11 @@ export class Game {
       }
     }
     if (inp.take('ramp')) {
-      h.rampOpen = !h.rampOpen;
-      this.audio.click();
+      if (!h.airframe.hasRamp) this.toast('No ramp on the Little Bird: the team climbs on and hops off the benches, with you landed or in a low, steady hover', 'info');
+      else {
+        h.rampOpen = !h.rampOpen;
+        this.audio.click();
+      }
     }
     if (inp.take('sas')) {
       h.fm.sas = (h.fm.sas + 1) % 3;
@@ -577,7 +621,9 @@ export class Game {
       if (this.threats.dropFlares(h)) this.cam.shake += 0.2;
       else if (h.flares <= 0) this.toast('Flares depleted', 'bad');
     }
-    if (inp.take('hook')) {
+    const hookPressed = inp.take('hook');
+    if (hookPressed && !h.airframe.hasHook) this.toast('The Little Bird has no cargo hook', 'bad');
+    else if (hookPressed) {
       if (this.sling.hooked) {
         const l = this.sling.release();
         this.audio.clunk();
@@ -759,12 +805,12 @@ export class Game {
       underFire: this.threats.underFire > 0,
       crew: {
         frame: h.parts.exterior,
-        chiefSeat: CABIN.crewChief,
-        gunners: CABIN.gunners,
+        chiefSeat: h.airframe.cabin.crewChief,
+        gunners: h.airframe.cabin.gunners,
         guns: h.parts.doorGuns,
-        pilots: CABIN.pilots,
+        pilots: h.airframe.cabin.pilots,
         hidePilot: this.mode === 'fly' && this.cam.mode === 'cockpit',
-        hinge: CABIN.hinge,
+        hinge: h.airframe.cabin.hinge,
         rampT: h.rampT,
         marshalling: carrier === h && (lc.canLoad || lc.canUnload),
         visible: !h.crashed && h.parts.root.visible,
@@ -969,6 +1015,14 @@ export class Game {
         if (!h.rampDown) p = h.rampOpen ? 'Ramp lowering…' : `Press ${this.kb('ramp')} to lower the ramp`;
         else if (m.group.aboard < m.group.total) p = `Loading ${m.group.aboard}/${m.group.total} — hold position`;
       } else if (near) p = 'Land near the troops';
+    } else if (m && m.c.roof && (m.phase === 'transit' || m.phase === 'dropoff') && Math.hypot(fm.pos.x - m.c.roof.x, fm.pos.z - m.c.roof.z) < 150) {
+      // Rooftop insertion: talk the pilot into the hover.
+      const r = m.c.roof;
+      const g = m.group;
+      if (m.phase === 'dropoff' && g) p = `Team going off ${g.unloadedCount}/${g.total} — hold the hover`;
+      else if (h.airframe.hasRamp && !h.rampDown) p = h.rampOpen ? 'Ramp lowering…' : `Press ${this.kb('ramp')} to lower the ramp, then back it onto the roof edge`;
+      else if (h.airframe.hasRamp) p = `Back the ramp onto the roof — ramp end ${Math.max(0, h.rampEndWorld(new THREE.Vector3()).y - r.y).toFixed(1)} m above it, hold steady`;
+      else p = `Low hover over the roof — skids ${Math.max(0, h.gearBottom - r.y).toFixed(1)} m above it (under 2.5), hold steady`;
     } else if (m && m.phase === 'transit' && m.internal && h.rampOpen && fm.contacts === 0 && fm.groundSpeed > 15) p = `Ramp is down — press ${this.kb('ramp')} to raise it`;
     else if (m && m.phase === 'transit' && m.internal) {
       const d = Math.hypot(fm.pos.x - m.dropPos.x, fm.pos.z - m.dropPos.z);

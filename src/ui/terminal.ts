@@ -3,7 +3,8 @@ import type { Site } from '../world/sites';
 import { SITE_KIND_LABEL } from '../world/sites';
 import { fmtDist, fmtMoney, fmtTime } from '../util/math';
 import { RANKS, UPGRADES } from '../game/career';
-import type { Contract, Payout } from '../game/missions';
+import { fitsAircraft, type Contract, type Payout } from '../game/missions';
+import { AIRFRAMES, type AircraftId } from '../heli/airframe';
 
 type Tab = 'contracts' | 'services' | 'hangar' | 'front' | 'career';
 
@@ -55,6 +56,10 @@ export class Terminal {
       return;
     } else if (act === 'accept') {
       const c = this.contracts().find((x) => x.id === Number(b.dataset.id));
+      if (c && !fitsAircraft(c, g.heli.airframe)) {
+        g.toast(`Too much for the ${g.heli.airframe.short}: it takes up to ${g.heli.airframe.seats} troops and nothing else. Switch aircraft in a hangar.`, 'bad');
+        return;
+      }
       if (c) {
         g.missions.accept(c);
         g.audio.beepOk();
@@ -96,6 +101,17 @@ export class Terminal {
         g.heli.flares += n;
         g.audio.cash();
       }
+    } else if (act === 'buyAircraft') {
+      const af = AIRFRAMES[b.dataset.id as AircraftId];
+      const owned = g.career.data.owned ?? ['chinook'];
+      if (af && !owned.includes(af.id) && g.career.rank >= af.minRank && g.career.spend(af.price)) {
+        g.career.data.owned = [...owned, af.id];
+        g.audio.cash();
+        g.toast(`${af.name} purchased — select it to fly it`, 'good');
+      }
+    } else if (act === 'flyAircraft') {
+      const err = g.switchAircraft(b.dataset.id as AircraftId);
+      if (err) g.toast(err, 'bad');
     } else if (act === 'upgrade') {
       const id = b.dataset.id as keyof typeof g.career.data.upgrades;
       const def = UPGRADES.find((u) => u.id === id)!;
@@ -164,7 +180,7 @@ export class Terminal {
         <div class="job ${locked ? 'locked' : ''}">
           <div class="ico">${c.type.icon}</div>
           <div>
-            <div class="name">${esc(c.type.name)}${c.mode === 'ground' ? ' <span class="road">🚙 ROAD</span>' : ' <span class="air">🚁 AIR</span>'}${c.type.urgent ? ' <span class="risk r3">URGENT</span>' : ''}</div>
+            <div class="name">${esc(c.type.name)}${c.mode === 'ground' ? ' <span class="road">🚙 ROAD</span>' : ' <span class="air">🚁 AIR</span>'}${c.type.urgent ? ' <span class="risk r3">URGENT</span>' : ''}${c.mode === 'air' ? (fitsAircraft(c, { id: 'littlebird', seats: 6 }) ? ' <span class="air">LITTLE BIRD OK</span>' : ' <span class="road">CHINOOK ONLY</span>') : ''}</div>
             <div class="route">${remote ? `Pickup at <b>${esc(c.from.name)}</b> → ` : ''}${esc(c.to.name)} <span style="color:#8e9a89">(${SITE_KIND_LABEL[c.to.kind]})</span></div>
             <div class="meta"><span>${c.mode === 'ground' ? `${fmtDist(c.route ?? c.distance)} by road` : fmtDist(c.distance)}</span><span>${what}</span><span>⏱ ${fmtTime(c.timeLimit)}</span>
               <span class="risk ${c.risk >= 3 ? 'r3' : ''}">${'●'.repeat(c.risk)}${'○'.repeat(3 - c.risk)}</span></div>
@@ -213,7 +229,27 @@ export class Terminal {
 
   private renderHangar(): string {
     const g = this.game;
-    let html = '<p style="color:#a9b5a3;margin-top:0">Upgrades are permanent and apply immediately.</p>';
+    const owned = g.career.data.owned ?? ['chinook'];
+    const flying = g.heli.airframe.id;
+    let html = '<h3 style="color:#9dff9d;font-size:13px;letter-spacing:2px;margin:0 0 6px">AIRCRAFT</h3>';
+    const blurb: Record<AircraftId, string> = {
+      chinook: 'Tandem-rotor heavy lift: 30 seats, litters, pallets, rear ramp and cargo hook.',
+      littlebird: 'Light assault: six operators on outside benches, fast and nimble. Troop jobs of up to six and rooftop special-forces drops. No ramp or hook.',
+    };
+    for (const af of Object.values(AIRFRAMES)) {
+      const have = owned.includes(af.id);
+      const locked = g.career.rank < af.minRank;
+      const btn =
+        af.id === flying
+          ? '<button disabled>FLYING</button>'
+          : have
+            ? `<button data-act="flyAircraft" data-id="${af.id}">Fly this</button>`
+            : locked
+              ? `<button disabled>${RANKS[af.minRank].short}+</button>`
+              : `<button data-act="buyAircraft" data-id="${af.id}" ${g.career.data.money < af.price ? 'disabled' : ''}>${fmtMoney(af.price)}</button>`;
+      html += `<div class="svc"><div><div class="t">${af.name}</div><div class="d">${blurb[af.id]}${locked && !have ? ` Requires ${RANKS[af.minRank].name}.` : ''}</div></div>${btn}</div>`;
+    }
+    html += '<p style="color:#a9b5a3;margin:14px 0 6px">Upgrades are permanent, apply immediately, and carry over to every aircraft.</p>';
     for (const u of UPGRADES) {
       const lvl = g.career.data.upgrades[u.id];
       const next = u.levels[lvl];

@@ -70,6 +70,9 @@ export interface SaveData {
   controlMode?: 'virtual' | 'direct';
   /** Control layout: GTA-style (default) or the original simulator layout. */
   controls?: 'gta' | 'sim';
+  /** The aircraft being flown, and the ones owned (the Chinook is issued). */
+  aircraft?: 'chinook' | 'littlebird';
+  owned?: ('chinook' | 'littlebird')[];
   /** The state of the war along the front. */
   campaign?: CampaignData;
 }

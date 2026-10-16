@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { rotorDiscTexture } from '../util/textures';
 import { mergeStatic } from '../util/mergeStatic';
+import type { FlightSpec } from './flight';
 
 /**
  * Procedural CH-47 style tandem-rotor helicopter.
@@ -35,6 +36,21 @@ export const HULL_POINTS = [
   new THREE.Vector3(0, 2.2, 0),
   new THREE.Vector3(0, 5.2, 6.0),
 ];
+
+/** CH-47 handling (the original tuning). */
+export const CHINOOK_FLIGHT: FlightSpec = {
+  emptyMass: 10400,
+  fuelCapacity: 2400,
+  maxThrustKg: 25000,
+  inertia: [2.6e5, 2.4e5, 6.5e4],
+  refMass: 12500,
+  drag: [28, 22, 7],
+  fuelBurn: 1,
+  agility: 1,
+  gearY: GEAR_Y,
+  wheels: WHEELS,
+  hull: HULL_POINTS,
+};
 
 export interface ChinookParts {
   root: THREE.Group;

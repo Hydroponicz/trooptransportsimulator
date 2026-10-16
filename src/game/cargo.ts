@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import type { ColliderSet } from '../world/colliders';
+import type { Rooftop } from './rooftops';
 import type { Terrain } from '../world/terrain';
 import type { RNG } from '../util/noise';
 import {
@@ -73,6 +75,12 @@ export interface CabinLayout {
   pallets: THREE.Vector3[];
   /** Footprint people walk around on the ground: |x| < halfWidth, front < z < back. */
   hull: { halfWidth: number; front: number; back: number };
+  /**
+   * Seats are on outside benches (the Little Bird's pods): each passenger
+   * climbs on and hops off beside his own seat instead of going through a
+   * ramp and an aisle.
+   */
+  sideBenches?: boolean;
 }
 
 export interface CrewStation {
@@ -82,7 +90,8 @@ export interface CrewStation {
 
 export interface CrewContext {
   frame: THREE.Object3D;
-  chiefSeat: THREE.Vector3;
+  /** Crew chief's jump seat (none in a Little Bird). */
+  chiefSeat: THREE.Vector3 | null;
   /** Door and window gunners. */
   gunners: CrewStation[];
   /** Their guns, which they keep their hands on as the guns swivel. */
@@ -360,6 +369,8 @@ export class CargoGroup {
   hostile = false;
   /** 0..1: rises at once when the aircraft takes fire, eases off slowly after. */
   urgency = 0;
+  /** Put down on a roof (rooftop insertion): they step off only onto it, and hold a perimeter there. */
+  roof: Rooftop | null = null;
   /** Delivered: remove once everyone is indoors (or after a while). */
   retiring = false;
   retireT = 0;
@@ -398,6 +409,8 @@ export class CargoManager {
   groups: CargoGroup[] = [];
   onBoard: ((g: CargoGroup, a: Actor) => void) | null = null;
   onUnboard: ((g: CargoGroup, a: Actor) => void) | null = null;
+  /** Structures people can stand on (roofs, docks): set by the game. */
+  colliders: ColliderSet | null = null;
   private renderer = new SoldierRenderer(110);
   private taken = new WeakMap<THREE.Object3D, Set<string>>();
   private chief: Person;
@@ -550,6 +563,40 @@ export class CargoManager {
     for (const g of [...this.groups]) this.remove(g);
   }
 
+  /** Unloading onto a roof: perimeter positions round the clear patch, weapons up. */
+  setRoof(g: CargoGroup, roof: Rooftop) {
+    g.roof = roof;
+    g.hostile = true;
+  }
+
+  /** Underfoot at (x, z) for someone whose feet are at y: the ground, or a roof or step no more than a stride up. */
+  private groundY(x: number, z: number, y: number): number {
+    const t = this.terrain.heightAt(x, z);
+    if (!this.colliders) return t;
+    return Math.max(t, this.colliders.topAt(x, z, y + 0.6));
+  }
+
+  /** Is there roof under this world point (for stepping off in a hover)? */
+  private overRoof(g: CargoGroup, p: THREE.Vector3): boolean {
+    const r = g.roof;
+    if (!r || !this.colliders) return true;
+    return Math.abs(this.colliders.topAt(p.x, p.z, r.y + 0.6) - r.y) < 0.4 && Math.hypot(p.x - r.x, p.z - r.z) < r.clear + 1.5;
+  }
+
+  /** A spot on the roof's clear patch for this member of the team, on the side he came off. */
+  private roofSpot(g: CargoGroup, a: Actor, from: THREE.Vector3): THREE.Vector3 {
+    const r = g.roof!;
+    const i = g.actors.indexOf(a);
+    const ang = Math.atan2(from.x - r.x, from.z - r.z) + ((i % 3) - 1) * 0.55;
+    const rad = Math.max(0.8, Math.min(r.clear - 0.8, 3.4)) * (0.75 + 0.25 * ((i * 7) % 4) / 3);
+    return new THREE.Vector3(r.x + Math.sin(ang) * rad, r.y, r.z + Math.cos(ang) * rad);
+  }
+
+  /** Side-bench carriers: where someone stands beside his seat to climb on or hop off (carrier frame). */
+  private benchSide(seat: { pos: THREE.Vector3 }, out: number): THREE.Vector3 {
+    return new THREE.Vector3(seat.pos.x + Math.sign(seat.pos.x) * out, seat.pos.y, seat.pos.z);
+  }
+
   setRally(g: CargoGroup, at: THREE.Vector3) {
     g.actors.forEach((a, i) => {
       const ang = (i / Math.max(1, g.total)) * Math.PI * 1.2 - 0.6;
@@ -652,7 +699,16 @@ export class CargoManager {
 
   /** From the foot of the ramp to the rally point, or to the load's facility. */
   private exitPath(g: CargoGroup, a: Actor, ctx: LoadContext, frame: THREE.Object3D, L: CabinLayout): THREE.Vector3[] {
-    const stage = this.stagePoint(ctx, frame);
+    // Off the side benches they're already standing clear of the aircraft; off a ramp, a step behind it.
+    const stage = L.sideBenches ? a.pos.clone() : this.stagePoint(ctx, frame);
+    if (g.roof) {
+      // On a roof: straight to a spot on the clear patch (both inside it, so the line stays on the roof).
+      const r = g.roof;
+      const d = Math.hypot(stage.x - r.x, stage.z - r.z);
+      const lim = Math.max(0.5, r.clear - 0.6);
+      if (d > lim) stage.set(r.x + ((stage.x - r.x) / d) * lim, stage.y, r.z + ((stage.z - r.z) / d) * lim);
+      return [stage, this.roofSpot(g, a, stage)];
+    }
     const d = g.dest;
     if (!d) return [stage, ...this.around(stage, a.rally, frame, L)];
     const goal = a.kind === 'pallet' && d.area ? this.depotSlot(d, a) : d.approach.clone();
@@ -903,7 +959,7 @@ export class CargoManager {
         budget = 0;
       }
     }
-    if (a.space === 'world') a.pos.y = this.terrain.heightAt(a.pos.x, a.pos.z);
+    if (a.space === 'world') a.pos.y = this.groundY(a.pos.x, a.pos.z, a.pos.y);
     return a.path.length === 0;
   }
 
@@ -916,12 +972,12 @@ export class CargoManager {
     if (dist <= speed * dt) {
       p.pos.x = target.x;
       p.pos.z = target.z;
-      p.pos.y = space === 'world' ? this.terrain.heightAt(p.pos.x, p.pos.z) : target.y;
+      p.pos.y = space === 'world' ? this.groundY(p.pos.x, p.pos.z, p.pos.y) : target.y;
       gait(p.target, p.phase, 0);
       return true;
     }
     p.pos.addScaledVector(d, (speed * dt) / dist);
-    if (space === 'world') p.pos.y = this.terrain.heightAt(p.pos.x, p.pos.z);
+    if (space === 'world') p.pos.y = this.groundY(p.pos.x, p.pos.z, p.pos.y);
     else p.pos.y = target.y;
     p.phase += dt * speed * 2.6;
     gait(p.target, p.phase, speed);
@@ -1048,7 +1104,11 @@ export class CargoManager {
     g.frame = frame;
     g.layout = L;
     a.state = 'toRamp';
-    a.path = this.toRampPath(a.pos, ctx);
+    if (L.sideBenches) {
+      // Walk round to the outside of the bench, beside the seat.
+      const at = this.benchSide(L.seats[a.seats[0]], 0.85).applyMatrix4(frame.matrixWorld);
+      a.path = [...this.around(a.pos, at, frame, L), at];
+    } else a.path = this.toRampPath(a.pos, ctx);
     return true;
   }
 
@@ -1108,8 +1168,10 @@ export class CargoManager {
         p.inst.rifle = 'hands';
         if (this.follow(a, dt, 3.6)) {
           this.toCabin(a, frame);
-          // Up the ramp, along the aisle, to just in front of the seat.
-          a.path = [L.hinge.clone(), new THREE.Vector3(0, L.floor, seat.pos.z), new THREE.Vector3(seat.pos.x * 0.45, L.floor, seat.pos.z)];
+          // Up the ramp, along the aisle, to just in front of the seat; or straight up onto the bench.
+          a.path = L.sideBenches
+            ? [this.benchSide(seat, 0.35)]
+            : [L.hinge.clone(), new THREE.Vector3(0, L.floor, seat.pos.z), new THREE.Vector3(seat.pos.x * 0.45, L.floor, seat.pos.z)];
           a.state = 'inCabin';
         }
         break;
@@ -1166,7 +1228,9 @@ export class CargoManager {
         Object.assign(p.target, standJoints());
         p.inst.rifle = 'hands';
         if (a.timer > 0.6) {
-          a.path = [new THREE.Vector3(seat.pos.x * 0.45, L.floor, seat.pos.z), new THREE.Vector3(0, L.floor, seat.pos.z), L.hinge.clone(), this.rampLocal(ctx, frame)];
+          a.path = L.sideBenches
+            ? [this.benchSide(seat, 0.75)]
+            : [new THREE.Vector3(seat.pos.x * 0.45, L.floor, seat.pos.z), new THREE.Vector3(0, L.floor, seat.pos.z), L.hinge.clone(), this.rampLocal(ctx, frame)];
           a.state = 'exitCabin';
           this.release(a, frame);
         }
@@ -1175,7 +1239,13 @@ export class CargoManager {
       case 'exitCabin': {
         p.phase += dt * 2.4 * 2.6;
         gait(p.target, p.phase, 2.4, g.hostile ? 0.7 : 0.3);
-        if (this.follow(a, dt, 2.4)) {
+        if (a.path.length === 0 || this.follow(a, dt, 2.4)) {
+          // In a hover, only step (or hop) off where there is roof below; otherwise wait at the edge.
+          const at = _w.copy(a.pos).applyMatrix4(frame.matrixWorld);
+          if (g.roof && !(ctx.canUnload && this.overRoof(g, at))) {
+            idle(p.target, this.time, p.seed);
+            break;
+          }
           this.toWorld(a, frame);
           this.offloaded(g, a);
           a.path = this.exitPath(g, a, ctx, frame, L);
@@ -1770,30 +1840,34 @@ export class CargoManager {
 
   private updateCrew(dt: number, crew: CrewContext, out: SoldierInstance[]) {
     if (!crew.visible) return;
-    const F = crew.chiefSeat.y;
-    // Crew chief: on the ramp marshalling when it's open, on his jump seat otherwise.
-    const wantStand = crew.rampT > 0.6 ? 1 : 0;
-    this.chiefSeated += ((1 - wantStand) - this.chiefSeated) * Math.min(1, dt * 1.5);
-    const standAt = new THREE.Vector3(crew.hinge.x + 0.9, F, crew.hinge.z - 0.6);
-    const c = this.chief;
-    c.pos.lerpVectors(standAt, crew.chiefSeat, this.chiefSeated);
-    if (this.chiefSeated > 0.6) {
-      c.heading = turnTo(c.heading, Math.PI / 2, dt * 4);
-      sit(c.target);
-      c.target.headYaw = Math.sin(this.time * 0.25) * 0.6;
-    } else {
-      c.heading = turnTo(c.heading, Math.PI, dt * 4);
-      if (crew.marshalling) wave(c.target, this.time);
-      else {
-        Object.assign(c.target, standJoints());
-        c.target.headYaw = Math.sin(this.time * 0.5) * 0.5;
+    const crewList: Person[] = [];
+    const chiefSeat = crew.chiefSeat;
+    if (chiefSeat) {
+      const F = chiefSeat.y;
+      // Crew chief: on the ramp marshalling when it's open, on his jump seat otherwise.
+      const wantStand = crew.rampT > 0.6 ? 1 : 0;
+      this.chiefSeated += ((1 - wantStand) - this.chiefSeated) * Math.min(1, dt * 1.5);
+      const standAt = new THREE.Vector3(crew.hinge.x + 0.9, F, crew.hinge.z - 0.6);
+      const c = this.chief;
+      c.pos.lerpVectors(standAt, chiefSeat, this.chiefSeated);
+      if (this.chiefSeated > 0.6) {
+        c.heading = turnTo(c.heading, Math.PI / 2, dt * 4);
+        sit(c.target);
+        c.target.headYaw = Math.sin(this.time * 0.25) * 0.6;
+      } else {
+        c.heading = turnTo(c.heading, Math.PI, dt * 4);
+        if (crew.marshalling) wave(c.target, this.time);
+        else {
+          Object.assign(c.target, standJoints());
+          c.target.headYaw = Math.sin(this.time * 0.5) * 0.5;
+        }
       }
+      if (Math.abs(this.chiefSeated - 0.5) < 0.45) {
+        c.phase += dt * 4;
+        gait(c.target, c.phase, 1.2);
+      }
+      crewList.push(c);
     }
-    if (Math.abs(this.chiefSeated - 0.5) < 0.45) {
-      c.phase += dt * 4;
-      gait(c.target, c.phase, 1.2);
-    }
-    const crewList = [c];
     crew.gunners.forEach((st, i) => {
       const g = this.gunners[i];
       if (!g) return;

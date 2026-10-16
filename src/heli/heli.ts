@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { clamp, smoothstep } from '../util/math';
 import type { CabinLayout } from '../game/cargo';
 import type { DoorGunPort, PlayerTarget } from '../game/target';
-import { buildChinook, CABIN, AFT_HUB, FRONT_HUB, GEAR_Y, HOOK_POS, HULL_POINTS, ROTOR_RADIUS, type ChinookParts } from './chinookModel';
+import { CHINOOK, type Airframe, type AirframeParts, type AircraftId } from './airframe';
 import { FlightModel, type FlightEnv } from './flight';
 import type { World } from '../world/worldgen';
 
@@ -19,8 +19,13 @@ const _qi = new THREE.Quaternion();
 
 export class Heli implements PlayerTarget {
   readonly kind = 'air' as const;
-  fm = new FlightModel();
-  parts: ChinookParts;
+  /** The aircraft type being flown, and its scene parts (built once per type, kept for swaps). */
+  airframe: Airframe = CHINOOK;
+  fm = new FlightModel(CHINOOK.flight);
+  parts: AirframeParts;
+  /** Holds the current airframe's model (the scene keeps this one node across swaps). */
+  readonly root = new THREE.Group();
+  private built = new Map<AircraftId, AirframeParts>();
   hp = 100;
   armor = 0;
   crashed = false;
@@ -40,12 +45,9 @@ export class Heli implements PlayerTarget {
     private world: World,
     private events: HeliEvents,
   ) {
-    this.parts = buildChinook();
-    for (const hub of [FRONT_HUB, AFT_HUB])
-      for (let i = 0; i < 16; i++) {
-        const a = (i / 16) * Math.PI * 2;
-        this.rimPoints.push(new THREE.Vector3(hub.x + Math.cos(a) * ROTOR_RADIUS * 0.97, hub.y - 0.25, hub.z + Math.sin(a) * ROTOR_RADIUS * 0.97));
-      }
+    this.parts = this.partsFor(CHINOOK);
+    this.root.add(this.parts.root);
+    this.fitAirframe();
     this.fm.onTouchdown = (vs) => this.touchdown(vs);
     this.fm.onHullImpact = (s) => {
       if (this.spawnGrace > 0 || this.crashed) return;
@@ -54,14 +56,48 @@ export class Heli implements PlayerTarget {
     };
   }
 
-  get root() {
-    return this.parts.root;
+  private partsFor(af: Airframe): AirframeParts {
+    let p = this.built.get(af.id);
+    if (!p) this.built.set(af.id, (p = af.build()));
+    return p;
+  }
+
+  /** Rotor rim, door guns and flares for the current airframe. */
+  private fitAirframe() {
+    const af = this.airframe;
+    this.rimPoints = [];
+    for (const hub of af.rotorHubs)
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2;
+        this.rimPoints.push(new THREE.Vector3(hub.x + Math.cos(a) * af.rotorRadius * 0.97, hub.y - 0.25, hub.z + Math.sin(a) * af.rotorRadius * 0.97));
+      }
+    // Right door gun and left window gun (Chinook), pointing out through their openings.
+    this.doorGuns = af.cabin.gunners.map((g) => {
+      const sx = Math.sign(g.pos.x);
+      return { muzzle: new THREE.Vector3(sx * 2.7, g.pos.y + 1.0, g.pos.z), out: new THREE.Vector3(sx, 0, 0), aim: null, aimAge: 99, firing: false, onTarget: false };
+    });
+    this.gunLay = af.cabin.gunners.map(() => ({ yaw: 0, pitch: -0.2, flashT: 0 }));
+    this.maxFlares = af.maxFlares;
+    this.flares = Math.min(this.flares, this.maxFlares);
+  }
+
+  /** Change aircraft (on the ground at a hangar): new model, handling and cabin. Call spawn() after. */
+  setAirframe(af: Airframe) {
+    if (af === this.airframe) return;
+    this.root.remove(this.parts.root);
+    this.airframe = af;
+    this.parts = this.partsFor(af);
+    this.root.add(this.parts.root);
+    this.fm.setSpec(af.flight);
+    this.fitAirframe();
+    this.rampOpen = false;
+    this.rampT = 0;
   }
 
   /** Put the helicopter on the ground at a spot, engines off, fully repaired. */
   spawn(at: THREE.Vector3, heading: number) {
     const fm = this.fm;
-    fm.pos.set(at.x, this.world.terrain.surfaceAt(at.x, at.z) - GEAR_Y + 0.02, at.z);
+    fm.pos.set(at.x, this.world.terrain.surfaceAt(at.x, at.z) - this.airframe.flight.gearY + 0.02, at.z);
     fm.vel.set(0, 0, 0);
     fm.angVel.set(0, 0, 0);
     fm.quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -heading);
@@ -135,7 +171,7 @@ export class Heli implements PlayerTarget {
       }
     }
     const speed = fm.vel.length();
-    for (const hp of HULL_POINTS) {
+    for (const hp of this.airframe.flight.hull) {
       this.worldPoint(hp, _p);
       if (colliders.hit(_p, 0.1)) {
         if (speed > 5) return this.crash('Collision with structure');
@@ -159,25 +195,24 @@ export class Heli implements PlayerTarget {
       } else this.overtorqueTime = Math.max(0, this.overtorqueTime - dt);
       if (fm.fuel <= 0 && fm.engineOn) fm.engineOn = false;
     }
-    // Ramp.
+    // Ramp (the Little Bird has none: its benches are always open).
+    if (!this.airframe.hasRamp) this.rampOpen = false;
     this.rampT = clamp(this.rampT + (this.rampOpen ? dt : -dt) / 3.2, 0, 1);
     const e = smoothstep(0, 1, this.rampT);
-    this.parts.ramp.rotation.x = -1.3 + e * (1.3 + 0.2);
-    this.parts.rearOpening.visible = false;
+    if (this.parts.ramp) this.parts.ramp.rotation.x = -1.3 + e * (1.3 + 0.2);
     // Cabin lights: bright with the ramp open, dim night lighting otherwise.
-    this.parts.cabinLight.intensity = 5 + e * 7;
+    if (this.parts.cabinLight) this.parts.cabinLight.intensity = 5 + e * 7;
 
-    // Rotors: CCW forward, CW aft (seen from above), 225 RPM at 100%.
-    this.rotorAngle += fm.rpm * 23.6 * dt;
-    this.parts.frontRotor.rotation.y = this.rotorAngle;
-    this.parts.aftRotor.rotation.y = -this.rotorAngle + 0.5;
+    // Rotors (each at its own rate and sense), blades blurring into a disc as they spin up.
+    this.rotorAngle += fm.rpm * dt;
+    for (const r of this.parts.rotors) r.g.rotation[r.axis] = this.rotorAngle * r.rate + r.phase;
     const blur = smoothstep(0.35, 0.75, fm.rpm);
     this.parts.bladeMat.opacity = 1 - blur * 0.85;
     this.parts.bladeMat.depthWrite = blur < 0.5;
     this.parts.discMat.opacity = blur * 0.55;
-    // Blade coning under load.
+    // Blade coning under load (main rotors).
     const cone = -0.025 + fm.input.collective * fm.rpm * 0.06;
-    for (const b of [...this.parts.frontBlades, ...this.parts.aftBlades]) b.rotation.z = cone;
+    for (const r of this.parts.rotors) if (r.axis === 'y') for (const b of r.blades) b.rotation.z = cone;
 
     // Anti-collision strobe.
     this.strobeT += dt;
@@ -260,14 +295,14 @@ export class Heli implements PlayerTarget {
     return this.parts.exterior;
   }
   get cabinLayout(): CabinLayout {
-    return CABIN;
+    return this.airframe.cabin;
   }
   /** Computed from physics state (not the scene graph) so it's exact during substeps. */
   hookWorld(out: THREE.Vector3) {
-    return out.copy(HOOK_POS).applyQuaternion(this.fm.quat).add(this.fm.pos);
+    return out.copy(this.airframe.hookPos).applyQuaternion(this.fm.quat).add(this.fm.pos);
   }
   hookVelocity(out: THREE.Vector3) {
-    const r = HOOK_POS.clone().applyQuaternion(this.fm.quat);
+    const r = this.airframe.hookPos.clone().applyQuaternion(this.fm.quat);
     const w = this.fm.angVel.clone().applyQuaternion(this.fm.quat);
     return out.crossVectors(w, r).add(this.fm.vel);
   }
@@ -296,18 +331,23 @@ export class Heli implements PlayerTarget {
   get destroyed() {
     return this.crashed;
   }
-  readonly hitHalfLength = 7;
-  readonly hitRadius = 2.3;
-  /** Right door gun and left window gun, pointing out through their openings. */
-  readonly doorGuns: DoorGunPort[] = CABIN.gunners.map((g) => {
-    const sx = Math.sign(g.pos.x);
-    return { muzzle: new THREE.Vector3(sx * 2.7, g.pos.y + 1.0, g.pos.z), out: new THREE.Vector3(sx, 0, 0), aim: null, aimAge: 99, firing: false, onTarget: false };
-  });
+  get hitHalfLength() {
+    return this.airframe.hitHalfLength;
+  }
+  get hitRadius() {
+    return this.airframe.hitRadius;
+  }
+  /** Door guns (the Chinook's right door gun and left window gun; none on a Little Bird). */
+  doorGuns: DoorGunPort[] = [];
   /** Each gun's traverse and elevation relative to straight out of its opening. */
-  private gunLay = CABIN.gunners.map(() => ({ yaw: 0, pitch: -0.2, flashT: 0 }));
+  private gunLay: { yaw: number; pitch: number; flashT: number }[] = [];
   private gunT = 0;
   get onGround() {
     return this.fm.contacts >= 3;
+  }
+  /** World height of the skids or wheels (level attitude). */
+  get gearBottom() {
+    return this.fm.pos.y + this.airframe.flight.gearY;
   }
   get loadFactor() {
     return this.fm.loadFactor;
@@ -319,8 +359,9 @@ export class Heli implements PlayerTarget {
     return this.fm.pitch;
   }
 
+  /** Ramp fully down (always "open" on the Little Bird's benches). */
   get rampDown() {
-    return this.rampT > 0.97;
+    return !this.airframe.hasRamp || this.rampT > 0.97;
   }
 
   /** On the ground, stable, and slow enough for loading. */

@@ -77,6 +77,48 @@ gun shudders and flashes with each burst. The gunner swivels on his seat to
 follow it, with both hands on the grips, head down behind the gun. With
 nothing to shoot at, he sweeps the ground slowly.
 
+### The Little Bird
+
+From Chief Warrant Officer 2 you can buy an **MH-6 Little Bird** ($60,000)
+in any base hangar, then pick which aircraft to fly there (land and stop,
+no active contract). Upgrades carry over: armor and fuel scale to the
+airframe. It is a small, fast, very agile light helicopter: a black egg
+cabin flown with the doors off, a six-blade rotor, a T-tail, skids, and an
+outside bench (a "people pod") on each side for three operators, facing
+out with their legs over the edge. It has no ramp and no cargo hook, so it
+takes troop jobs of up to six people (the contract list marks each job
+**LITTLE BIRD OK** or **CHINOOK ONLY**) and the rooftop insertions below.
+Passengers walk round to their own seat and climb onto the bench, and hop
+off beside it, landed or from a low hover.
+
+### Rooftop insertions
+
+Bases and FOBs offer **Rooftop Insertion (SF)** contracts: put a team of
+four to six special-forces operators on the roof of a tall building in a
+town or city, inside a tight window. Towns in a battle zone (contested, or
+close to the front) are picked first; there the roof is marked with red
+smoke and enemy machine guns in the streets shoot at you while you hold the
+hover. Elsewhere it's yellow smoke and just the clock. The drop point is
+the clearest flat patch on the roof deck, away from lift rooms and vents.
+
+You don't land:
+
+- **Little Bird**: come to a low, steady hover over the smoke, skids within
+  about 2.5 m of the roof. The team hops off the benches on both sides.
+- **Chinook**: lower the ramp, then back the ramp onto the roof edge, its end
+  on or up to about 1.8 m above the roof. The fuselage can hang off the side
+  of the building. The team walks down the ramp onto the roof.
+
+Hold the hover (slower than 2 m/s) until everyone is off: anyone still
+aboard waits at the edge until there is roof under them again. On the roof
+the team spreads round the clear patch and kneels in a perimeter, weapons
+up. Missing the window by more than 45 s fails the contract. A clean hover
+insertion that never touches down earns a bonus.
+
+Roofs are solid for landing too: the gear can stand on any flat roof or
+structure top, and the radar altitude and the climb assist read from
+whatever is below you.
+
 ## Soldiers
 
 Every soldier, from your passengers to base helpers to frontline infantry,
@@ -467,14 +509,17 @@ src/
   camera.ts          chase (near / mid / far), cockpit, hook and cinematic cameras
   game.ts            game loop, glue between systems, prompts, crash/respawn
   graphics.ts        graphics presets, GPU detection, Auto's resolution scaler
-  heli/flight.ts     flight model (thrust, drag, control laws, ground contact)
+  heli/flight.ts     flight model (thrust, drag, control laws, ground contact), tuned per airframe
+  heli/airframe.ts   aircraft types (Chinook, Little Bird): model, rotors, gear, cabin, handling, price
+  heli/littleBirdModel.ts  procedural MH-6 Little Bird with bench pods, its handling and seats
   heli/heli.ts       aircraft entity: damage, ramp, rotors, collisions
   heli/chinookModel.ts  procedural CH-47: lofted hull with see-through glazing, cockpit, cabin, crew stations
   vehicles/humvee.ts drivable Humvee: suspension, tires, drivetrain, model
   vehicles/models.ts AI vehicle models (truck, tanker, HMMWV, MRAP) with animated wheels
   game/traffic.ts    AI supply convoys and civilian traffic: routing, steering, following, braking
   game/farmwork.ts   tractors and combines working the fields
-  game/missions.ts   contracts, pay, mission phases, payouts
+  game/missions.ts   contracts, pay, mission phases, payouts, rooftop hover drops
+  game/rooftops.ts   finds flat roof drop points on town buildings
   game/cargo.ts      boarding: troops, litter teams and pallet crews loading, securing and riding in the cabin
   game/soldiers.ts   instanced articulated soldier models and their poses (gait, idle, rifle carries with arm IK, kneel/prone/aim, tasks), with LOD
   game/sling.ts      hook, rope constraint, slung-load physics

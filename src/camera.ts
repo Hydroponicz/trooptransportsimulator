@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import type { Heli } from './heli/heli';
 import type { Humvee } from './vehicles/humvee';
-import { COCKPIT_POS, HOOK_POS } from './heli/chinookModel';
 import { clamp, damp } from './util/math';
 import type { Terrain } from './world/terrain';
 
@@ -149,16 +148,18 @@ export class CameraRig {
       if (!this.initialized) this.heading = fm.heading;
       if (this.mode === 'orbit') this.orbitA += dt * 0.12;
       const yaw = this.heading + this.yawOff + (this.lookBack ? Math.PI : 0) + this.orbitA * (this.mode === 'orbit' ? 1 : 0);
-      const d = this.mode === 'orbit' ? this.dist * 1.6 : this.dist;
+      // Smaller aircraft, closer camera.
+      const cs = heli.airframe.camScale;
+      const d = (this.mode === 'orbit' ? this.dist * 1.6 : this.dist) * cs;
       const elev = this.pitchOff;
       const target = new THREE.Vector3(
         hp.x - Math.sin(yaw) * Math.cos(elev) * d,
-        hp.y + 4 + Math.sin(elev) * d,
+        hp.y + 4 * cs + Math.sin(elev) * d,
         hp.z + Math.cos(yaw) * Math.cos(elev) * d,
       );
       const minY = terrain.surfaceAt(target.x, target.z) + 2;
       if (target.y < minY) target.y = minY;
-      const lookT = hp.clone().add(new THREE.Vector3(0, 3, 0)).addScaledVector(fm.vel, 0.15);
+      const lookT = hp.clone().add(new THREE.Vector3(0, 3 * cs, 0)).addScaledVector(fm.vel, 0.15);
       if (!this.initialized) {
         this.pos.copy(target);
         this.look.copy(lookT);
@@ -180,7 +181,7 @@ export class CameraRig {
         this.lookPitch = clamp(this.lookPitch - my * 0.004, -1.2, 0.9);
       }
       const yawL = this.lookBack ? Math.PI * 0.7 : this.lookYaw;
-      heli.worldPoint(COCKPIT_POS, cam.position);
+      heli.worldPoint(heli.airframe.cockpitPos, cam.position);
       const q = fm.quat.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(this.lookPitch, yawL, 0, 'YXZ')));
       cam.quaternion.copy(q);
       cam.near = 0.1;
@@ -188,7 +189,7 @@ export class CameraRig {
       this.initialized = false;
     } else {
       // Belly camera looking down the hook.
-      heli.worldPoint(HOOK_POS.clone().add(new THREE.Vector3(0, -0.3, -1.2)), cam.position);
+      heli.worldPoint(heli.airframe.hookPos.clone().add(new THREE.Vector3(0, -0.3, -1.2)), cam.position);
       const yawQ = heli.yawQuat(new THREE.Quaternion());
       cam.quaternion.copy(yawQ).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2 + 0.12));
       cam.near = 0.2;

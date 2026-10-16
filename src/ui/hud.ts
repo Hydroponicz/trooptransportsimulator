@@ -217,7 +217,7 @@ export class Hud {
 
     const ramp = game.heli.rampT > 0.97 ? 'DOWN' : game.heli.rampT < 0.03 ? 'UP' : 'MOVING';
     e['status-line'].innerHTML =
-      (driving ? 'VEHICLE <b>HUMVEE</b><br>CAM' : `SAS <b>${SAS_NAMES[fm.sas]}</b><br>CAM`) + ` <b>${game.cam.label}</b><br>RAMP <b>${ramp}</b> · HOOK <b>${hk ? 'LOADED' : 'EMPTY'}</b>` +
+      (driving ? 'VEHICLE <b>HUMVEE</b><br>CAM' : `${game.heli.airframe.short.toUpperCase()} · SAS <b>${SAS_NAMES[fm.sas]}</b><br>CAM`) + ` <b>${game.cam.label}</b><br>` + (driving || game.heli.airframe.hasRamp ? `RAMP <b>${ramp}</b> · HOOK <b>${hk ? 'LOADED' : 'EMPTY'}</b>` : `BENCHES <b>${game.cargo.groups.reduce((n, g) => n + g.aboard, 0)}/${game.heli.airframe.seats}</b>`) +
       `<br>WIND <b>${String(Math.round(((Math.atan2(-game.wind.x, game.wind.z) * 180) / Math.PI + 360) % 360)).padStart(3, '0')}° ${(game.wind.length() * 1.944).toFixed(0)}kt</b>`;
 
     this.mini.save();

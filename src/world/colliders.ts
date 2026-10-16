@@ -92,6 +92,54 @@ function inSolid(o: Solid, px: number, py: number, pz: number, m: number): boole
   }
 }
 
+/**
+ * Top of a solid at a point of the prototype frame (its upper surface there),
+ * or -Infinity when the point is outside its footprint. Tilted parts (pitched
+ * roof planes) aren't something to stand on and are skipped.
+ */
+function solidTop(o: Solid, px: number, pz: number): number {
+  const r = o.r;
+  // Upright only: the solid's own y axis along the prototype's.
+  if (r[4] < 0.999) return -Infinity;
+  const dx = px - o.cx;
+  const dz = pz - o.cz;
+  const ax = dx * r[0] + dz * r[6];
+  const az = dx * r[2] + dz * r[8];
+  if (Math.abs(ax) > o.hx || Math.abs(az) > o.hz) return -Infinity;
+  const bottom = o.cy - o.hy;
+  switch (o.kind) {
+    case SolidKind.Cylinder: {
+      const rr = Math.max(o.hx, o.hz);
+      return ax * ax + az * az < rr * rr ? o.cy + o.hy : -Infinity;
+    }
+    case SolidKind.Arch:
+      return bottom + Math.sqrt(Math.max(0, o.hx * o.hx - ax * ax));
+    case SolidKind.Gable: {
+      const wall = 2 * o.hy * o.k;
+      return bottom + wall + (2 * o.hy - wall) * (1 - Math.abs(ax) / o.hx);
+    }
+    default:
+      return o.cy + o.hy;
+  }
+}
+
+/** The highest top of one structure under (x, z), no higher than maxY, or -Infinity. */
+export function colliderTop(b: AABB, x: number, z: number, maxY: number): number {
+  if (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ || b.minY > maxY) return -Infinity;
+  if (!b.solids || !b.place) return b.maxY <= maxY ? b.maxY : -Infinity;
+  const P = b.place;
+  const dx = x - P.x;
+  const dz = z - P.z;
+  const lx = (P.c * dx - P.s * dz) * P.isx;
+  const lz = (P.s * dx + P.c * dz) * P.isz;
+  let best = -Infinity;
+  for (const o of b.solids) {
+    const t = P.y + solidTop(o, lx, lz) / P.isy;
+    if (t <= maxY && t > best) best = t;
+  }
+  return best;
+}
+
 /** Is the world point inside the collider's actual shape (grown by margin)? */
 export function inShape(b: AABB, p: THREE.Vector3, margin = 0): boolean {
   if (!b.solids || !b.place) return true;
@@ -133,6 +181,31 @@ export class ColliderSet {
       }
     }
     this.count--;
+  }
+
+  /**
+   * The highest structure top under (x, z) that is no higher than `maxY`
+   * (a roof, a loading dock, the top of a wall), for things that stand or
+   * land on buildings; -Infinity where there is none. Bridge decks don't
+   * count (roads.ts carries those).
+   */
+  topAt(x: number, z: number, maxY: number): number {
+    const arr = this.grid.get(this.key(Math.floor(x / CELL), Math.floor(z / CELL)));
+    let best = -Infinity;
+    if (!arr) return best;
+    for (const b of arr) if (!b.soft) best = Math.max(best, colliderTop(b, x, z, maxY));
+    return best;
+  }
+
+  /** Every collider once (for picking buildings by type). */
+  *all(): Generator<AABB> {
+    const seen = new Set<AABB>();
+    for (const arr of this.grid.values())
+      for (const b of arr)
+        if (!seen.has(b)) {
+          seen.add(b);
+          yield b;
+        }
   }
 
   /** Returns the structure containing p (with margin), if any. */
