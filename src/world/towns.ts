@@ -29,6 +29,8 @@ export interface Town {
   enemySide: boolean;
   /** Street network, split at junctions (filled in by buildTown). */
   streets: Street[];
+  /** The paved town square (world centre, half sizes along the town's axes), if it has one. */
+  plaza?: { x: number; z: number; hw: number; hd: number };
 }
 
 export const TOWN_NAMES = [
@@ -200,6 +202,10 @@ function buildGrid(t: Town, props: Props, terrain: Terrain, rng: RNG) {
       if (centre) {
         // The town square: paving, a memorial, a fountain, trees and kiosks; the church faces it.
         put('plaza', cx, cz, 0, [bw, 1, bd], t.contested ? 0x8a867e : undefined);
+        {
+          const [px, pz] = placer(t, props, terrain).w(cx, cz);
+          t.plaza = { x: px, z: pz, hw: bw / 2, hd: bd / 2 };
+        }
         build('monument', cx, cz - bd * 0.15, 0);
         if (city) build('fountain', cx, cz + bd * 0.22, 0);
         for (let k = 0; k < 10; k++) {

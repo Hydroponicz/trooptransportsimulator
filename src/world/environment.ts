@@ -17,6 +17,23 @@ export class Environment {
   /** Far ranges: follow the camera around (they're too far for parallax to matter). */
   ranges: THREE.Mesh;
   private skyMat: THREE.ShaderMaterial;
+  /**
+   * The clouds change slowly, so instead of working out their noise for every
+   * sky pixel every frame they are rendered into a small sky-shaped texture a
+   * few times a second (density and sunlit side), which the sky then samples.
+   */
+  private cloudRT = new THREE.WebGLRenderTarget(1024, 256, {
+    depthBuffer: false,
+    magFilter: THREE.LinearFilter,
+    minFilter: THREE.LinearFilter,
+    wrapS: THREE.RepeatWrapping,
+    generateMipmaps: false,
+  });
+  private cloudMat: THREE.ShaderMaterial;
+  private cloudScene = new THREE.Scene();
+  private cloudCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  private cloudT = 0;
+  private time = 0;
 
   constructor(scene: THREE.Scene) {
     scene.fog = new THREE.Fog(HAZE, FOG_SCALE_HEIGHT, FOG_RANGE);
@@ -54,7 +71,7 @@ export class Environment {
         horizon: { value: HAZE.clone() },
         sunHaze: { value: SUN_HAZE.clone() },
         sunDir: { value: SUN_DIR },
-        time: { value: 0 },
+        cloudTex: { value: this.cloudRT.texture },
       },
       vertexShader: /* glsl */ `
         varying vec3 vDir;
@@ -70,12 +87,32 @@ export class Environment {
     this.sky.renderOrder = -2;
     scene.add(this.sky);
 
+    this.cloudMat = new THREE.ShaderMaterial({
+      uniforms: { time: { value: 0 }, sunDir: { value: SUN_DIR } },
+      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: CLOUD_FRAG,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.cloudMat);
+    quad.frustumCulled = false;
+    this.cloudScene.add(quad);
+
     this.ranges = farRanges();
     scene.add(this.ranges);
   }
 
-  update(dt: number) {
-    this.skyMat.uniforms.time.value += dt;
+  /** Advance the clouds; re-render their texture every quarter second. */
+  update(dt: number, renderer?: THREE.WebGLRenderer) {
+    this.time += dt;
+    this.cloudT -= dt;
+    if (!renderer || this.cloudT > 0) return;
+    this.cloudT = 0.25;
+    this.cloudMat.uniforms.time.value = this.time;
+    const prev = renderer.getRenderTarget();
+    renderer.setRenderTarget(this.cloudRT);
+    renderer.render(this.cloudScene, this.cloudCam);
+    renderer.setRenderTarget(prev);
   }
 
   /** Keep the shadow frustum centered on the area of interest. */
@@ -144,13 +181,11 @@ function farRanges(): THREE.Mesh {
   return mesh;
 }
 
-const SKY_FRAG = /* glsl */ `
-uniform vec3 top;
-uniform vec3 horizon;
-uniform vec3 sunHaze;
-uniform vec3 sunDir;
+/** Cloud texture pass: x = azimuth, y = elevation above the horizon; writes density (r) and how sunlit it is (g). */
+const CLOUD_FRAG = /* glsl */ `
 uniform float time;
-varying vec3 vDir;
+uniform vec3 sunDir;
+varying vec2 vUv;
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p) {
@@ -177,6 +212,27 @@ float clouds(vec2 p) {
 }
 
 void main() {
+  float az = (vUv.x - 0.5) * 6.2831853;
+  float el = vUv.y * 1.5707963;
+  vec3 d = vec3(cos(el) * cos(az), sin(el), cos(el) * sin(az));
+  // Cloud layer: project onto a plane overhead, drifting with the wind.
+  vec2 uv = d.xz / (d.y + 0.12) * 4.2 + vec2(time * 0.006, time * 0.002);
+  float c = clouds(uv);
+  // Light from the sun side: sample a little toward the sun; denser there = shadowed.
+  float toward = clouds(uv + sunDir.xz * 0.06);
+  float lit = clamp(0.62 + (c - toward) * 1.8, 0.0, 1.0);
+  gl_FragColor = vec4(c, lit, 0.0, 1.0);
+}`;
+
+const SKY_FRAG = /* glsl */ `
+uniform vec3 top;
+uniform vec3 horizon;
+uniform vec3 sunHaze;
+uniform vec3 sunDir;
+uniform sampler2D cloudTex;
+varying vec3 vDir;
+
+void main() {
   vec3 d = normalize(vDir);
   float h = max(d.y, 0.0);
   float sunAmt = max(dot(d, sunDir), 0.0);
@@ -186,12 +242,10 @@ void main() {
   col = mix(col, hz * 1.04, exp(-h * 18.0) * 0.6);
 
   if (d.y > 0.0) {
-    // Cloud layer: project onto a plane overhead, drifting with the wind.
-    vec2 uv = d.xz / (d.y + 0.12) * 4.2 + vec2(time * 0.006, time * 0.002);
-    float c = clouds(uv);
-    // Light from the sun side: sample a little toward the sun; denser there = shadowed.
-    float toward = clouds(uv + sunDir.xz * 0.06);
-    float lit = clamp(0.62 + (c - toward) * 1.8, 0.0, 1.0);
+    // Clouds from the cached texture (see CLOUD_FRAG).
+    vec2 cl = texture2D(cloudTex, vec2(atan(d.z, d.x) / 6.2831853 + 0.5, asin(clamp(d.y, 0.0, 1.0)) / 1.5707963)).rg;
+    float c = cl.r;
+    float lit = cl.g;
     vec3 cloudCol = mix(vec3(0.66, 0.71, 0.8), vec3(1.05, 1.02, 0.97), lit);
     cloudCol += vec3(1.0, 0.9, 0.75) * pow(sunAmt, 12.0) * 0.4;
     float fade = smoothstep(0.02, 0.2, d.y);

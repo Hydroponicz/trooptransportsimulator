@@ -159,10 +159,12 @@ void main() {
   float dist = length(cameraPosition - vWorld);
   float strength = mix(0.9, 0.35, smoothstep(60.0, 900.0, dist));
   vec3 n0 = rippleNormal(xz - flow * speed * p0 * T, strength);
-  vec3 n1 = rippleNormal(xz - flow * speed * p1 * T + 17.0, strength);
-  // Plus a slow wind chop that ignores the current.
-  vec3 nw = rippleNormal(xz * 2.3 + vec2(time * 0.6, time * 0.35), 0.3);
-  vec3 n = normalize(mix(n1, n0, w0) + vec3(nw.x, 0.0, nw.z) * 0.6);
+  // Far off the ripples are smaller than a pixel: one layer will do there.
+  vec3 n1 = dist < 1200.0 ? rippleNormal(xz - flow * speed * p1 * T + 17.0, strength) : n0;
+  // Plus a slow wind chop that ignores the current (fine detail: near the camera only).
+  float chop = 1.0 - smoothstep(220.0, 320.0, dist);
+  vec3 nw = chop > 0.0 ? rippleNormal(xz * 2.3 + vec2(time * 0.6, time * 0.35), 0.3) : vec3(0.0, 1.0, 0.0);
+  vec3 n = normalize(mix(n1, n0, w0) + vec3(nw.x, 0.0, nw.z) * 0.6 * chop);
 
   vec3 V = normalize(cameraPosition - vWorld);
   float ndv = max(dot(n, V), 0.0);

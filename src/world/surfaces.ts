@@ -133,7 +133,10 @@ vec3 sGlass = vec3(0.0);
   float k = 1.0;
   // How well this surface's fine pattern is resolved here (set per kind below).
   float res = 1.0;
-  if (kind == 1) {
+  // Far off, fine surface patterns have already faded to their average: skip working them out.
+  if (dist > 650.0 && kind != 7 && kind != 11 && kind < 17) {
+    k = 0.95;
+  } else if (kind == 1) {
     // Plaster: mottled, rain-streaked, with a darker rendered plinth.
     k = 0.92 + 0.1 * sFbm(uv * 0.8) + 0.05 * sNoise(uv * 7.0);
     k *= 1.0 - 0.1 * smoothstep(0.55, 0.9, sNoise(vec2(uv.x * 2.5, uv.y * 0.25)));
@@ -277,8 +280,11 @@ vec3 sGlass = vec3(0.0);
     float cover = (wsz.x * wsz.y) / (sx * fh);
     inWin = mix(inWin, cover, far);
     pane = mix(pane, cover * 0.8, far);
-    // Wall between the windows.
-    if (kind == 17) {
+    // Wall between the windows (just its average shade once the windows have blended out).
+    if (far > 0.99) {
+      k = 0.95;
+      if (kind == 19) diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.2, 0.24, 0.27), 0.6);
+    } else if (kind == 17) {
       vec2 jf = fract(cell);
       float joint = 1.0 - step(0.008, jf.x) * step(0.012, jf.y) * step(jf.x, 0.992);
       k = (0.88 + 0.12 * sFbm(uv * 0.7) + 0.06 * sHash(id + 3.0)) * (1.0 - joint * 0.3 * (1.0 - far));

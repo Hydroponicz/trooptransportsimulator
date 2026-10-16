@@ -400,6 +400,7 @@ export class Game {
     if (this.mode === 'drive') this.cam.updateGround(modal ? 0 : dt, this.humvee, this.world.terrain, mouse);
     else this.cam.update(modal ? 0 : dt, this.heli, this.world.terrain, mouse);
     this.env.follow(this.playerPos, this.cam.camera.position);
+    this.world.shadows.update(this.playerPos);
     this.world.terrain.updateLod(this.cam.camera.position);
     this.world.rivers.update(dt);
     {
@@ -408,7 +409,7 @@ export class Game {
       const wash = this.mode === 'fly' && fm.rpm > 0.3 && !this.heli.crashed ? fm.rpm * (0.55 + 0.45 * fm.input.collective) : 0;
       this.grass.update(dt, this.cam.camera.position, wash > 0 ? fm.pos : null, Math.min(1, wash));
     }
-    this.env.update(dt);
+    this.env.update(dt, this.renderer);
     this.world.culler.update(this.cam.camera.position);
     this.vehicleSound ??= this.audio.vehicle();
     {

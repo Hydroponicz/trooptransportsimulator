@@ -5,6 +5,7 @@ import { merge, part } from './props';
 import { surf, withSurfaces } from './surfaces';
 import { HALF, WORLD_SIZE, type Terrain } from './terrain';
 import type { DistanceCuller } from './lod';
+import type { ShadowCasters } from './shadows';
 
 interface Tree {
   x: number;
@@ -74,7 +75,7 @@ export class Vegetation {
   private grid = new Map<number, Tree[]>();
   count = 0;
 
-  constructor(terrain: Terrain, noise: Noise2D, rng: RNG, blocked: (x: number, z: number) => boolean, culler: DistanceCuller) {
+  constructor(terrain: Terrain, noise: Noise2D, rng: RNG, blocked: (x: number, z: number) => boolean, culler: DistanceCuller, shadows?: ShadowCasters) {
     const kinds = [pineGeo(), broadGeo(), deadGeo(), birchGeo()];
     const loGeo = farTree();
     const material = withSurfaces(new THREE.MeshLambertMaterial({ vertexColors: true }));
@@ -132,7 +133,9 @@ export class Vegetation {
           mesh.setMatrixAt(i, m);
           mesh.setColorAt(i, colors[ci][k][i]);
         });
-        mesh.castShadow = true;
+        // Shadows come from the near-caster copies (see shadows.ts) when those are in use.
+        mesh.castShadow = !shadows;
+        shadows?.add(kinds[k], list);
         mesh.receiveShadow = true;
         mesh.computeBoundingSphere();
         this.group.add(mesh);

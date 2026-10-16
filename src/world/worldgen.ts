@@ -1,5 +1,6 @@
 import { Rivers } from './water';
 import { Crop, Farmland } from './farms';
+import { ShadowCasters } from './shadows';
 import * as THREE from 'three';
 import { Noise2D, RNG } from '../util/noise';
 import { ColliderSet } from './colliders';
@@ -38,6 +39,8 @@ export interface World {
   culler: DistanceCuller;
   rivers: Rivers;
   farmland: Farmland;
+  /** Near shadow casters for trees and buildings. */
+  shadows: ShadowCasters;
 }
 
 const NAMES: Record<SiteKind, string[]> = {
@@ -548,9 +551,11 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     inFarmland(x, z) ||
     enemies.some((e) => Math.abs(e.pos.x - x) < 14 && Math.abs(e.pos.z - z) < 14);
   const culler = new DistanceCuller();
-  const vegetation = new Vegetation(terrain, n3, rng.fork(), blocked, culler);
+  const shadows = new ShadowCasters();
+  group.add(shadows.group);
+  const vegetation = new Vegetation(terrain, n3, rng.fork(), blocked, culler, shadows);
   group.add(vegetation.group);
-  group.add(props.build(culler));
+  group.add(props.build(culler, shadows));
   // Long merged roadside meshes (rails, fences, wires) → per-cell pieces that can be culled.
   for (const child of [...roadside.children]) {
     const o = child as THREE.Mesh | THREE.LineSegments;
@@ -590,6 +595,7 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
     culler,
     rivers,
     farmland,
+    shadows,
   };
 }
 

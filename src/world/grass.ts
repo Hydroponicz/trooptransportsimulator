@@ -60,6 +60,7 @@ export class Grass {
   private meshes: Record<string, THREE.InstancedMesh> = {};
   private cells = new Map<string, CellData>();
   private streets = new Map<number, Street[]>();
+  private plazas: { x: number; z: number; hw: number; hd: number; rot: number }[] = [];
   private key = '';
   private uniforms = { time: { value: 0 }, wash: { value: new THREE.Vector4(0, -1e5, 0, 0) }, lift: { value: 1 } };
 
@@ -70,7 +71,8 @@ export class Grass {
     private farmland: Farmland,
     towns: Town[] = [],
   ) {
-    // Town streets, bucketed so plants can keep off them.
+    // Town squares and streets (bucketed) so plants can keep off them.
+    this.plazas = towns.filter((t) => t.plaza).map((t) => ({ ...t.plaza!, rot: t.rot }));
     for (const t of towns)
       for (const st of t.streets) {
         const x0 = Math.min(st.ax, st.bx) - st.w;
@@ -206,6 +208,14 @@ export class Grass {
     if (y < WATER_LEVEL + 0.8) return false;
     if (this.terrain.normalAt(x, z, _v).y < 0.82) return false;
     if (this.roads.distance(x, z) < 7) return false;
+    for (const p of this.plazas) {
+      const dx = x - p.x;
+      const dz = z - p.z;
+      if (Math.abs(dx) > p.hw + p.hd || Math.abs(dz) > p.hw + p.hd) continue;
+      const c = Math.cos(p.rot);
+      const s = Math.sin(p.rot);
+      if (Math.abs(dx * c - dz * s) < p.hw && Math.abs(dx * s + dz * c) < p.hd) return false;
+    }
     const sts = this.streets.get(Math.floor(x / 50) * 100003 + Math.floor(z / 50));
     if (sts)
       for (const st of sts) {

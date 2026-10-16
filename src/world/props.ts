@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { DistanceCuller } from './lod';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { AABB, ColliderSet } from './colliders';
+import type { ShadowCasters } from './shadows';
 import { surf, withSurfaces, type SurfName } from './surfaces';
 import { buildCityProto, CITY_COLLIDE, CITY_VIEW, type CityProto } from './buildings';
 
@@ -841,11 +842,12 @@ export class Props {
    * culled (and shadow-culled) and hidden by distance: clutter goes first,
    * buildings and pylons stay visible out to the fog.
    */
-  build(culler: DistanceCuller): THREE.Group {
+  build(culler: DistanceCuller, shadows?: ShadowCasters): THREE.Group {
     const g = new THREE.Group();
     const CELLSZ = 2400;
     const white = new THREE.Color(1, 1, 1);
     for (const [name, b] of this.batches) {
+      shadows?.add(b.geo, b.mats);
       const cells = new Map<string, number[]>();
       b.mats.forEach((m, i) => {
         const e = m.elements;
@@ -862,7 +864,8 @@ export class Props {
             mesh.setMatrixAt(i, b.mats[src]);
             mesh.setColorAt(i, b.colors[src] ?? white);
           });
-          mesh.castShadow = true;
+          // Shadows come from the near-caster copies (see shadows.ts) when those are in use.
+          mesh.castShadow = !shadows;
           mesh.receiveShadow = true;
           mesh.computeBoundingSphere();
           g.add(mesh);
