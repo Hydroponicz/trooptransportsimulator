@@ -428,11 +428,33 @@ export class Terrain {
     return d;
   }
 
-  /** Ground height at grid vertex (gx, gz), 0..SEGS each way. */
+  /**
+   * Ground height at grid vertex (gx, gz), 0..SEGS each way. A vertex on a
+   * tile edge belongs to both tiles: whichever is already worked out answers,
+   * so asking about the edge doesn't build the neighbour.
+   */
   vertexHeight(gx: number, gz: number): number {
-    const tx = gx >= SEGS ? TILES - 1 : (gx / TILE_CELLS) | 0;
-    const tz = gz >= SEGS ? TILES - 1 : (gz / TILE_CELLS) | 0;
+    let tx = gx >= SEGS ? TILES - 1 : (gx / TILE_CELLS) | 0;
+    let tz = gz >= SEGS ? TILES - 1 : (gz / TILE_CELLS) | 0;
+    if (!this.ready(tx, tz)) {
+      const ex = gx > 0 && gx % TILE_CELLS === 0 && tx > 0;
+      const ez = gz > 0 && gz % TILE_CELLS === 0 && tz > 0;
+      if (ex && this.ready(tx - 1, tz)) tx--;
+      else if (ez && this.ready(tx, tz - 1)) tz--;
+      else if (ex && ez && this.ready(tx - 1, tz - 1)) (tx--, tz--);
+    }
     return this.data(tx, tz).h[(gz - tz * TILE_CELLS) * TV + (gx - tx * TILE_CELLS)];
+  }
+
+  /** A tile's heights ((TILE_CELLS + 1)² vertices, row by row), worked out now if they aren't yet. */
+  tileHeights(tx: number, tz: number): Float32Array {
+    return this.data(tx, tz).h;
+  }
+
+  /** Are a tile's heights all worked out? */
+  private ready(tx: number, tz: number) {
+    const d = this.tileData.get(tz * TILES + tx);
+    return !!d && d.rows >= TV;
   }
 
   /** Height at a grid vertex from the tile if it's ready, else worked out directly (doesn't build the tile). */
@@ -857,6 +879,15 @@ export class Terrain {
     return d && d.rows >= TV ? this.heightAt(x, z) : this.groundAt(x, z);
   }
 
+  /**
+   * Once the world is built, a height asked for where the tile isn't worked
+   * out yet is computed at the point instead (centimetres from the mesh,
+   * which isn't drawn there anyway), so no system can stall a frame building
+   * a far tile. During generation tiles are built, which is faster for the
+   * many queries placement makes.
+   */
+  lazy = false;
+
   /** Height exactly matching the rendered triangle mesh. */
   heightAt(x: number, z: number): number {
     let gx = (x + HALF) / CELL;
@@ -870,6 +901,7 @@ export class Terrain {
     // A tile holds its far edge too, so a cell's four corners are always in one tile.
     const tx = (ix / TILE_CELLS) | 0;
     const tz = (iz / TILE_CELLS) | 0;
+    if (this.lazy && tz * TILES + tx !== this.lastKey && !this.ready(tx, tz)) return this.groundAt(x, z);
     const H = this.data(tx, tz).h;
     const i = (iz - tz * TILE_CELLS) * TV + (ix - tx * TILE_CELLS);
     const ha = H[i];

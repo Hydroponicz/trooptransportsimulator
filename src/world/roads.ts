@@ -1005,7 +1005,9 @@ export class Roads {
         map: textures[cls],
         polygonOffset: true,
         polygonOffsetFactor: -1,
-        polygonOffsetUnits: -(4 + rank[cls] * 40 + pi),
+        // Higher classes over lower where they cross; within a class, a small per-road
+        // step (it wraps, so the offset stays small on a big network).
+        polygonOffsetUnits: -(4 + rank[cls] * 40 + (pi % 32)),
       });
       const geo = mk(pos, uv, [...idx, ...idxPaved]);
       let mesh: THREE.Mesh;

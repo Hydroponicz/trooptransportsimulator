@@ -57,7 +57,9 @@ export class Rivers {
   /** Build the water over one terrain tile's wet cells (none if it's dry), yielding every few rows. */
   private *buildTile(terrain: Terrain, tx: number, tz: number): Generator<void, void> {
     const N = SEGS + 1;
-    const H = (ix: number, iz: number) => terrain.vertexHeight(ix, iz);
+    // This tile's own grid (it includes the far edges), so nothing next door gets built.
+    const T = terrain.tileHeights(tx, tz);
+    const H = (ix: number, iz: number) => T[(iz - tz * TILE_CELLS) * (TILE_CELLS + 1) + (ix - tx * TILE_CELLS)];
     const wet = (ix: number, iz: number) => H(ix, iz) < WATER_LEVEL + 0.05;
     const pos: number[] = [];
     const depth: number[] = [];

@@ -112,9 +112,15 @@ export class FarmWork {
           this.jobs.splice(this.jobs.indexOf(j), 1);
         }
       }
+      // Machines are built a couple at a time (each is a model), checking again soon while more are due.
+      let budget = 2;
       for (const f of F.farms) {
         if (!f.peaceful || Math.hypot(f.x - camPos.x, f.z - camPos.z) > WORK_RANGE + f.r) continue;
         if (this.jobs.some((j) => j.farm === f)) continue;
+        if (budget-- <= 0) {
+          this.checkT = 0.2;
+          break;
+        }
         // Two or three plots being worked per farm, picked the same way every time.
         let n = 0;
         for (let cz = -16; cz < 16 && n < 2 + (f.id % 2); cz++)

@@ -2,7 +2,13 @@ import type { World } from '../world/worldgen';
 import { HALF, WORLD_SIZE } from '../world/terrain';
 import type { Site } from '../world/sites';
 
-const IMG = 1024;
+/** Overview image size (bigger on a big map, so roads and towns still read). */
+const IMG = WORLD_SIZE > 30000 ? 2048 : 1024;
+/** Heights for the overview's relief are sampled this many pixels apart (then interpolated). */
+const HSTEP = WORLD_SIZE > 30000 ? 4 : 2;
+/** The minimap's own detailed relief: this many pixels, covering this many metres. */
+const MINI_IMG = 384;
+const MINI_SPAN = 4800;
 
 export const SITE_COLOR: Record<string, string> = { base: '#6fb0ff', fob: '#8fe08f', cop: '#f2e9a6', lz: '#ffffff' };
 
@@ -40,14 +46,30 @@ export class MapRenderer {
     const data = g.createImageData(IMG, IMG);
     const t = world.terrain;
     const px = WORLD_SIZE / IMG;
+    // Heights on a coarser grid, worked out directly (no terrain tiles are built for the map).
+    const HN = IMG / HSTEP + 2;
+    const H = new Float32Array(HN * HN);
+    for (let j = 0; j < HN; j++) for (let i = 0; i < HN; i++) H[j * HN + i] = t.groundAt(-HALF + i * HSTEP * px, -HALF + j * HSTEP * px);
+    const hAt = (fi: number, fj: number) => {
+      const i = Math.min(HN - 2, Math.floor(fi));
+      const j = Math.min(HN - 2, Math.floor(fj));
+      const u = fi - i;
+      const v = fj - j;
+      const a = H[j * HN + i] + (H[j * HN + i + 1] - H[j * HN + i]) * u;
+      const b = H[(j + 1) * HN + i] + (H[(j + 1) * HN + i + 1] - H[(j + 1) * HN + i]) * u;
+      return a + (b - a) * v;
+    };
     for (let j = 0; j < IMG; j++) {
       for (let i = 0; i < IMG; i++) {
         const x = -HALF + (i + 0.5) * px;
         const z = -HALF + (j + 0.5) * px;
-        const h = t.heightAt(x, z);
-        const hx = t.heightAt(x + px, z) - h;
-        const hz = t.heightAt(x, z + px) - h;
-        const shade = Math.max(0.55, Math.min(1.3, 1 + (-hx * 0.6 - hz * 0.4) * 0.06));
+        const fi = (i + 0.5) / HSTEP;
+        const fj = (j + 0.5) / HSTEP;
+        const h = hAt(fi, fj);
+        // Slope over a pixel (from the interpolated grid), scaled to match the old per-pixel shading.
+        const hx = hAt(fi + 1 / HSTEP, fj) - h;
+        const hz = hAt(fi, fj + 1 / HSTEP) - h;
+        const shade = Math.max(0.55, Math.min(1.3, 1 + (-hx * 0.6 - hz * 0.4) * 0.06 * (1024 / IMG) * (WORLD_SIZE / 14400)));
         let r: number, gg: number, b: number;
         if (h < 0.3) {
           r = 52;
@@ -142,15 +164,97 @@ export class MapRenderer {
     g.restore();
   }
 
+  /** The minimap's detailed relief round (miniX, miniZ), and the one being drawn a few rows a frame. */
+  private mini: HTMLCanvasElement | null = null;
+  private miniX = 0;
+  private miniZ = 0;
+  private miniNext: { c: HTMLCanvasElement; data: ImageData; x: number; z: number; row: number; cur?: Float32Array; next?: Float32Array } | null = null;
+
+  /** Keep a detailed relief round the player for the minimap: redrawn (a few rows a frame) when they've moved on. */
+  private updateMini(hx: number, hz: number) {
+    const far = !this.mini || Math.max(Math.abs(hx - this.miniX), Math.abs(hz - this.miniZ)) > MINI_SPAN * 0.2;
+    if (far && !this.miniNext) {
+      const c = document.createElement('canvas');
+      c.width = c.height = MINI_IMG;
+      this.miniNext = { c, data: c.getContext('2d')!.createImageData(MINI_IMG, MINI_IMG), x: hx, z: hz, row: 0 };
+    }
+    const n = this.miniNext;
+    if (!n) return;
+    const t = this.world.terrain;
+    const px = MINI_SPAN / MINI_IMG;
+    // One height per pixel (plus a row and column beyond, for the shading), a few rows a frame.
+    const W = MINI_IMG + 1;
+    const rowH = (j: number, out: Float32Array) => {
+      const z = n.z - MINI_SPAN / 2 + (j + 0.5) * px;
+      for (let i = 0; i < W; i++) out[i] = t.heightIfReady(n.x - MINI_SPAN / 2 + (i + 0.5) * px, z);
+    };
+    n.cur ??= new Float32Array(W);
+    n.next ??= new Float32Array(W);
+    if (n.row === 0) rowH(0, n.cur);
+    for (let k = 0; k < 4 && n.row < MINI_IMG; k++, n.row++) {
+      const j = n.row;
+      rowH(j + 1, n.next);
+      const z = n.z - MINI_SPAN / 2 + (j + 0.5) * px;
+      for (let i = 0; i < MINI_IMG; i++) {
+        const x = n.x - MINI_SPAN / 2 + (i + 0.5) * px;
+        const h = n.cur[i];
+        const ddx = n.cur[i + 1] - h;
+        const ddz = n.next[i] - h;
+        const shade = Math.max(0.55, Math.min(1.3, 1 + (-ddx * 0.6 - ddz * 0.4) * 0.06 * (px / 14)));
+        let r: number, gg: number, b: number;
+        if (h < 0.3) [r, gg, b] = [52, 84, 98];
+        else {
+          const kk = Math.min(1, h / 320);
+          [r, gg, b] = [78 + kk * 80, 96 + kk * 50, 58 + kk * 60];
+        }
+        if (this.world.front.side(x, z) > 0) [r, gg, b] = [r * 0.75 + 60, gg * 0.7, b * 0.7];
+        const o = (j * MINI_IMG + i) * 4;
+        n.data.data[o] = r * shade;
+        n.data.data[o + 1] = gg * shade;
+        n.data.data[o + 2] = b * shade;
+        n.data.data[o + 3] = 255;
+      }
+      [n.cur, n.next] = [n.next, n.cur];
+    }
+    if (n.row < MINI_IMG) return;
+    const g = n.c.getContext('2d')!;
+    g.putImageData(n.data, 0, 0);
+    // Roads near it.
+    const toP = (x: number, z: number): [number, number] => [(x - (n.x - MINI_SPAN / 2)) / px, (z - (n.z - MINI_SPAN / 2)) / px];
+    this.world.roads.paths.forEach((p, pi) => {
+      const half = MINI_SPAN / 2 + 50;
+      if (!p.some((v) => Math.abs(v.x - n.x) < half && Math.abs(v.y - n.z) < half)) return;
+      const cls = this.world.roads.classes[pi];
+      g.strokeStyle = cls === 'main' ? 'rgba(235, 225, 200, 0.9)' : cls === 'secondary' ? 'rgba(215, 195, 150, 0.8)' : 'rgba(190, 160, 110, 0.65)';
+      g.lineWidth = cls === 'main' ? 2.4 : cls === 'secondary' ? 1.8 : 1.2;
+      g.beginPath();
+      p.forEach((v, k) => {
+        const [a, c] = toP(v.x, v.y);
+        if (k) g.lineTo(a, c);
+        else g.moveTo(a, c);
+      });
+      g.stroke();
+    });
+    this.mini = n.c;
+    this.miniX = n.x;
+    this.miniZ = n.z;
+    this.miniNext = null;
+  }
+
   /** North-up local map centered on the helicopter. */
   drawMini(g: CanvasRenderingContext2D, size: number, hx: number, hz: number, heading: number, range: number, markers: MapMarker[], air: AirMarker[] = []) {
-    const px = WORLD_SIZE / IMG;
-    const srcSize = (range * 2) / px;
-    const sx = (hx + HALF) / px - srcSize / 2;
-    const sy = (hz + HALF) / px - srcSize / 2;
     g.fillStyle = '#222';
     g.fillRect(0, 0, size, size);
-    g.drawImage(this.img, sx, sy, srcSize, srcSize, 0, 0, size, size);
+    this.updateMini(hx, hz);
+    if (this.mini && range * 2 <= MINI_SPAN) {
+      const px = MINI_SPAN / MINI_IMG;
+      const srcSize = (range * 2) / px;
+      g.drawImage(this.mini, (hx - (this.miniX - MINI_SPAN / 2)) / px - srcSize / 2, (hz - (this.miniZ - MINI_SPAN / 2)) / px - srcSize / 2, srcSize, srcSize, 0, 0, size, size);
+    } else {
+      const px = WORLD_SIZE / IMG;
+      const srcSize = (range * 2) / px;
+      g.drawImage(this.img, (hx + HALF) / px - srcSize / 2, (hz + HALF) / px - srcSize / 2, srcSize, srcSize, 0, 0, size, size);
+    }
     const toS = (x: number, z: number): [number, number] => [((x - hx) / (range * 2) + 0.5) * size, ((z - hz) / (range * 2) + 0.5) * size];
     for (const t of this.world.towns) {
       const [x, y] = toS(t.x, t.z);
@@ -215,10 +319,11 @@ export class MapRenderer {
   drawBig(g: CanvasRenderingContext2D, size: number, hx: number, hz: number, heading: number, markers: MapMarker[], sectors: SectorMarker[] = []) {
     g.drawImage(this.img, 0, 0, size, size);
     const toS = (x: number, z: number): [number, number] => [((x + HALF) / WORLD_SIZE) * size, ((z + HALF) / WORLD_SIZE) * size];
-    // Grid (1 km).
+    // Grid (1 km; 5 km on a big map).
     g.strokeStyle = 'rgba(255,255,255,0.08)';
     g.lineWidth = 1;
-    for (let k = -HALF; k <= HALF; k += 1000) {
+    const step = WORLD_SIZE > 30000 ? 5000 : 1000;
+    for (let k = -HALF; k <= HALF; k += step) {
       const [a] = toS(k, 0);
       g.beginPath();
       g.moveTo(a, 0);

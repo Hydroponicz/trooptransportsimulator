@@ -316,13 +316,13 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
       made++;
     }
   };
-  enemyPlace('aa', 450, 1900 * K, 16);
-  enemyPlace('mg', 120, 900, 36);
-  enemyPlace('manpads', 400, 1700 * K, 10);
+  enemyPlace('aa', 450, 1900 * K, n(16, L));
+  enemyPlace('mg', 120, 900, n(36, L));
+  enemyPlace('manpads', 400, 1700 * K, n(10, L));
 
   // Burning wrecks along the front.
   const smokeSpots: THREE.Vector3[] = [];
-  for (let i = 0; i < 28; i++) {
+  for (let i = 0; i < n(28, L); i++) {
     const z = rng.range(-PLAY_HALF + 300, PLAY_HALF - 300);
     const x = front.x(z) + rng.gauss() * 160;
     if (nearSite(x, z, 40)) continue;
@@ -558,15 +558,15 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
   const yards = roadside.userData.yards as { x: number; z: number; r: number }[];
 
   // Rock outcrops and hay bales.
-  for (let i = 0; i < 3600; i++) {
+  for (let i = 0; i < n(3600, A); i++) {
     const x = rng.range(-PLAY_HALF, PLAY_HALF);
     const z = rng.range(-PLAY_HALF, PLAY_HALF);
     const y = terrain.heightAt(x, z);
     if (y < 2 || nearSite(x, z, 20) || roads.distance(x, z) < 13) continue;
     const slope = terrain.baseSlope(x, z);
     if (slope > 0.18 || rng.chance(0.15)) {
-      const n = rng.int(1, 4);
-      for (let k = 0; k < n; k++) props.add('rock', x + rng.range(-4, 4), y - 0.3, z + rng.range(-4, 4), rng.range(0, 6), rng.range(0.8, 2.6));
+      const cnt = rng.int(1, 4);
+      for (let k = 0; k < cnt; k++) props.add('rock', x + rng.range(-4, 4), y - 0.3, z + rng.range(-4, 4), rng.range(0, 6), rng.range(0.8, 2.6));
     }
   }
   // No fields in towns, industrial yards, on roads or by military sites (the plots were laid
@@ -616,6 +616,8 @@ export function generateWorld(seed: number, report?: (msg: string) => void): Wor
   const rivers = new Rivers(terrain);
   group.add(rivers.group);
 
+  // From here on, far heights are worked out at the point rather than by building their tile.
+  terrain.lazy = true;
   marks.push(['done', performance.now()]);
   console.info(
     `World generated in ${Math.round(marks[marks.length - 1][1] - marks[0][1])} ms:`,
