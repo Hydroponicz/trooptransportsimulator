@@ -813,7 +813,7 @@ export class Game {
         hinge: h.airframe.cabin.hinge,
         rampT: h.rampT,
         marshalling: carrier === h && (lc.canLoad || lc.canUnload),
-        visible: !h.crashed && h.parts.root.visible,
+        visible: !h.crashed && h.root.visible && h.parts.root.visible,
       },
     });
     // Enemy fire, the battles along the front and air strikes follow whatever the player is in.
@@ -1116,7 +1116,8 @@ export class Game {
     this.effects.explosion(fm.pos, 2.2);
     this.audio.explosion(this.cam.camera.position.distanceTo(fm.pos), 2);
     this.audio.setMissileWarning(false);
-    this.wreckSmoke = this.effects.addEmitter(fm.pos.clone().setY(this.world.terrain.surfaceAt(fm.pos.x, fm.pos.z) + 1), 'burning', 8);
+    // On whatever it came down on: the ground, or a roof.
+    this.wreckSmoke = this.effects.addEmitter(fm.pos.clone().setY(this.flightEnv.surfaceAt(fm.pos.x, fm.pos.z, fm.pos.y) + 1), 'burning', 8);
     this.heli.root.visible = false;
     this.cam.shake = 2;
     this.hud.bigText('CRASHED', reason, 3);

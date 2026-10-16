@@ -206,6 +206,7 @@ export class Hud {
     if (fm.engineOn && fm.engineSpool > 0.99 && fm.rpm < 0.93) w.push('LOW ROTOR RPM');
     if (fm.torquePct > 105) w.push('OVERTORQUE');
     if (fm.vs < -6 && fm.agl < 40 && fm.agl > 1) w.push('SINK RATE');
+    if (game.heli.rotorWarn && game.mode === 'fly') w.push('ROTOR CLEARANCE');
     if (game.heli.hp < 30) w.push('DAMAGE');
     if (fm.fuel < fm.fuelCapacity * 0.15) caution.push('LOW FUEL');
     if (game.threats.underFire > 0) caution.push('UNDER FIRE');

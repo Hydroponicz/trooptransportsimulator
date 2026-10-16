@@ -39,6 +39,10 @@ export class Heli implements PlayerTarget {
   private rotorAngle = 0;
   private strobeT = 0;
   private spawnGrace = 1;
+  /** Seconds until a structure scrape can hurt again (contact lasts many frames). */
+  private scrapeT = 0;
+  /** A rotor tip is within a metre and a half of a structure or trees. */
+  rotorWarn = false;
   private rimPoints: THREE.Vector3[] = [];
 
   constructor(
@@ -111,6 +115,8 @@ export class Heli implements PlayerTarget {
     this.rampT = 0;
     this.spawnGrace = 1.5;
     this.overtorqueTime = 0;
+    // Shown again after a crash (the game hides the whole aircraft node for the wreck).
+    this.root.visible = true;
     this.parts.root.visible = true;
     this.syncTransform();
   }
@@ -162,12 +168,14 @@ export class Heli implements PlayerTarget {
     if (this.crashed || this.spawnGrace > 0) return;
     const { terrain, vegetation, colliders } = this.world;
     const fm = this.fm;
+    this.rotorWarn = false;
     if (fm.rpm > 0.25) {
       for (const rp of this.rimPoints) {
         this.worldPoint(rp, _p);
         if (_p.y < terrain.surfaceAt(_p.x, _p.z) + 0.2) return this.crash('Rotor strike: terrain');
         if (vegetation.hit(_p)) return this.crash('Rotor strike: trees');
         if (colliders.hit(_p)) return this.crash('Rotor strike: structure');
+        if (!this.rotorWarn && colliders.hit(_p, 1.5)) this.rotorWarn = true;
       }
     }
     const speed = fm.vel.length();
@@ -175,7 +183,11 @@ export class Heli implements PlayerTarget {
       this.worldPoint(hp, _p);
       if (colliders.hit(_p, 0.1)) {
         if (speed > 5) return this.crash('Collision with structure');
-        this.damage(4, 'Structure scrape');
+        // A scrape: one knock per half second however long the contact lasts, bounced back off it.
+        if (this.scrapeT <= 0) {
+          this.damage(4, 'Structure scrape');
+          this.scrapeT = 0.5;
+        }
         fm.vel.multiplyScalar(-0.4);
         return;
       }
@@ -187,6 +199,7 @@ export class Heli implements PlayerTarget {
   update(dt: number, cockpitView: boolean) {
     const fm = this.fm;
     this.spawnGrace = Math.max(0, this.spawnGrace - dt);
+    this.scrapeT = Math.max(0, this.scrapeT - dt);
     if (!this.crashed) {
       // Overtorque stresses the drivetrain.
       if (fm.torquePct > 105) {
