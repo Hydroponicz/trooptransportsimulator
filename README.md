@@ -4,7 +4,7 @@ A 3D military logistics game, inspired by Euro Truck Simulator. You fly a
 CH-47-style tandem-rotor transport, picking up infantry, casualties, pallets
 and sling loads, and delivering them across a procedurally generated warzone,
 from the safe rear bases to outposts on the front line and landing zones
-behind enemy lines. You can also take a Humvee out on road convoy jobs.
+behind enemy lines. You can also take a Humvee or a Bradley out on road convoy jobs.
 
 It runs in the browser (Three.js + TypeScript + Vite). No assets: every model,
 texture and sound is generated in code.
@@ -209,6 +209,33 @@ away, rooftop and fast-rope insertions up to 15 km, and road jobs up to
 30 km of road (about half an hour at convoy speed). Timers and pay grow with
 the distance.
 
+### The Bradley
+
+An M2 Bradley infantry fighting vehicle waits beside the Humvee at the main
+base motor pool. Press `G` (Y on a controller) from the helicopter to get
+into the nearest of the two. While stopped beside the other one, `G` swaps
+across to it, and pressing it again takes you back to the helicopter.
+
+It is a 27-tonne tracked vehicle with twelve sprung road wheels. The tracks
+are modelled link by link and run round the sprocket, idler and return
+rollers as you drive. It steers by driving one track harder than the other,
+so it can pivot on the spot. It's slower than the Humvee (66 km/h flat out,
+about 20 in reverse) but crosses rough ground and fords about a metre of
+water. The armour takes most of the sting out of small arms and fragments:
+hits do about a third of the damage they would to the Humvee.
+
+It does any road job the Humvee can. Lower the power ramp at the back (`R`)
+and up to six troops walk up into the troop compartment and sit along the
+walls, or a litter team or pallet crew carries the load aboard; at the
+other end they walk back down it. The driver rides head-out of his hatch in
+the driver's view. The turret carries a 25 mm Bushmaster cannon with its
+coaxial machine gun, a twin TOW missile launcher stowed along its side, and
+smoke dischargers. They're modelled, but the vehicle goes out unarmed for
+now. Losing a Bradley costs a $6,000 deductible.
+
+A road job's load stays with the vehicle it boarded, so you can't swap
+vehicles until it's unloaded.
+
 ### GPS
 
 Driving, a satnav takes you by road, like a truck sim's. It routes to the
@@ -289,18 +316,18 @@ Let go of the stick and it levels off and slows to a hover (stability
 assist in hover hold; `T` / D-pad down changes it). W also starts the
 engines.
 
-| Key | Helicopter | Humvee |
+| Key | Helicopter | Humvee / Bradley |
 | --- | --- | --- |
 | `W` / `S` | Climb / descend | Accelerate / brake, then reverse |
 | `A` / `D` | Turn (yaw) | Steer |
 | Arrows or numpad `8` `5` `4` `6` | Tilt forward / back, bank left / right | |
 | `Space` | | Handbrake |
 | `I` | Start / stop engines | |
-| `R` | Ramp | Rear doors |
+| `R` | Ramp | Rear doors / ramp |
 | `H` | Hook / release sling load | Horn |
 | `F` | Flares | |
 | `T` | Stability assist mode | Call recovery ($400) |
-| `G` | Get out (to the Humvee) | Get back in the helicopter |
+| `G` | Get out (into the nearest vehicle) | Swap to the other vehicle if it's beside you, else back in the helicopter |
 | `C` | Camera: chase near / mid / far, cockpit, hook, cinematic | Chase near / mid / far, driver's seat |
 | Mouse, wheel | Camera, zoom. In fullscreen the cursor is hidden; windowed, drag | Same |
 | Hold left `Alt` | Show the cursor (fullscreen) | Same |
@@ -308,13 +335,13 @@ engines.
 | `Tab` / `M` | Base terminal / theater map | Same |
 | `Esc` / `P` | Pause | Pause |
 
-| Controller | Helicopter | Humvee |
+| Controller | Helicopter | Humvee / Bradley |
 | --- | --- | --- |
 | Left stick | Tilt and bank | Steer |
 | RT / LT | Climb / descend | Accelerate / brake, then reverse |
 | LB / RB | Turn left / right | RB handbrake |
 | Right stick, R3 | Camera, look back | Same |
-| A / B / X / Y | Ramp / hook / flares / get out | Doors / horn / — / get back in |
+| A / B / X / Y | Ramp / hook / flares / get out | Doors or ramp / horn / — / swap or get back in |
 | View / Menu | Camera / pause | Same |
 | D-pad | Up engines, down assist, left map, right terminal | Down recovery, left map, right terminal |
 
@@ -648,6 +675,7 @@ src/
   heli/heli.ts       aircraft entity: damage, ramp, rotors, collisions
   heli/chinookModel.ts  procedural CH-47: lofted hull with see-through glazing, cockpit, cabin, crew stations
   vehicles/humvee.ts drivable Humvee: suspension, tires, drivetrain, model
+  vehicles/bradley.ts drivable M2 Bradley: tracked suspension, skid steering, running tracks, rear ramp, troop bay, model
   vehicles/models.ts AI vehicle models (truck, tanker, HMMWV, MRAP) with animated wheels
   game/gps.ts        road network graph, shortest routes and turn-by-turn guidance for the satnav
   game/traffic.ts    AI supply convoys and civilian traffic: routing, steering, following, braking

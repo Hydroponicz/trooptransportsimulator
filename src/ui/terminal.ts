@@ -69,7 +69,7 @@ export class Terminal {
         g.audio.beepOk();
         this.close();
         if (c.mode === 'air' && g.mode === 'drive') g.toast('Helicopter job — get back in the helicopter [G] to fly it', 'info');
-        else if (c.mode === 'ground' && g.mode === 'fly') g.toast('Road job — get in the Humvee [G] to drive it', 'info');
+        else if (c.mode === 'ground' && g.mode === 'fly') g.toast('Road job — get in the Humvee or the Bradley [G] to drive it', 'info');
         return;
       }
     } else if (act === 'abandon') {

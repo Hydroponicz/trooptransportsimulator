@@ -20,6 +20,8 @@ import { AirOps } from './battle/air';
 import * as soldierKit from './game/soldiers';
 import type { PlayerTarget } from './game/target';
 import { Humvee, type GroundEnv } from './vehicles/humvee';
+import { Bradley } from './vehicles/bradley';
+import type { GroundVehicle } from './vehicles/ground';
 import { Gps } from './game/gps';
 import type { Carrier } from './game/missions';
 import { Career, RANKS } from './game/career';
@@ -63,8 +65,17 @@ export class Game {
   air: AirOps;
   /** Soldier poses and renderer, for tools and tests poking at the running game. */
   readonly soldierKit = soldierKit;
+  /** The ground vehicle being driven (or last driven). */
+  vehicle: GroundVehicle;
   humvee: Humvee;
-  /** Flying the helicopter or driving the Humvee. */
+  bradley: Bradley;
+  /** Every ground vehicle the player has. */
+  get garage(): GroundVehicle[] {
+    return [this.humvee, this.bradley];
+  }
+  /** Got into this vehicle straight from the helicopter (so G next tries the other vehicle). */
+  private fromHeli = false;
+  /** Flying the helicopter or driving a ground vehicle. */
   mode: 'fly' | 'drive' = 'fly';
   private groundEnv!: GroundEnv;
   private vehicleSound: ReturnType<AudioEngine['vehicle']> = null;
@@ -197,13 +208,13 @@ export class Game {
         this.toast(reason, 'bad');
       },
       payloadChanged: (kg) => {
-        if (this.missions.active?.c.mode === 'ground') this.humvee.payload = Math.max(0, this.humvee.payload + kg);
+        if (this.missions.active?.c.mode === 'ground') this.vehicle.payload = Math.max(0, this.vehicle.payload + kg);
         else this.heli.fm.payload = Math.max(0, this.heli.fm.payload + kg);
       },
       hotZone: (site, on) => this.threats.setHotZone(site, on),
     });
 
-    // The player's Humvee waits at the main base motor pool.
+    // The player's Humvee and Bradley wait at the main base motor pool.
     const terrainG = this.world.terrain;
     const roads = this.world.roads;
     this.groundEnv = {
@@ -216,21 +227,27 @@ export class Game {
       normalAt: (x, z, o, y) => (roads.surfaceAt(x, z, y) > terrainG.heightAt(x, z) + 0.05 ? o.set(0, 1, 0) : terrainG.normalAt(x, z, o)),
       waterDepth: (x, z, y) => (roads.surfaceAt(x, z, y) > -1e9 ? 0 : Math.max(0, WATER_LEVEL - terrainG.heightAt(x, z))),
       grip: (x, z, y) => (roads.surfaceAt(x, z, y) > -1e9 ? 1.0 : 0.8),
-      blocked: (pt) => !!this.world.colliders.hit(pt, 0, true) || this.world.vegetation.hit(pt) || roads.bridgeRail(pt) || !!this.traffic?.hit(pt),
+      blocked: (pt) => !!this.world.colliders.hit(pt, 0, true) || this.world.vegetation.hit(pt) || roads.bridgeRail(pt) || !!this.traffic?.hit(pt) || this.parkedAt(pt),
     };
     this.humvee = new Humvee();
-    this.humvee.onImpact = (sp) => {
-      this.humvee.damage((sp - 4) * 3, 'Collision');
-      this.audio.thud(Math.min(1.2, sp / 8));
-      this.cam.shake = Math.min(1.5, this.cam.shake + sp * 0.05);
-    };
-    this.humvee.onDamage = (a, src) => {
-      if (src !== 'Collision') this.audio.hit();
-      this.onDamage(a, src);
-    };
-    this.humvee.onDestroyed = (reason) => this.onHumveeDestroyed(reason);
-    this.scene.add(this.humvee.group);
-    this.parkHumvee();
+    this.bradley = new Bradley();
+    this.vehicle = this.humvee;
+    for (const v of this.garage) {
+      v.onImpact = (sp) => {
+        v.damage((sp - 4) * 3, 'Collision');
+        if (v !== this.vehicle) return;
+        this.audio.thud(Math.min(1.2, sp / 8));
+        this.cam.shake = Math.min(1.5, this.cam.shake + sp * 0.05);
+      };
+      v.onDamage = (a, src) => {
+        if (v !== this.vehicle || this.mode !== 'drive') return;
+        if (src !== 'Collision') this.audio.hit();
+        this.onDamage(a, src);
+      };
+      v.onDestroyed = (reason) => this.onVehicleDestroyed(v, reason);
+      this.scene.add(v.group);
+      this.parkVehicle(v);
+    }
 
     for (const s of this.world.smokeSpots) this.effects.addEmitter(s, 'burning', 3);
     this.traffic = new Traffic(this.world, this.rng.fork(), this.effects);
@@ -411,66 +428,136 @@ export class Game {
     this.lastPos.copy(this.heli.fm.pos);
   }
 
-  /** Motor pool spot at the main base. */
-  parkHumvee() {
+  /** Motor pool spot at the main base: the Humvee at the roadside stop, the Bradley parked beside the road. */
+  parkVehicle(v: GroundVehicle) {
     const b = this.world.base;
     // At the base's roadside stop, where road jobs load.
     const stop = this.world.roads.curbside(b.x, b.z, b.radius);
-    this.humvee.repair();
+    v.repair();
+    v.payload = 0;
     if (stop) {
-      this.humvee.place(stop.road, stop.heading, this.groundEnv);
+      const at = stop.road.clone();
+      if (v === this.bradley) {
+        // Beside the road, across from where passengers wait, a little further in.
+        const rx = Math.cos(stop.heading);
+        const rz = Math.sin(stop.heading);
+        const side = (stop.wait.x - at.x) * rx + (stop.wait.z - at.z) * rz > 0 ? -1 : 1;
+        at.x += rx * side * 9 - Math.sin(stop.heading) * 6;
+        at.z += rz * side * 9 + Math.cos(stop.heading) * 6;
+      }
+      v.place(at, stop.heading, this.groundEnv);
+      v.update(0);
       return;
     }
-    const lx = 10;
+    const lx = 10 + (v === this.bradley ? 9 : 0);
     const lz = 40;
     const at = new THREE.Vector3(b.x + lx * Math.cos(b.rot) + lz * Math.sin(b.rot), 0, b.z - lx * Math.sin(b.rot) + lz * Math.cos(b.rot));
-    this.humvee.place(at, b.rot + Math.PI / 2, this.groundEnv);
-    this.humvee.hp = 100;
+    v.place(at, b.rot + Math.PI / 2, this.groundEnv);
+    v.update(0);
   }
 
   /** What enemies see and shoot at. */
   get player(): PlayerTarget {
-    return this.mode === 'drive' ? this.humvee : this.heli;
+    return this.mode === 'drive' ? this.vehicle : this.heli;
   }
 
   /** Whatever the player is currently in. */
   get carrier(): Carrier {
-    return this.mode === 'drive' ? this.humvee : this.heli;
+    return this.mode === 'drive' ? this.vehicle : this.heli;
   }
   get playerPos(): THREE.Vector3 {
-    return this.mode === 'drive' ? this.humvee.pos : this.heli.fm.pos;
+    return this.mode === 'drive' ? this.vehicle.pos : this.heli.fm.pos;
   }
   get playerHeading(): number {
-    return this.mode === 'drive' ? this.humvee.heading : this.heli.fm.heading;
+    return this.mode === 'drive' ? this.vehicle.heading : this.heli.fm.heading;
   }
 
-  /** G: hop between the helicopter and the Humvee. */
+  /** G: hop between the helicopter and the ground vehicles. */
   /** Close enough to swap vehicles: within 140 m, or both inside the same base. */
-  vehiclesTogether(): boolean {
+  vehiclesTogether(v: GroundVehicle = this.vehicle): boolean {
     const a = this.heli.fm.pos;
-    const b = this.humvee.pos;
+    const b = v.pos;
     if (a.distanceTo(b) < 140) return true;
     return this.world.sites.some((s) => s.kind !== 'lz' && Math.hypot(a.x - s.x, a.z - s.z) < s.radius + 20 && Math.hypot(b.x - s.x, b.z - s.z) < s.radius + 20);
   }
 
+  /** Is a point inside one of the player's parked ground vehicles (not the one being driven)? */
+  private parkedAt(pt: THREE.Vector3): boolean {
+    for (const v of this.garage) {
+      if (v === this.vehicle && this.mode === 'drive') continue;
+      const dx = pt.x - v.pos.x;
+      const dz = pt.z - v.pos.z;
+      if (dx * dx + dz * dz > 30 || pt.y < v.pos.y - 1 || pt.y > v.pos.y + 2.6) continue;
+      const h = v.heading;
+      const lx = dx * Math.cos(h) + dz * Math.sin(h);
+      const lz = -dx * Math.sin(h) + dz * Math.cos(h);
+      const half = v.cabinLayout.hull;
+      if (Math.abs(lx) < half.halfWidth - 0.3 && lz > half.front + 0.2 && lz < half.back - 0.2) return true;
+    }
+    return false;
+  }
+
+  /** A road job's load is riding in the ground vehicle (so it can't be swapped for the other one). */
+  private cargoAboardVehicle(): boolean {
+    return this.missions.active?.c.mode === 'ground' && this.cargo.groups.some((g) => g.aboard > 0);
+  }
+
+  private driveTip(v: GroundVehicle) {
+    const pad = !!this.input.pad;
+    const doors = v === this.bradley ? 'ramp' : 'rear doors';
+    const other = this.garage.find((o) => o !== v && !o.destroyed && o.pos.distanceTo(v.pos) < 30);
+    const swap = other ? `, ${pad ? 'Y' : 'G'} again for the ${other.name}` : '';
+    return pad
+      ? `Driving the ${v.name} — RT accelerate, LT brake / reverse, left stick steer, RB handbrake, A ${doors}, Y back to the helicopter${swap}`
+      : `Driving the ${v.name} — W/S throttle, A/D steer, Space handbrake, R ${doors}, G back to the helicopter${swap}`;
+  }
+
+  private enterVehicle(v: GroundVehicle) {
+    const prev = this.vehicle;
+    if (prev !== v) {
+      prev.input = { throttle: 0, brake: 0, steer: 0, handbrake: true };
+      prev.doorsOpen = false;
+    }
+    this.vehicle = v;
+    this.mode = 'drive';
+    this.gps.setDestination(null);
+    this.cam.snap();
+    this.toast(this.driveTip(v), 'good');
+  }
+
   private switchVehicle() {
     const h = this.heli;
-    const v = this.humvee;
     if (this.mode === 'fly') {
       if (!h.onGround || h.fm.groundSpeed > 1) return this.toast('Land first to get out of the helicopter', 'bad');
-      const d = h.fm.pos.distanceTo(v.pos);
-      if (!this.vehiclesTogether()) return this.toast(`Your Humvee is ${Math.round(d)} m away${this.siteNameNear(v.pos)}`, 'bad');
-      this.mode = 'drive';
+      // The nearest vehicle that's here and still running (the loaded one, mid road job).
+      const near = (this.cargoAboardVehicle() ? [this.vehicle] : this.garage)
+        .filter((v) => !v.destroyed && this.vehiclesTogether(v))
+        .sort((a, b) => a.pos.distanceTo(h.fm.pos) - b.pos.distanceTo(h.fm.pos))[0];
+      if (!near) {
+        const v = this.garage.filter((o) => !o.destroyed).sort((a, b) => a.pos.distanceTo(h.fm.pos) - b.pos.distanceTo(h.fm.pos))[0] ?? this.vehicle;
+        return this.toast(`Your ${v.name} is ${Math.round(h.fm.pos.distanceTo(v.pos))} m away${this.siteNameNear(v.pos)}`, 'bad');
+      }
       this.input.collective = 0;
       h.fm.input.collective = 0;
       h.rampOpen = false;
-      this.cam.snap();
-      this.toast(this.input.pad ? 'Driving the Humvee — RT accelerate, LT brake / reverse, left stick steer, RB handbrake, A rear doors, Y back to the helicopter' : 'Driving the Humvee — W/S throttle, A/D steer, Space handbrake, R rear doors, G back to the helicopter', 'good');
+      this.enterVehicle(near);
+      this.fromHeli = true;
     } else {
+      const v = this.vehicle;
       if (v.groundSpeed > 2) return this.toast('Stop the vehicle first', 'bad');
+      // Parked side by side: hop across to the other vehicle first, then back to the helicopter.
+      const other = this.cargoAboardVehicle() ? undefined : this.garage.find((o) => o !== v && !o.destroyed && o.pos.distanceTo(v.pos) < 30);
+      const together = this.vehiclesTogether();
+      if (other && (this.fromHeli || !together)) {
+        this.fromHeli = false;
+        this.enterVehicle(other);
+        this.audio.clunk();
+        return;
+      }
       const d = v.pos.distanceTo(h.fm.pos);
-      if (!this.vehiclesTogether()) return this.toast(`Drive back to your helicopter (${Math.round(d)} m)`, 'bad');
+      if (!together) return this.toast(`Drive back to your helicopter (${Math.round(d)} m)`, 'bad');
       this.mode = 'fly';
+      this.fromHeli = false;
       v.input = { throttle: 0, brake: 0, steer: 0, handbrake: true };
       v.doorsOpen = false;
       this.cam.snap();
@@ -557,8 +644,8 @@ export class Game {
     if (!modal && dt > 0) this.simulate(dt);
     const mouse = this.input.consumeMouse();
     this.cam.lookBack = this.input.key('KeyB') || !!this.input.pad?.r3;
-    this.humvee.setInteriorView(this.mode === 'drive' && this.cam.mode === 'cockpit');
-    if (this.mode === 'drive') this.cam.updateGround(modal ? 0 : dt, this.humvee, this.world.terrain, mouse);
+    this.vehicle.setInteriorView(this.mode === 'drive' && this.cam.mode === 'cockpit');
+    if (this.mode === 'drive') this.cam.updateGround(modal ? 0 : dt, this.vehicle, this.world.terrain, mouse);
     else this.cam.update(modal ? 0 : dt, this.heli, this.world.terrain, mouse);
     this.env.follow(this.playerPos, this.cam.camera.position);
     this.world.shadows.update(this.playerPos);
@@ -577,7 +664,7 @@ export class Game {
     this.world.culler.update(this.cam.camera.position);
     this.vehicleSound ??= this.audio.vehicle();
     {
-      const v = this.humvee;
+      const v = this.vehicle;
       const gear = Math.min(3, Math.floor(Math.abs(v.speed) / 8.5));
       const rpm = this.mode === 'drive' && !v.stalled ? Math.min(1, 0.25 + 0.75 * ((Math.abs(v.speed) - gear * 8.5) / 8.5) * 0.85 + v.engineLoad * 0.15) : 0;
       this.vehicleSound?.update(rpm, v.engineLoad, this.cam.camera.position.distanceTo(v.pos), this.cam.mode === 'cockpit' && this.mode === 'drive');
@@ -634,18 +721,18 @@ export class Game {
       this.cam.next();
       this.audio.click();
     }
-    if (h.crashed || (this.mode === 'drive' && this.humvee.destroyed)) {
+    if (h.crashed || (this.mode === 'drive' && this.vehicle.destroyed)) {
       inp.clearActions();
       return;
     }
     if (inp.take('vehicle')) this.switchVehicle();
     if (this.mode === 'drive') {
-      const v = this.humvee;
+      const v = this.vehicle;
       if (inp.take('ramp')) {
         v.doorsOpen = !v.doorsOpen;
         this.audio.click();
       }
-      if (inp.take('sas')) this.recoverHumvee();
+      if (inp.take('sas')) this.recoverVehicle();
       if (inp.take('hook')) this.audio.horn();
       inp.clearActions();
       return;
@@ -790,7 +877,7 @@ export class Game {
     const dest = this.gpsDestination();
     this.gps.setDestination(dest);
     if (!dest) return;
-    const v = this.humvee;
+    const v = this.vehicle;
     this.gps.update(dt, v.pos.x, v.pos.z, v.heading, v.groundSpeed);
     // Arrived at the player's own waypoint: clear it.
     if (this.waypoint && Math.hypot(v.pos.x - this.waypoint.x, v.pos.z - this.waypoint.z) < 40) {
@@ -919,7 +1006,7 @@ export class Game {
     fm.input.pitch = driving ? 0 : inp.pitch;
     fm.input.roll = driving ? 0 : inp.roll;
     fm.input.yaw = driving ? 0 : inp.yaw;
-    const v = this.humvee;
+    const v = this.vehicle;
     if (driving) {
       // W / RT: accelerate. S / LT: brake, then reverse when stopped. Space / RB: handbrake.
       const pad = inp.pad;
@@ -940,7 +1027,8 @@ export class Game {
       v.input.throttle = throttle;
       v.input.brake = brake;
       v.input.steer += (steerIn - v.input.steer) * Math.min(1, dt * 6);
-      v.input.handbrake = inp.key('Space') || !!pad?.rb || (gas <= 0.05 && rev <= 0.05 && v.groundSpeed < 0.5);
+      // Parked when idle (but a tracked vehicle can still pivot on the spot).
+      v.input.handbrake = inp.key('Space') || !!pad?.rb || (gas <= 0.05 && rev <= 0.05 && v.groundSpeed < 0.5 && !(v === this.bradley && Math.abs(steerIn) > 0.05));
     }
 
     // Substep the whole frame (never more than STEP each) so the simulation advances
@@ -1004,7 +1092,7 @@ export class Game {
       const h = this.heli.fm;
       const ground = this.world.terrain.surfaceAt(h.pos.x, h.pos.z);
       this.traffic.update(dt, this.cam.camera.position, {
-        humvee: this.humvee.pos,
+        humvee: this.vehicle.pos,
         heli: !this.heli.crashed && h.pos.y - ground < 8 ? h.pos : undefined,
       });
       this.farmWork.update(dt, this.cam.camera.position);
@@ -1034,18 +1122,18 @@ export class Game {
     }
   }
 
-  /** The site we're parked at (helicopter landed or Humvee stopped), if any. */
+  /** The site we're parked at (helicopter landed or vehicle stopped), if any. */
   siteUnderPlayer(): Site | null {
     const c = this.carrier;
-    if (!c.onGround || this.heli.crashed || (this.mode === 'drive' && this.humvee.groundSpeed > 1)) return null;
+    if (!c.onGround || this.heli.crashed || (this.mode === 'drive' && this.vehicle.groundSpeed > 1)) return null;
     const p = c.pos;
     for (const s of this.world.sites) if (Math.hypot(s.x - p.x, s.z - p.z) < s.radius + 25) return s;
     return null;
   }
 
-  /** T while driving: put the Humvee back on its wheels on the nearest road. */
-  private recoverHumvee() {
-    const v = this.humvee;
+  /** T while driving: put the vehicle back on its wheels on the nearest road. */
+  private recoverVehicle() {
+    const v = this.vehicle;
     if (!v.flipped && !v.stalled && v.waterDepth < 0.8) return this.toast('Vehicle is fine — recovery is for when you are stuck or overturned');
     const fee = 400;
     this.career.data.money = Math.max(0, this.career.data.money - fee);
@@ -1238,14 +1326,15 @@ export class Game {
     if (!p && fm.contacts >= 3 && fm.rpm > 0.97 && fm.input.collective < 0.3 && m && m.phase === 'transit') {
       p = h.rampT > 0.03 ? `Press ${this.kb('ramp')} to raise the ramp` : this.liftHint();
     }
-    if (!p && m && m.c.mode === 'ground' && fm.contacts >= 3) p = this.vehiclesTogether() ? `Road job: press ${this.kb('vehicle')} to get in your Humvee` : 'Road job: your Humvee is parked elsewhere';
+    if (!p && m && m.c.mode === 'ground' && fm.contacts >= 3) p = this.garage.some((v) => !v.destroyed && this.vehiclesTogether(v)) ? `Road job: press ${this.kb('vehicle')} to get in a ground vehicle` : `Road job: your ${this.vehicle.name} is parked elsewhere`;
     if (!p && !fm.engineOn && fm.rpm > 0.05 && fm.contacts >= 3 && this.currentSite && this.currentSite.kind !== 'lz')
       p = `Press ${this.kb('terminal')} for the ${this.currentSite.name} terminal`;
     this.hud.setPrompt(p);
   }
 
   private drivePrompt(): string {
-    const v = this.humvee;
+    const v = this.vehicle;
+    const doors = v === this.bradley ? 'ramp' : 'rear doors';
     const m = this.missions.active;
     if (v.flipped || v.stalled) return `Press ${this.kb('sas')} to recover the vehicle`;
     if (m && m.c.mode === 'air' && m.phase !== 'complete' && m.phase !== 'failed') {
@@ -1258,17 +1347,19 @@ export class Game {
         const d = v.rampEndWorld(new THREE.Vector3()).setY(0).distanceTo(new THREE.Vector3(m.pickupPos.x, 0, m.pickupPos.z));
         if (d < 30) {
           if (v.groundSpeed > 0.6) return 'Stop here next to the green smoke';
-          if (!v.rampDown) return `Press ${this.kb('ramp')} to open the rear doors`;
+          if (!v.rampDown) return `Press ${this.kb('ramp')} to ${v === this.bradley ? 'lower the ramp' : 'open the rear doors'}`;
           if (g.aboard < g.total) return `Loading ${g.aboard}/${g.total} — hold position`;
         } else if (d < 120) return `Pull up beside the green smoke (${Math.round(d)} m)`;
       } else if (m.phase === 'transit') {
         const d = Math.hypot(m.dropPos.x - v.pos.x, m.dropPos.z - v.pos.z);
         if (d < 30 && v.groundSpeed > 0.6) return 'Stop by the smoke to unload';
-        if (d < 30 && !v.rampDown) return `Press ${this.kb('ramp')} to open the rear doors and unload`;
+        if (d < 30 && !v.rampDown) return `Press ${this.kb('ramp')} to ${v === this.bradley ? 'lower the ramp' : 'open the rear doors'} and unload`;
         if (d >= 30 && d < 120) return `Pull up beside the smoke (${Math.round(d)} m)`;
-        if (v.rampDown && v.groundSpeed > 3) return `Rear doors are open — ${this.kb('ramp')} to close them`;
+        if (v.rampDown && v.groundSpeed > 3) return `The ${doors} ${v === this.bradley ? 'is' : 'are'} down — ${this.kb('ramp')} to ${v === this.bradley ? 'raise it' : 'close them'}`;
       } else if (m.phase === 'dropoff') return 'Unloading — hold position';
     }
+    const other = this.cargoAboardVehicle() ? undefined : this.garage.find((o) => o !== v && !o.destroyed && o.pos.distanceTo(v.pos) < 30);
+    if (v.groundSpeed < 0.5 && other && (this.fromHeli || !this.vehiclesTogether())) return `Press ${this.kb('vehicle')} to take the ${other.name} instead`;
     if (v.groundSpeed < 0.5 && this.heli.onGround && this.vehiclesTogether()) return `Press ${this.kb('vehicle')} to get back in the helicopter`;
     const site = this.siteUnderPlayer();
     if (site && site.kind !== 'lz' && v.groundSpeed < 0.5) return `Press ${this.kb('terminal')} for the ${site.name} terminal`;
@@ -1321,8 +1412,13 @@ export class Game {
     this.crashTimer = 0;
   }
 
-  private onHumveeDestroyed(reason: string) {
-    const v = this.humvee;
+  private onVehicleDestroyed(v: GroundVehicle, reason: string) {
+    if (v !== this.vehicle || this.mode !== 'drive') {
+      // Knocked out while parked: a replacement turns up at the motor pool.
+      this.toast(`Your parked ${v.name} was knocked out (${reason}) — a replacement waits at the ${this.world.base.name} motor pool`, 'bad');
+      this.parkVehicle(v);
+      return;
+    }
     this.effects.explosion(v.pos.clone().setY(v.pos.y + 0.8), 1.4);
     this.audio.explosion(this.cam.camera.position.distanceTo(v.pos), 1.4);
     this.wreckSmoke = this.effects.addEmitter(v.pos.clone().setY(v.pos.y + 0.6), 'burning', 6);
@@ -1335,7 +1431,7 @@ export class Game {
   }
 
   private showCrashDialog() {
-    if (this.humvee.destroyed && !this.heli.crashed) return this.showVehicleLostDialog();
+    if (this.vehicle.destroyed && !this.heli.crashed) return this.showVehicleLostDialog();
     const fee = Math.min(this.career.data.money, 10000);
     this.terminal.dialog(
       `<h2>Aircraft lost</h2><div class="sub">${this.heli.crashReason}</div>
@@ -1356,10 +1452,11 @@ export class Game {
   }
 
   private showVehicleLostDialog() {
-    const fee = Math.min(this.career.data.money, 2500);
+    const v = this.vehicle;
+    const fee = Math.min(this.career.data.money, v === this.bradley ? 6000 : 2500);
     this.terminal.dialog(
-      `<h2>Vehicle lost</h2><div class="sub">Humvee knocked out</div>
-      <p>The crew bailed out and was picked up. A replacement Humvee is waiting at the ${this.world.base.name} motor pool.</p>
+      `<h2>Vehicle lost</h2><div class="sub">${v.name} knocked out</div>
+      <p>The crew bailed out and was picked up. A replacement ${v.name} is waiting at the ${this.world.base.name} motor pool.</p>
       <table><tr><td>Recovery &amp; replacement deductible</td><td class="neg">−${fmtMoney(fee)}</td></tr></table>
       <div class="actions"><button class="primary" data-act="ok">Return to ${this.world.base.name}</button></div>`,
       {
@@ -1371,9 +1468,9 @@ export class Game {
           this.effects.removeEmitter(this.wreckSmoke);
           this.wreckSmoke = null;
           this.crashTimer = -1;
-          this.humvee.repair();
-          this.humvee.payload = 0;
-          this.parkHumvee();
+          this.vehicle.repair();
+          this.vehicle.payload = 0;
+          this.parkVehicle(this.vehicle);
           this.cam.snap();
         },
       },

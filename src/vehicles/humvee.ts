@@ -176,6 +176,12 @@ function buildModel() {
 /** A drivable HMMWV with raycast-style suspension and a simple tire model. */
 export class Humvee implements PlayerTarget {
   readonly kind = 'ground' as const;
+  readonly name = 'Humvee';
+  /** Driver's eye (body frame). */
+  readonly eye = new THREE.Vector3(-0.5, 0.97, 0.0);
+  /** Chase camera distance and height. */
+  readonly camScale = 1;
+  readonly camHeight = 1.6;
   group: THREE.Group;
   private door: THREE.Group;
   private wheelMeshes: { pivot: THREE.Group; spin: THREE.Group }[];

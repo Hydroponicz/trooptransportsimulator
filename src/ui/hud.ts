@@ -147,7 +147,7 @@ export class Hud {
         dist = fmtDist(left);
         instr = `Arrive at ${this.gpsLabel(game)}`;
       }
-      const v = Math.max(8, game.humvee.groundSpeed);
+      const v = Math.max(8, game.vehicle.groundSpeed);
       total = `${fmtDist(left)} · ${fmtTime(left / v)}`;
       if (gps.progress < 1 && gps.offRoute > 40) instr = `Head for the road (${fmtDist(gps.offRoute)})`;
     }
@@ -220,9 +220,9 @@ export class Hud {
       const ground = ct.mode === 'ground';
       let obj = '';
       if (ground && game.mode !== 'drive') {
-        obj = `Road job: get in your Humvee [G]${!game.vehiclesTogether() ? ' (it is parked elsewhere — check the map)' : ''}.`;
+        obj = `Road job: get in your Humvee or Bradley [G]${!game.garage.some((v) => !v.destroyed && game.vehiclesTogether(v)) ? ' (parked elsewhere — check the map)' : ''}.`;
       } else if (!ground && game.mode === 'drive' && (m.phase === 'pickup' || m.phase === 'transit')) {
-        obj = `Helicopter job: drive back to the helicopter and press [G] to switch. The Humvee can't carry this load.`;
+        obj = `Helicopter job: drive back to the helicopter and press [G] to switch. The ${game.vehicle.name} can't carry this load.`;
       } else if (ground && m.phase === 'pickup') {
         const g = m.group;
         obj = g && g.aboard > 0 ? `Loading at ${ct.from.name}: ${g.aboard}/${g.total} aboard` : `Drive to the green smoke by the road at ${ct.from.name}, stop beside it and open the rear doors [R].`;
@@ -246,7 +246,7 @@ export class Hud {
       e['m-obj'].textContent = obj;
       const tl = m.timeLeft;
       const cond = Math.round(m.condition);
-      const spd = game.mode === 'drive' ? game.humvee.groundSpeed : fm.groundSpeed;
+      const spd = game.mode === 'drive' ? game.vehicle.groundSpeed : fm.groundSpeed;
       const eta = spd > 4 ? fmtTime((dist * (game.mode === 'drive' && !isFinite(roadLeft) ? 1.3 : 1)) / spd) : '--:--';
       e['m-stats'].innerHTML =
         `<span>DIST ${fmtDist(dist)}</span><span>ETA ${eta}</span>` +
@@ -260,10 +260,10 @@ export class Hud {
     $('sys-panel').classList.toggle('hidden', driving);
     $('drive-panel').classList.toggle('hidden', !driving);
     if (driving) {
-      const v = game.humvee;
+      const v = game.vehicle;
       $('d-speed').textContent = Math.abs(v.speed * 3.6).toFixed(0);
       $('d-gear').textContent = v.stalled ? 'STALL' : v.input.handbrake && v.groundSpeed < 0.5 ? 'P' : v.speed < -0.5 ? 'R' : 'D';
-      $('d-doors').textContent = v.doorT > 0.95 ? 'OPEN' : v.doorT < 0.05 ? 'SHUT' : '…';
+      $('d-doors').textContent = v.doorT > 0.95 ? (v.name === 'Bradley' ? 'DOWN' : 'OPEN') : v.doorT < 0.05 ? (v.name === 'Bradley' ? 'UP' : 'SHUT') : '…';
       $('d-load').textContent = v.payload > 0 ? `${v.payload.toFixed(0)} kg` : '—';
       $('d-hull').textContent = v.hp.toFixed(0);
       $('d-hull').className = v.hp < 40 ? 'bad' : v.hp < 70 ? 'warn' : '';
@@ -274,8 +274,8 @@ export class Hud {
     const caution: string[] = [];
     if (driving) {
       if (game.threats.missileWarning) w.push('MISSILE');
-      if (game.humvee.flipped) w.push('OVERTURNED');
-      if (game.humvee.waterDepth > 0.5) caution.push('DEEP WATER');
+      if (game.vehicle.flipped) w.push('OVERTURNED');
+      if (game.vehicle.waterDepth > 0.5) caution.push('DEEP WATER');
       const html = w.map((x) => `<div>${x}</div>`).join('') + caution.map((x) => `<div class="caution">${x}</div>`).join('');
       if (e.warnings.innerHTML !== html) e.warnings.innerHTML = html;
     } else {
@@ -296,7 +296,7 @@ export class Hud {
 
     const ramp = game.heli.rampT > 0.97 ? 'DOWN' : game.heli.rampT < 0.03 ? 'UP' : 'MOVING';
     e['status-line'].innerHTML =
-      (driving ? 'VEHICLE <b>HUMVEE</b><br>CAM' : `${game.heli.airframe.short.toUpperCase()} · SAS <b>${SAS_NAMES[fm.sas]}</b><br>CAM`) + ` <b>${game.cam.label}</b><br>` + (driving || game.heli.airframe.hasRamp ? `RAMP <b>${ramp}</b> · HOOK <b>${hk ? 'LOADED' : 'EMPTY'}</b>` : `BENCHES <b>${game.cargo.groups.reduce((n, g) => n + g.aboard, 0)}/${game.heli.airframe.seats}</b>`) +
+      (driving ? `VEHICLE <b>${game.vehicle.name.toUpperCase()}</b><br>CAM` : `${game.heli.airframe.short.toUpperCase()} · SAS <b>${SAS_NAMES[fm.sas]}</b><br>CAM`) + ` <b>${game.cam.label}</b><br>` + (driving || game.heli.airframe.hasRamp ? `RAMP <b>${ramp}</b> · HOOK <b>${hk ? 'LOADED' : 'EMPTY'}</b>` : `BENCHES <b>${game.cargo.groups.reduce((n, g) => n + g.aboard, 0)}/${game.heli.airframe.seats}</b>`) +
       `<br>WIND <b>${String(Math.round(((Math.atan2(-game.wind.x, game.wind.z) * 180) / Math.PI + 360) % 360)).padStart(3, '0')}° ${(game.wind.length() * 1.944).toFixed(0)}kt</b>`;
 
     this.mini.save();
@@ -305,7 +305,7 @@ export class Hud {
     this.mini.clip();
     // Driving with a route: a closer, heading-up view like a satnav, zooming out with speed.
     const rd = this.routeDraw(game);
-    const range = rd ? clamp(320 + game.humvee.groundSpeed * 16, 320, 900) : 1500;
+    const range = rd ? clamp(320 + game.vehicle.groundSpeed * 16, 320, 900) : 1500;
     game.map.drawMini(this.mini, 200, game.playerPos.x, game.playerPos.z, game.playerHeading, range, this.markers(game), game.air.jets.filter((j) => j.mesh.visible).map((j) => ({ x: j.pos.x, z: j.pos.z, heading: Math.atan2(j.dir.x, -j.dir.z), friendly: j.side === 'blue' })), rd, !!rd);
     this.mini.restore();
     this.updateGpsPanel(game);
@@ -440,7 +440,7 @@ export class Hud {
       const ahead = next ? next.s - game.gps.progress : Infinity;
       if (next && ahead < 350 && !game.gps.recalculating) {
         const y = game.world.terrain.heightIfReady(next.x, next.z);
-        const p = this.project(this.tmp.set(next.x, (isFinite(y) ? y : game.humvee.pos.y) + 6, next.z), cam, W, H);
+        const p = this.project(this.tmp.set(next.x, (isFinite(y) ? y : game.vehicle.pos.y) + 6, next.z), cam, W, H);
         if (!p.behind && p.x > 0 && p.x < W && p.y > 0 && p.y < H) {
           const sz = clamp(64 - ahead / 10, 34, 60);
           g.save();

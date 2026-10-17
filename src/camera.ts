@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Heli } from './heli/heli';
-import type { Humvee } from './vehicles/humvee';
+import type { GroundVehicle } from './vehicles/ground';
 import { clamp, damp } from './util/math';
 import type { Terrain } from './world/terrain';
 
@@ -54,7 +54,7 @@ export class CameraRig {
   }
 
   /** Driving: chase behind the vehicle, or the driver's seat. */
-  updateGround(dt: number, v: Humvee, terrain: Terrain, mouse: [number, number, number]) {
+  updateGround(dt: number, v: GroundVehicle, terrain: Terrain, mouse: [number, number, number]) {
     const cam = this.camera;
     const [mx, my, wheel] = mouse;
     if (this.mode === 'cockpit') {
@@ -62,7 +62,7 @@ export class CameraRig {
         this.lookYaw = clamp(this.lookYaw - mx * 0.004, -2.4, 2.4);
         this.lookPitch = clamp(this.lookPitch - my * 0.004, -0.9, 0.7);
       }
-      v.worldPoint(new THREE.Vector3(-0.5, 0.97, 0.0), cam.position);
+      v.worldPoint(v.eye, cam.position);
       cam.quaternion.copy(v.quat).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(this.lookPitch, this.lookBack ? Math.PI : this.lookYaw, 0, 'YXZ')));
       cam.near = 0.1;
       cam.fov = damp(cam.fov, 72, 4, dt);
@@ -84,15 +84,15 @@ export class CameraRig {
       this.heading += dh * (1 - Math.exp(-4 * dt));
       const orbit = this.mode === 'orbit' ? (this.orbitA += dt * 0.15) : 0;
       const yaw = this.heading + this.yawOff + (this.lookBack ? Math.PI : 0) + orbit;
-      const d = Math.max(6, this.dist * 0.5) * (this.mode === 'orbit' ? 1.4 : 1);
+      const d = Math.max(6, this.dist * 0.5) * (this.mode === 'orbit' ? 1.4 : 1) * v.camScale;
       const target = new THREE.Vector3(
         v.pos.x - Math.sin(yaw) * Math.cos(this.pitchOff) * d,
-        v.pos.y + 1.6 + Math.sin(this.pitchOff) * d,
+        v.pos.y + v.camHeight + Math.sin(this.pitchOff) * d,
         v.pos.z + Math.cos(yaw) * Math.cos(this.pitchOff) * d,
       );
       const minY = terrain.surfaceAt(target.x, target.z) + 1.2;
       if (target.y < minY) target.y = minY;
-      const lookT = v.pos.clone().add(new THREE.Vector3(0, 1.2, 0)).addScaledVector(v.vel, 0.12);
+      const lookT = v.pos.clone().add(new THREE.Vector3(0, v.camHeight - 0.4, 0)).addScaledVector(v.vel, 0.12);
       if (!this.initialized) {
         this.pos.copy(target);
         this.look.copy(lookT);
